@@ -59,6 +59,17 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <!--
+                        Fix para Windows: el JDK 17+ intenta crear sockets Unix
+                        en la carpeta TEMP del usuario. Si esa ruta contiene un
+                        nombre corto de DOS (ALEXAN~1, etc.) la JVM falla con
+                        "Unable to establish loopback connection".
+                        Apuntamos a C:/Temp, que no tiene ese problema.
+                        El script run.bat crea esa carpeta antes de arrancar.
+                    -->
+                    <jvmArguments>-Djdk.net.unixdomain.tmpdir=C:/Temp</jvmArguments>
+                </configuration>
             </plugin>
         </plugins>
     </build>

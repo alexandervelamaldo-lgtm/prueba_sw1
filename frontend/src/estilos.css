@@ -1196,6 +1196,16 @@ select:focus {
   font-weight: 600;
 }
 
+/*
+  La línea de la clase de asociación se atenúa un poco respecto a una relación
+  de verdad: no tiene cardinalidad, ni nombre, ni sentido de navegación, así
+  que remarcarla igual que a las demás la haría parecer una relación más y
+  competiría por la atención con las que sí lo son.
+*/
+.relacion--asociacion {
+  opacity: 0.7;
+}
+
 .etiqueta-cursor {
   paint-order: stroke;
   stroke: var(--fondo);
@@ -2026,6 +2036,17 @@ select:focus {
 .relacion__lectura strong {
   color: var(--texto);
   font-weight: 600;
+}
+
+/* Igual que `.campo`, pero sin su margen de formulario suelto: aquí vive
+   dentro de la tarjeta compacta de una relación, entre la lectura en texto y
+   el mapeo JPA, no como un campo de formulario de ancho completo. */
+.campo--asociacion {
+  margin: 6px 0 0;
+}
+
+.campo--asociacion > span {
+  font-size: 11px;
 }
 
 .relacion__mapeo {
@@ -4903,6 +4924,77 @@ select:focus {
   color: var(--acento);
 }
 
+/* --------------------------------------------------------------------------
+   El asistente flotante (Asistente.tsx, modo="flotante")
+   --------------------------------------------------------------------------
+
+   Antes esto era una franja de ancho completo, siempre montada, pegada al
+   fondo del editor. En una pantalla ancha era una barra vacía la mayor parte
+   del tiempo —lo único que hacía algo era «Interpretar», su último control—,
+   y encima caía justo en la esquina que ya quería el botón de ayuda. La
+   burbuja resuelve las dos cosas: ocupa una esquina en vez de una franja
+   entera, y el panel con el formulario solo existe mientras hace falta.
+
+   Se apila sobre `.boton-ayuda` y no al revés porque la ayuda ya vivía en esa
+   esquina; mover la burbuja del asistente evitaba reabrir la posición de un
+   botón que ya se había resuelto una vez.
+   -------------------------------------------------------------------------- */
+
+.asistente-flotante__burbuja {
+  position: fixed;
+  right: 16px;
+  bottom: 76px; /* 16 (borde) + 44 (alto de `.boton-ayuda`) + 16 (aire) */
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--borde-fuerte);
+  background: var(--fondo-3);
+  box-shadow: var(--sombra);
+}
+
+.asistente-flotante__burbuja:hover {
+  border-color: var(--acento);
+  color: var(--acento);
+}
+
+/*
+  El punto no lleva número: contar propuestas pendientes sugeriría una bandeja
+  de mensajes que se acumulan, y aquí solo hay una conversación a la vez. Que
+  haya algo pendiente ya lo dice todo.
+*/
+.asistente-flotante__burbuja--aviso {
+  position: relative;
+}
+
+.asistente-flotante__burbuja--aviso::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--acento);
+  border: 2px solid var(--fondo-3);
+}
+
+.asistente-flotante__panel {
+  position: fixed;
+  right: 16px;
+  bottom: 132px; /* encima de las dos burbujas apiladas, con el mismo aire */
+  z-index: 40;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(70vh, 640px);
+  border-radius: var(--radio);
+  border: 1px solid var(--borde-fuerte);
+  box-shadow: var(--sombra);
+}
+
 .guia {
   position: fixed;
   inset: 0;
@@ -5795,14 +5887,32 @@ select:focus {
 
   /*
     El botón de ayuda flota en la esquina inferior derecha, que en el editor es
-    justo donde está el micrófono del asistente y ahora también el quinto botón
-    del pulgar. Se sube por encima de las dos franjas: si se quedara donde
-    estaba, taparía «Encuadrar», que es precisamente el botón que hay que poder
-    pulsar cuando el diagrama se ha ido de la vista.
+    justo donde está ahora también el quinto botón del pulgar. Se sube por
+    encima de esa franja: si se quedara donde estaba, taparía «Encuadrar», que
+    es precisamente el botón que hay que poder pulsar cuando el diagrama se ha
+    ido de la vista.
   */
   .boton-ayuda {
     right: 10px;
     bottom: calc(14px + 58px + env(safe-area-inset-bottom));
+  }
+
+  /*
+    La burbuja del asistente se apila sobre el botón de ayuda con el mismo
+    razonamiento: en pantalla ancha se apoya en los 16 px del borde, pero aquí
+    ese borde ya lo desplazó la barra del pulgar, así que hay que sumar el
+    mismo desplazamiento en vez de repetir el número a mano.
+  */
+  .asistente-flotante__burbuja {
+    right: 10px;
+    bottom: calc(14px + 58px + env(safe-area-inset-bottom) + 60px);
+  }
+
+  .asistente-flotante__panel {
+    right: 10px;
+    left: 10px;
+    width: auto;
+    bottom: calc(14px + 58px + env(safe-area-inset-bottom) + 116px);
   }
 
   /* Los modales dejan de ser tarjetas centradas con aire alrededor: a este ancho

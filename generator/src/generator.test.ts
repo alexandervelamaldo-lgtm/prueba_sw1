@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type ClassDiagram,
   createAttribute,
   createClass,
   createDiagram,
@@ -346,6 +347,129 @@ describe('normalización a IR', () => {
   });
 });
 
+/*
+ * Clase de asociación (UML): una clase colgada del punto medio de una
+ * relación N:M, no de uno de sus extremos (RF de la notación de asociación
+ * completa, distinta del patrón «clase intermedia» manual con dos 1:N que ya
+ * cubre `tiendaDiagram` con LineaPedido). El caso de referencia es
+ * Venta–Producto con DetalleVenta guardando `cantidad` y `subtotal`.
+ */
+describe('clase de asociación (UML)', () => {
+  function ventaDiagram(): ClassDiagram {
+    const venta = createClass({
+      id: 'V1',
+      name: 'Venta',
+      attributes: [createAttribute({ id: 'VA1', name: 'id', type: 'Long', isIdentifier: true })],
+    });
+    const producto = createClass({
+      id: 'V2',
+      name: 'Producto',
+      attributes: [createAttribute({ id: 'VA2', name: 'id', type: 'Long', isIdentifier: true })],
+    });
+    const detalle = createClass({
+      id: 'V3',
+      name: 'DetalleVenta',
+      attributes: [
+        createAttribute({ id: 'VA3', name: 'id', type: 'Long', isIdentifier: true }),
+        createAttribute({ id: 'VA4', name: 'cantidad', type: 'Integer', isNullable: false }),
+        createAttribute({ id: 'VA5', name: 'subtotal', type: 'Decimal', isNullable: false }),
+      ],
+    });
+
+    return createDiagram({
+      id: 'DVENTA',
+      name: 'Ventas',
+      meta: { basePackage: 'com.ejemplo.ventas', artifactId: 'ventas', description: '' },
+      classes: { V1: venta, V2: producto, V3: detalle },
+      relations: {
+        R1: createRelation({
+          id: 'R1',
+          kind: 'association',
+          sourceId: venta.id,
+          targetId: producto.id,
+          sourceMultiplicity: '*',
+          targetMultiplicity: '*',
+          associationClassId: detalle.id,
+        }),
+      },
+    });
+  }
+
+  it('el diagrama de referencia es válido', () => {
+    expect(validateDiagram(ventaDiagram()).ok).toBe(true);
+  });
+
+  it('la clase de asociación lleva los dos ManyToOne, no un ManyToMany sintético', () => {
+    const ir = normalize(ventaDiagram());
+    const detalle = ir.entities.find((e) => e.className === 'DetalleVenta');
+
+    expect(detalle?.associations.some((a) => a.kind === 'ManyToMany')).toBe(false);
+
+    const haciaVenta = detalle?.associations.find((a) => a.targetClass === 'Venta');
+    expect(haciaVenta?.kind).toBe('ManyToOne');
+    expect(haciaVenta?.owning).toBe(true);
+    expect(haciaVenta?.joinColumn).toBe('venta_id');
+    expect(haciaVenta?.nullable).toBe(false);
+
+    const haciaProducto = detalle?.associations.find((a) => a.targetClass === 'Producto');
+    expect(haciaProducto?.kind).toBe('ManyToOne');
+    expect(haciaProducto?.owning).toBe(true);
+    expect(haciaProducto?.joinColumn).toBe('producto_id');
+    expect(haciaProducto?.nullable).toBe(false);
+
+    // No se fabrica ninguna tabla de unión sintética: DetalleVenta ya es la
+    // tabla de unión, con sus propias columnas cantidad/subtotal.
+    expect(ir.migration.tables.some((t) => t.isJoinTable)).toBe(false);
+  });
+
+  it('la tabla de la clase de asociación lleva las dos claves ajenas obligatorias', () => {
+    const ir = normalize(ventaDiagram());
+    const tabla = ir.migration.tables.find((t) => t.name === 'detalle_ventas');
+    expect(tabla).toBeDefined();
+
+    const columnas = tabla?.columns.map((c) => c.name) ?? [];
+    expect(columnas).toEqual(expect.arrayContaining(['venta_id', 'producto_id', 'cantidad', 'subtotal']));
+
+    const haciaVenta = tabla?.foreignKeys.find((fk) => fk.column === 'venta_id');
+    expect(haciaVenta?.referencesTable).toBe('ventas');
+    // Obligatoria (no nullable): borrar la venta con detalles pendientes lo
+    // bloquea la base de datos en vez de dejar un detalle huérfano.
+    expect(haciaVenta?.onDelete).toBe('NO ACTION');
+
+    const haciaProducto = tabla?.foreignKeys.find((fk) => fk.column === 'producto_id');
+    expect(haciaProducto?.referencesTable).toBe('productos');
+    expect(haciaProducto?.onDelete).toBe('NO ACTION');
+  });
+
+  it('expone la colección inversa en los dos extremos cuando son navegables', () => {
+    const ir = normalize(ventaDiagram());
+
+    const venta = ir.entities.find((e) => e.className === 'Venta');
+    const detallesDeVenta = venta?.associations.find((a) => a.targetClass === 'DetalleVenta');
+    expect(detallesDeVenta?.kind).toBe('OneToMany');
+    expect(detallesDeVenta?.owning).toBe(false);
+    expect(detallesDeVenta?.mappedBy).toBe('venta');
+
+    const producto = ir.entities.find((e) => e.className === 'Producto');
+    const detallesDeProducto = producto?.associations.find((a) => a.targetClass === 'DetalleVenta');
+    expect(detallesDeProducto?.kind).toBe('OneToMany');
+    expect(detallesDeProducto?.mappedBy).toBe('producto');
+  });
+
+  it('cae al ManyToMany sintético si la clase de asociación referenciada no existe', () => {
+    // Estado transitorio (p. ej. justo tras borrar la clase, antes de que la
+    // limpieza del CRDT llegue): el generador no debe reventar, solo tratarlo
+    // como si nunca hubiera habido clase de asociación.
+    const diagram = ventaDiagram();
+    diagram.relations.R1!.associationClassId = 'no-existe';
+
+    const ir = normalize(diagram);
+    const venta = ir.entities.find((e) => e.className === 'Venta');
+    const productos = venta?.associations.find((a) => a.kind === 'ManyToMany');
+    expect(productos?.joinTable).toBeDefined();
+  });
+});
+
 describe('generación de ficheros', () => {
   const ir = normalize(tiendaDiagram());
   const files = generateProject(ir);
@@ -460,7 +584,10 @@ describe('generación de ficheros', () => {
   });
 
   it('no deja marcadores de plantilla sin sustituir', () => {
-    for (const file of files) {
+    // postman_collection.json no pasa por `render()`: su `{{baseUrl}}` es la
+    // sintaxis de variable de Postman, no un marcador de Handlebars a medio
+    // sustituir.
+    for (const file of files.filter((f) => f.path !== 'postman_collection.json')) {
       expect(file.content, file.path).not.toContain('{{');
       expect(file.content, file.path).not.toContain('undefined');
     }
@@ -472,6 +599,79 @@ describe('generación de ficheros', () => {
       expect(file.content.endsWith('\n\n'), file.path).toBe(false);
       expect(file.content.includes('\r'), file.path).toBe(false);
     }
+  });
+});
+
+describe('colección Postman', () => {
+  const ir = normalize(tiendaDiagram());
+  const files = generateProject(ir);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const collection = JSON.parse(fileNamed(files, 'postman_collection.json').content) as any;
+
+  it('es JSON válido con el esquema de colección v2.1', () => {
+    expect(collection.info.schema).toBe(
+      'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+    );
+    expect(collection.variable).toContainEqual({
+      key: 'baseUrl',
+      value: 'http://localhost:8080',
+      type: 'string',
+    });
+  });
+
+  it('trae una carpeta con las 5 peticiones por cada entidad concreta', () => {
+    const nombres = ir.entities.filter((e) => !e.isAbstract).map((e) => e.className);
+    expect(collection.item.map((f: { name: string }) => f.name).sort()).toEqual(
+      [...nombres].sort(),
+    );
+
+    const pedido = collection.item.find((f: { name: string }) => f.name === 'Pedido');
+    expect(pedido.item.map((r: { name: string }) => r.name)).toEqual([
+      'Listar Pedido',
+      'Buscar Pedido por id',
+      'Crear Pedido',
+      'Actualizar Pedido',
+      'Eliminar Pedido',
+    ]);
+  });
+
+  it('usa las rutas REST reales y un cuerpo de ejemplo que pasa las validaciones', () => {
+    const pedido = collection.item.find((f: { name: string }) => f.name === 'Pedido');
+    const crear = pedido.item.find((r: { name: string }) => r.name === 'Crear Pedido');
+
+    expect(crear.request.method).toBe('POST');
+    expect(crear.request.url.raw).toBe('{{baseUrl}}/api/pedidos');
+    expect(crear.request.header).toContainEqual({
+      key: 'Content-Type',
+      value: 'application/json',
+    });
+
+    const body = JSON.parse(crear.request.body.raw);
+    // El enumerado usa su primer valor y no `null`: un `null` no pasaría el
+    // `@NotNull` que `dto-request.java.hbs` pone en un campo obligatorio.
+    expect(body.estado).toBe('BORRADOR');
+    expect(typeof body.total).toBe('number');
+    expect(body.clienteId).toBe(1);
+
+    const listar = pedido.item.find((r: { name: string }) => r.name === 'Listar Pedido');
+    expect(listar.request.url.raw).toBe('{{baseUrl}}/api/pedidos?page=0&size=20');
+
+    const eliminar = pedido.item.find((r: { name: string }) => r.name === 'Eliminar Pedido');
+    expect(eliminar.request.url.raw).toBe('{{baseUrl}}/api/pedidos/1');
+    expect(eliminar.request.body).toBeUndefined();
+  });
+
+  it('no incluye carpeta para las entidades abstractas', () => {
+    const rrhh = normalize(rrhhDiagram());
+    const rrhhFiles = generateProject(rrhh);
+    const rrhhCollection = JSON.parse(
+      fileNamed(rrhhFiles, 'postman_collection.json').content,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) as any;
+
+    const nombres = rrhhCollection.item.map((f: { name: string }) => f.name);
+    expect(nombres).not.toContain('Persona');
+    expect(nombres).toContain('Empleado');
   });
 });
 

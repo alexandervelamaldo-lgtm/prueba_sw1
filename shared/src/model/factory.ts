@@ -71,6 +71,7 @@ export function createRelation(init: {
   targetMultiplicity?: string;
   sourceRole?: string;
   targetRole?: string;
+  associationClassId?: string;
 }): UmlRelation {
   return {
     id: init.id ?? ulid(),
@@ -88,6 +89,7 @@ export function createRelation(init: {
       multiplicity: init.targetMultiplicity ?? '1',
       navigable: true,
     },
+    associationClassId: init.associationClassId,
   };
 }
 

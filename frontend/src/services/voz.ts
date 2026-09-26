@@ -476,6 +476,33 @@ function soltarLocucion(): void {
 }
 
 /**
+ * De las voces que ofrece el navegador, la que menos suena a máquina.
+ *
+ * `speechSynthesis` no da a elegir «una voz natural»: da una lista plana con
+ * el motor local del sistema operativo —el mismo desde hace veinte años, y el
+ * que de verdad suena mecánico porque es el más barato de traer instalado— y,
+ * en Chrome y Edge, una o varias voces en la nube del propio navegador que sí
+ * varían la entonación con el sentido de la frase. Estas se distinguen sin
+ * mirar el nombre: `localService` es `false` porque piden red, y Edge además
+ * las llama «Online» o «Online (Natural)» en el propio nombre. A falta de una
+ * marcada así, mejor la local que ninguna voz.
+ *
+ * Aparte para poder probarla con una lista inventada de voces: `getVoices()`
+ * del navegador de verdad no se puede llamar desde una prueba sin `jsdom`.
+ */
+export function elegirVoz(
+  voces: readonly Pick<SpeechSynthesisVoice, 'lang' | 'name' | 'localService'>[],
+): SpeechSynthesisVoice | undefined {
+  const delCastellano = voces.filter((v) => v.lang.toLowerCase().startsWith('es'));
+  if (delCastellano.length === 0) return undefined;
+  const elegida =
+    delCastellano.find((v) => /natural|online/i.test(v.name)) ??
+    delCastellano.find((v) => !v.localService) ??
+    delCastellano[0];
+  return elegida as SpeechSynthesisVoice | undefined;
+}
+
+/**
  * Lee un texto en voz alta, por donde se pueda.
  *
  * Se cancela lo anterior antes de empezar: sin eso, tocar «Escuchar» dos veces
@@ -506,6 +533,19 @@ export function hablar(texto: string, alTerminar?: () => void): boolean {
 
   const locucion = new SpeechSynthesisUtterance(texto);
   locucion.lang = 'es-ES';
+  // Un pelín más lento que el 1 por defecto: en las voces del sistema —las que
+  // suenan más a máquina— es el propio ritmo, más que el tono, el que se
+  // atropella con las frases cortas del asistente.
+  locucion.rate = 0.95;
+  // `getVoices` no existe en el `speechSynthesis` de mentira de las pruebas
+  // (no hace falta: lo que se prueba ahí es `elegirVoz`, suelta), y en el
+  // navegador de verdad puede devolver la lista vacía si se llama antes de que
+  // termine de cargar. Las dos veces, sin voz explícita se cae a la voz por
+  // defecto del sistema, que es lo que hacía antes de este cambio.
+  if (typeof speechSynthesis.getVoices === 'function') {
+    const voz = elegirVoz(speechSynthesis.getVoices());
+    if (voz) locucion.voice = voz;
+  }
   if (alTerminar) {
     const avisar = (): void => {
       if (mia === lecturaEnCurso) alTerminar();

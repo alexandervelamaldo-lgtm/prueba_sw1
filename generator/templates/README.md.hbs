@@ -55,6 +55,14 @@ entre la migración y las entidades, no en la configuración.
 {{/unless}}
 {{/each}}
 
+## Probar en Postman
+
+El proyecto trae `postman_collection.json` en la raíz, listo para importar en
+Postman (`File > Import`). Una carpeta por entidad con las mismas cinco
+peticiones de la tabla de arriba, con cuerpos de ejemplo que ya pasan las
+validaciones del DTO. La variable de colección `baseUrl` apunta a
+`http://localhost:8080`; cámbiala ahí si el backend corre en otro puerto.
+
 ## Manifiesto del asistente
 
 | Método | Ruta | Descripción |

@@ -107,6 +107,13 @@ export function EditorDiagrama({
   const [seleccion, setSeleccion] = useState<string | null>(null);
   const [herramienta, setHerramienta] = useState<'seleccion' | 'relacion'>('seleccion');
   const [tipoRelacion, setTipoRelacion] = useState<RelationKind>('association');
+  // Herramienta "asociación de clase": no es un séptimo `RelationKind`, es un
+  // modo aparte que sigue dibujando una asociación normal pero además crea la
+  // clase intermedia y fuerza muchos a muchos en el mismo gesto (ver
+  // `relacionar`). Se guarda separado de `tipoRelacion` en vez de añadir un
+  // valor al enum porque el modelo no gana un tipo de relación nuevo: gana un
+  // atajo de creación.
+  const [claseAsociacionActiva, setClaseAsociacionActiva] = useState(false);
   const [aviso, setAviso] = useState<Aviso | null>(null);
   const [importando, setImportando] = useState(false);
   const [importandoXmi, setImportandoXmi] = useState(false);
@@ -203,22 +210,72 @@ export function EditorDiagrama({
    * única forma de salir del modo relación sería la tecla Escape, que en un
    * teléfono no existe.
    */
-  const seleccionar = useCallback(() => setHerramienta('seleccion'), []);
+  const seleccionar = useCallback(() => {
+    setHerramienta('seleccion');
+    setClaseAsociacionActiva(false);
+  }, []);
 
   const armarRelacion = useCallback(
     (kind: RelationKind) => {
-      if (herramienta === 'relacion' && tipoRelacion === kind) {
+      if (herramienta === 'relacion' && tipoRelacion === kind && !claseAsociacionActiva) {
         setHerramienta('seleccion');
         return;
       }
       setTipoRelacion(kind);
+      // Elegir un tipo de relación normal desarma el atajo de clase de
+      // asociación aunque coincida el `kind`: son dos herramientas distintas
+      // que comparten botón visual con la de "asociación" simple.
+      setClaseAsociacionActiva(false);
       setHerramienta('relacion');
     },
-    [herramienta, tipoRelacion],
+    [herramienta, tipoRelacion, claseAsociacionActiva],
   );
+
+  /**
+   * Arma (o desarma) la herramienta "asociación de clase". Fuerza el tipo de
+   * relación a `association` porque es la única sobre la que la clase
+   * intermedia tiene sentido (ver la validación N:M en `relacionar`).
+   */
+  const armarClaseAsociacion = useCallback(() => {
+    if (herramienta === 'relacion' && claseAsociacionActiva) {
+      setHerramienta('seleccion');
+      setClaseAsociacionActiva(false);
+      return;
+    }
+    setTipoRelacion('association');
+    setClaseAsociacionActiva(true);
+    setHerramienta('relacion');
+  }, [herramienta, claseAsociacionActiva]);
 
   const relacionar = useCallback(
     (origenId: string, destinoId: string) => {
+      if (claseAsociacionActiva) {
+        // Atajo de un solo gesto: crea la relación N:M y la clase intermedia
+        // a la vez (ver `associationClassName` en el op `addRelation`). El
+        // nombre sigue la misma numeración secuencial que `crearClase` usa
+        // para una clase creada a mano, porque en el fondo es lo mismo: una
+        // clase más en el diagrama, solo que aparece como efecto de dibujar
+        // la relación en vez de pulsar "Clase".
+        const n = Object.keys(estado.diagrama.classes).length;
+        const resultado = aplicar([
+          {
+            op: 'addRelation',
+            kind: 'association',
+            source: { id: origenId },
+            target: { id: destinoId },
+            sourceMultiplicity: '*',
+            targetMultiplicity: '*',
+            associationClassName: `${PREFIJO.class}${n + 1}`,
+          },
+        ]);
+        if (!resultado.ok) avisar(resultado.error);
+        else {
+          setHerramienta('seleccion');
+          setClaseAsociacionActiva(false);
+        }
+        return;
+      }
+
       // Se nace en «uno a muchos» para todo lo que tiene cardinalidad, no solo
       // para la asociación: una agregación o una composición uno a uno es rara
       // —un pedido tiene líneas, en plural—, y el caso raro se corrige en el
@@ -239,7 +296,7 @@ export function EditorDiagrama({
       if (!resultado.ok) avisar(resultado.error);
       else setHerramienta('seleccion');
     },
-    [aplicar, avisar, tipoRelacion],
+    [aplicar, avisar, tipoRelacion, claseAsociacionActiva, estado.diagrama.classes],
   );
 
   // Atajos. Se ignoran mientras se escribe en un campo: si no, teclear el nombre
@@ -257,6 +314,7 @@ export function EditorDiagrama({
       }
       if (evento.key === 'Escape') {
         setHerramienta('seleccion');
+        setClaseAsociacionActiva(false);
         setSeleccion(null);
       }
       if (evento.key === 'Delete' && seleccion && !soloLectura) {
@@ -769,8 +827,10 @@ export function EditorDiagrama({
                   soloLectura={soloLectura}
                   herramienta={herramienta}
                   tipoRelacion={tipoRelacion}
+                  claseAsociacionActiva={claseAsociacionActiva}
                   onCrear={crearClase}
                   onArmarRelacion={armarRelacion}
+                  onArmarClaseAsociacion={armarClaseAsociacion}
                   onSeleccionar={seleccionar}
                 />
               ),
@@ -853,6 +913,7 @@ export function EditorDiagrama({
         soloLectura={soloLectura}
         diagrama={estado.diagrama}
         aplicar={aplicar}
+        modo="flotante"
       />
 
       {/*

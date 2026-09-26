@@ -46,9 +46,19 @@ export interface PaletaProps {
   soloLectura: boolean;
   herramienta: 'seleccion' | 'relacion';
   tipoRelacion: RelationKind;
+  /**
+   * La herramienta "asociación de clase" está armada. No es un `RelationKind`
+   * más: sigue dibujando una asociación normal, pero además crea la clase
+   * intermedia y fuerza la relación a muchos a muchos en el mismo gesto (ver
+   * `crearRelacionConClaseDeAsociacion` en `EditorDiagrama`), así que se
+   * rastrea aparte del tipo de relación en vez de añadir un séptimo `kind`.
+   */
+  claseAsociacionActiva: boolean;
   onCrear: (kind: ClassKind) => void;
   /** Arma la herramienta de relación con el tipo indicado, o la desarma si ya lo estaba. */
   onArmarRelacion: (kind: RelationKind) => void;
+  /** Arma (o desarma) la herramienta de "asociación de clase". */
+  onArmarClaseAsociacion: () => void;
   onSeleccionar: () => void;
 }
 
@@ -56,8 +66,10 @@ export const Paleta = memo(function Paleta({
   soloLectura,
   herramienta,
   tipoRelacion,
+  claseAsociacionActiva,
   onCrear,
   onArmarRelacion,
+  onArmarClaseAsociacion,
   onSeleccionar,
 }: PaletaProps): JSX.Element {
   return (
@@ -109,6 +121,17 @@ export const Paleta = memo(function Paleta({
             </button>
           );
         })}
+        <button
+          type="button"
+          className={`paleta__boton${claseAsociacionActiva ? ' paleta__boton--activo' : ''}`}
+          disabled={soloLectura}
+          aria-pressed={claseAsociacionActiva}
+          onClick={onArmarClaseAsociacion}
+          title="Crea una clase intermedia y una relación muchos a muchos de una vez. Arrastrar de una clase a otra."
+        >
+          <Icono nombre="clase-asociacion" className="paleta__simbolo" />
+          Clase de asociación
+        </button>
       </div>
 
       {/* La instrucción vive junto a los botones que la necesitan. Antes estaba

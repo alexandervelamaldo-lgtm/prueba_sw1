@@ -1,0 +1,9 @@
+@echo off
+rem Script de arranque para Windows.
+rem
+rem Crea C:\Temp si no existe: el JDK 17+ necesita una carpeta de sockets Unix
+rem sin caracteres raros en la ruta. Sin esto obtienes:
+rem   java.io.IOException: Unable to establish loopback connection
+rem
+if not exist "C:\Temp" mkdir "C:\Temp"
+mvn spring-boot:run

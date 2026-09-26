@@ -249,6 +249,9 @@ export function puntoEnCurva(p0: Punto, c: Punto, p1: Punto, t: number): Punto {
   };
 }
 
+/** Cuánto se abre el abanico entre relaciones que unen el mismo par. */
+export const SEPARACION_ABANICO = 34;
+
 /**
  * Cuánto se separa cada relación de la recta que une los dos centros.
  *
@@ -279,4 +282,59 @@ export function desviosPorPar(relaciones: UmlRelation[]): Map<string, number> {
     });
   }
   return desvios;
+}
+
+/**
+ * El punto medio de una relación, tal y como se ve dibujada en el lienzo.
+ *
+ * Existe por la clase de asociación de UML: esa clase no cuelga de ninguno de
+ * los dos extremos de la relación N:M que documenta, sino de su **mitad**, así
+ * que la línea punteada que la une a la relación tiene que apuntar exactamente
+ * ahí y no al centro geométrico entre las dos cajas —que con el abanico de
+ * `desviosPorPar` no coincide con la curva real en cuanto hay más de una
+ * relación entre el mismo par—.
+ *
+ * Es la misma cuenta que ya hacía `AristaRelacionUml` para colgar de ahí el
+ * nombre de la relación (`centro`, en su cierre), sacada a una función aparte
+ * para poder darle el mismo punto a la arista de la clase de asociación sin
+ * duplicar la cuadrática de Bézier ni el caso reflexivo.
+ */
+export function puntoMedioRelacion(
+  origen: UmlClass,
+  destino: UmlClass,
+  medidaOrigen: Medida,
+  medidaDestino: Medida,
+  desvio: number,
+): Punto {
+  // Reflexiva: no hay curva entre dos cajas, solo el lazo por el lado derecho
+  // que dibuja `AristaRelacionUml`; el punto que ahí hace de centro es este.
+  if (origen.id === destino.id) {
+    const x = origen.position.x + medidaOrigen.ancho;
+    const y = origen.position.y + medidaOrigen.alto / 2;
+    const fondo = 70 + Math.abs(desvio) * 26;
+    return { x: x + fondo * 0.78, y };
+  }
+
+  const centroOrigen = {
+    x: origen.position.x + medidaOrigen.ancho / 2,
+    y: origen.position.y + medidaOrigen.alto / 2,
+  };
+  const centroDestino = {
+    x: destino.position.x + medidaDestino.ancho / 2,
+    y: destino.position.y + medidaDestino.alto / 2,
+  };
+
+  const dx = centroDestino.x - centroOrigen.x;
+  const dy = centroDestino.y - centroOrigen.y;
+  const largo = Math.hypot(dx, dy) || 1;
+  const normal = { x: -dy / largo, y: dx / largo };
+
+  const control = {
+    x: (centroOrigen.x + centroDestino.x) / 2 + normal.x * desvio * SEPARACION_ABANICO,
+    y: (centroOrigen.y + centroDestino.y) / 2 + normal.y * desvio * SEPARACION_ABANICO,
+  };
+
+  const desde = anclaje(origen, medidaOrigen, control);
+  const hasta = anclaje(destino, medidaDestino, control);
+  return puntoEnCurva(desde, control, hasta, 0.5);
 }

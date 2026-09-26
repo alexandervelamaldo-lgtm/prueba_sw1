@@ -11,6 +11,7 @@ import {
 } from './document.js';
 import { createClass } from '../model/factory.js';
 import type { RelationKind } from '../model/uml.js';
+import { isToMany } from '../model/uml.js';
 
 /**
  * Aplicación de operaciones de dominio sobre el documento CRDT.
@@ -195,6 +196,12 @@ function applyInsideTransaction(doc: Y.Doc, operation: Operation): ApplyResult {
         if (!(value instanceof Y.Map)) continue;
         if (value.get('sourceId') === target.id || value.get('targetId') === target.id) {
           relations.delete(relationId);
+        } else if (value.get('associationClassId') === target.id) {
+          // Aquí la clase borrada no es un extremo, solo colgaba de la
+          // relación como clase de asociación: se limpia esa referencia y la
+          // relación sigue existiendo (igual que borrar un módulo deja
+          // huérfano el `moduleId` de una clase en vez de borrar la clase).
+          value.delete('associationClassId');
         }
       }
       classes.delete(target.id);
@@ -334,6 +341,32 @@ function applyInsideTransaction(doc: Y.Doc, operation: Operation): ApplyResult {
         return { ok: false, error: 'Esa herencia crearía un ciclo' };
       }
 
+      // La herencia no tiene multiplicidad; forzarla a '1' evita que un valor
+      // heredado del esquema por defecto acabe en el generador.
+      const isInheritance = operation.kind === 'inheritance' || operation.kind === 'realization';
+      const sourceMultiplicity = isInheritance ? '1' : operation.sourceMultiplicity;
+      const targetMultiplicity = isInheritance ? '1' : operation.targetMultiplicity;
+
+      // "Asociación de clase" rápida: el lienzo la ofrece como una única
+      // acción de arrastre que crea la relación Y la clase intermedia a la
+      // vez, así que valida y crea aquí mismo en lugar de exigir un segundo
+      // `setAssociationClass` (que además no podría referenciar un id que
+      // esta misma operación todavía no ha generado). La restricción de N:M
+      // es la misma que `setAssociationClass`: fuera de N:M la clase de
+      // asociación sería una tabla redundante con el lado "muchos".
+      if (operation.associationClassName) {
+        const esManyToMany =
+          operation.kind === 'association' &&
+          isToMany(sourceMultiplicity) &&
+          isToMany(targetMultiplicity);
+        if (!esManyToMany) {
+          return {
+            ok: false,
+            error: 'Una clase de asociación solo se puede crear sobre una relación muchos a muchos',
+          };
+        }
+      }
+
       const id = ulid();
       const entry = new Y.Map<unknown>();
       entry.set('id', id);
@@ -341,15 +374,47 @@ function applyInsideTransaction(doc: Y.Doc, operation: Operation): ApplyResult {
       if (operation.name) entry.set('name', operation.name);
       entry.set('sourceId', source.id);
       entry.set('targetId', target.id);
-      // La herencia no tiene multiplicidad; forzarla a '1' evita que un valor
-      // heredado del esquema por defecto acabe en el generador.
-      const isInheritance = operation.kind === 'inheritance' || operation.kind === 'realization';
-      entry.set('sourceMultiplicity', isInheritance ? '1' : operation.sourceMultiplicity);
-      entry.set('targetMultiplicity', isInheritance ? '1' : operation.targetMultiplicity);
+      entry.set('sourceMultiplicity', sourceMultiplicity);
+      entry.set('targetMultiplicity', targetMultiplicity);
       entry.set('sourceNavigable', true);
       entry.set('targetNavigable', true);
+
+      let associationClassId: string | undefined;
+      if (operation.associationClassName) {
+        // Este atajo siempre crea una clase nueva (ver el comentario de más
+        // arriba): a diferencia de `addClass`, aquí sí se comprueba el nombre
+        // antes de crear, porque el paso siguiente casi siempre es un
+        // `addAttribute` sobre esa misma clase **por nombre**, en el mismo
+        // lote. Si ya hubiera otra clase con ese nombre, `addRelation` crearía
+        // una segunda y el `addAttribute` posterior encontraría dos —el error
+        // sería «Hay 2 clases llamadas «X»», que no dice nada de la relación
+        // que se estaba creando y deja creer que no ha pasado nada al pulsar
+        // Aplicar, porque el lote entero se revierte. Fallar aquí, con la
+        // relación todavía sin crear, señala el problema real: el nombre
+        // elegido para la clase de asociación ya está en uso.
+        const nombreBuscado = operation.associationClassName.trim().toLowerCase();
+        const yaExiste = [...classes.values()].some(
+          (value) =>
+            value instanceof Y.Map && String(value.get('name') ?? '').toLowerCase() === nombreBuscado,
+        );
+        if (yaExiste) {
+          return {
+            ok: false,
+            error: `Ya existe una clase llamada «${operation.associationClassName}»; la clase de asociación necesita un nombre distinto`,
+          };
+        }
+
+        const assocClass = createClass({
+          name: operation.associationClassName,
+          position: nextFreePosition(doc, classes),
+        });
+        classes.set(assocClass.id, writeClass(assocClass));
+        entry.set('associationClassId', assocClass.id);
+        associationClassId = assocClass.id;
+      }
+
       relations.set(id, entry);
-      return { ok: true, description, relationId: id };
+      return { ok: true, description, relationId: id, classId: associationClassId };
     }
 
     case 'updateRelation': {
@@ -418,6 +483,52 @@ function applyInsideTransaction(doc: Y.Doc, operation: Operation): ApplyResult {
       }
       relations.delete(operation.id);
       return { ok: true, description, relationId: operation.id };
+    }
+
+    case 'setAssociationClass': {
+      const entry = relations.get(operation.relationId);
+      if (!(entry instanceof Y.Map)) {
+        return { ok: false, error: `No existe la relación ${operation.relationId}` };
+      }
+
+      // `classRef: null` descuelga la clase de asociación sin tocar nada más:
+      // no es destructiva (no borra atributos ni clases), por eso no está en
+      // el conjunto DESTRUCTIVAS de operations.ts.
+      if (operation.classRef === null) {
+        entry.delete('associationClassId');
+        return { ok: true, description, relationId: operation.relationId };
+      }
+
+      // Solo tiene sentido sobre una asociación N:M real: sobre cualquier otra
+      // cardinalidad la clase del lado "muchos" ya guarda esos mismos datos en
+      // su propia fila, y una clase de asociación sería una tabla redundante.
+      const kind = entry.get('kind');
+      const sourceMultiplicity = entry.get('sourceMultiplicity');
+      const targetMultiplicity = entry.get('targetMultiplicity');
+      const esManyToMany =
+        kind === 'association' &&
+        typeof sourceMultiplicity === 'string' &&
+        typeof targetMultiplicity === 'string' &&
+        isToMany(sourceMultiplicity) &&
+        isToMany(targetMultiplicity);
+      if (!esManyToMany) {
+        return {
+          ok: false,
+          error: 'Una clase de asociación solo se puede colgar de una relación muchos a muchos',
+        };
+      }
+
+      const target = resolveClass(doc, operation.classRef);
+      if (!target.ok) return { ok: false, error: target.error };
+      if (target.id === entry.get('sourceId') || target.id === entry.get('targetId')) {
+        return {
+          ok: false,
+          error: 'La clase de asociación no puede ser a la vez uno de los extremos de la relación',
+        };
+      }
+
+      entry.set('associationClassId', target.id);
+      return { ok: true, description, relationId: operation.relationId, classId: target.id };
     }
 
     case 'addEnumLiteral': {

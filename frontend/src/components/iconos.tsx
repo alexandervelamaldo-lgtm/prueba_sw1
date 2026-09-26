@@ -53,6 +53,7 @@ export type NombreIcono =
   | 'abstracta'
   | 'enumeracion'
   | 'asociacion'
+  | 'clase-asociacion'
   | 'agregacion'
   | 'composicion'
   | 'herencia'
@@ -202,6 +203,17 @@ const TRAZOS: Record<NombreIcono, ReactNode> = {
     vez de sustituirla por un adorno.
   */
   asociacion: <path d="M2 8.5h12" />,
+  /* La relación normal (línea continua) con su clase colgando de una línea
+     discontinua hacia el medio: es la lectura estándar de la notación UML de
+     clase de asociación, y la línea punteada la distingue de una simple
+     clase intermedia dibujada a mano por el usuario. */
+  'clase-asociacion': (
+    <>
+      <path d="M1.5 5h13" />
+      <path d="M8 5v3.5" strokeDasharray={PUNTEADO} />
+      <rect x="4.5" y="8.5" width="7" height="5" />
+    </>
+  ),
   agregacion: (
     <>
       <path d="M8 8.5h6" />

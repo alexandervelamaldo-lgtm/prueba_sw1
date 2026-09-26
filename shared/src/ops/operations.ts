@@ -117,6 +117,19 @@ export const AddRelationOpSchema = z.object({
   sourceMultiplicity: MultiplicitySchema.default('1'),
   targetMultiplicity: MultiplicitySchema.default('1'),
   name: z.string().optional(),
+  /**
+   * Atajo de "crear en un solo gesto": crea la clase de asociación y la
+   * cuelga de esta relación en la misma operación, en vez de exigir un
+   * `addClass` + `setAssociationClass` por separado. Existe porque el lienzo
+   * ofrece la herramienta "asociación de clase" como una única acción de
+   * arrastre, y las operaciones de un mismo array no pueden referenciar el id
+   * que genera otra operación anterior del mismo array: sin este campo el
+   * atajo sería imposible de construir desde el cliente.
+   *
+   * Solo tiene efecto si la relación resultante es N:M (ver `isToMany`); de lo
+   * contrario la aplicación falla con un error, igual que `setAssociationClass`.
+   */
+  associationClassName: z.string().min(1).optional(),
 });
 
 /**
@@ -152,6 +165,22 @@ export const UpdateRelationOpSchema = z.object({
 export const RemoveRelationOpSchema = z.object({
   op: z.literal('removeRelation'),
   id: z.string().min(1),
+});
+
+/**
+ * Cuelga (o descuelga, con `classRef: null`) una clase de asociación (UML) de
+ * una relación N:M ya existente.
+ *
+ * Es una operación aparte y no un campo más de `changes` en `updateRelation`
+ * porque referencia otra entidad del diagrama —una clase— y hace falta
+ * resolverla por nombre o por id igual que en `assignClassToModule`, mientras
+ * que los `changes` de `updateRelation` son valores planos que se escriben tal
+ * cual, sin resolución previa.
+ */
+export const SetAssociationClassOpSchema = z.object({
+  op: z.literal('setAssociationClass'),
+  relationId: z.string().min(1),
+  classRef: ClassRefSchema.nullable(),
 });
 
 export const AddEnumLiteralOpSchema = z.object({
@@ -261,6 +290,7 @@ export const OperationSchema = z.discriminatedUnion('op', [
   AddRelationOpSchema,
   UpdateRelationOpSchema,
   RemoveRelationOpSchema,
+  SetAssociationClassOpSchema,
   AddEnumLiteralOpSchema,
   SetSeedRowsOpSchema,
   RemoveSeedRowOpSchema,
@@ -353,7 +383,9 @@ export function describeOperation(op: Operation): string {
       // Decir «uno a uno» sobre una herencia sería ruido que además sugiere que
       // se puede cambiar, y no se puede.
       if (!llevaCardinalidad(op.kind)) return base;
-      return `${base} (${describeCardinality(op.sourceMultiplicity, op.targetMultiplicity)})`;
+      const conCardinalidad = `${base} (${describeCardinality(op.sourceMultiplicity, op.targetMultiplicity)})`;
+      if (!op.associationClassName) return conCardinalidad;
+      return `${conCardinalidad} con clase de asociación «${op.associationClassName}»`;
     }
     case 'updateRelation': {
       const { changes } = op;
@@ -374,6 +406,10 @@ export function describeOperation(op: Operation): string {
     }
     case 'removeRelation':
       return `Eliminar una relación`;
+    case 'setAssociationClass':
+      return op.classRef === null
+        ? 'Quitar la clase de asociación de una relación'
+        : `Usar «${refName(op.classRef)}» como clase de asociación de una relación`;
     case 'addEnumLiteral':
       return `Añadir literal «${op.literal}» a «${refName(op.classRef)}»`;
     case 'setSeedRows':

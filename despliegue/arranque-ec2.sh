@@ -23,7 +23,7 @@ echo "=== arranque $(date -Is) ==="
 REGION=us-east-1
 CUENTA=381549360414
 REGISTRO="$CUENTA.dkr.ecr.$REGION.amazonaws.com"
-IMAGEN="$REGISTRO/uml-tool:v6"
+IMAGEN="$REGISTRO/uml-tool:v8"
 ENTORNO=/etc/uml.env
 
 dnf install -y docker

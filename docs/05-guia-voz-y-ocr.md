@@ -64,10 +64,24 @@ producen operaciones (véase §5.1).
 Voz y OCR comparten una regla, y es la que sostiene todo lo demás:
 
 > **Ni el reconocimiento de voz, ni el modelo de lenguaje, ni el OCR escriben
-> jamás en el diagrama. Los tres producen una lista de operaciones que se
-> muestran en castellano y que una persona acepta o descarta.**
+> jamás en el diagrama por su cuenta. Los tres producen una lista de
+> operaciones que se muestran en castellano y que una persona acepta o
+> descarta.**
 
-Es la decisión D6 de la arquitectura. Sus consecuencias prácticas:
+Es la decisión D6 de la arquitectura. Lo escrito a mano y lo dictado que
+destruye algo siguen ese camino sin excepción: se enseña la propuesta y hace
+falta un clic en «Aplicar» para que llegue al diagrama. La única variante es lo
+dictado que **no** destruye nada: ahí la persona ya dio su consentimiento al
+decir la orden en voz alta, y pedirle además un toque en la pantalla —cuando
+dictar existe justamente para no tener que tocarla— deshace la mitad de la
+ventaja de haber hablado. El asistente lo aplica solo y contesta hablado,
+«Trabajo hecho.» —corto a propósito, para no sonar a que lee su propio
+registro de cambios en vez de contestar a quien le habló—, en vez de esperar
+el clic (véase «Confirmación de acciones críticas», en §5.3). Sobre lo
+destructivo D6 no cede: ahí la voz exige el mismo botón que ve quien escribe,
+solo que además lo anuncia en voz.
+
+Sus consecuencias prácticas:
 
 - Un modelo que se equivoca es **una molestia, no una pérdida de trabajo**.
 - La descripción que se lee («Añade el atributo `correo` de tipo `String` a
@@ -353,9 +367,37 @@ exactamente las mismas órdenes escritas.
 
 1. Abre un proyecto. La barra del asistente está abajo.
 2. Pulsa **🎤** y habla, o escribe la orden y pulsa **Interpretar**.
-3. Aparece la propuesta numerada, con el origen (`deepseek-v4-flash` o
-   `gramática local (sin conexión)`).
-4. Pulsa **Aplicar** para aceptarla o **Descartar** para tirarla.
+3. Lo que pasa después depende de cómo llegó la orden y de si destruye algo:
+   - **Escrita a mano**, o **dictada y destructiva**: aparece la propuesta
+     numerada, con el origen (`deepseek-v4-flash` o `gramática local (sin
+     conexión)`). Pulsa **Aplicar** para aceptarla o **Descartar** para
+     tirarla. Si destruye algo, ve además la lista de lo que se pierde (véase
+     «Confirmación de acciones críticas», más abajo).
+   - **Dictada y sin nada que destruir**: se aplica sola, sin propuesta que
+     aceptar. El asistente contesta hablado con un simple «Trabajo hecho.»
+     —no repite lo que hizo, que sonaría a leer su propio registro de
+     cambios—; la descripción completa («Hecho: …») queda por escrito en la
+     barra, para quien quiera repasarla con la vista.
+
+Se puede deshacer con `Ctrl+Z` en cualquiera de los dos casos: que se aplique
+sola no significa que no se pueda arrepentir, solo que no hace falta un clic de
+más para lo que ya no rompe nada.
+
+### Cómo suena
+
+`speechSynthesis` no deja elegir «una voz natural»: da una lista plana donde
+conviven el motor local del sistema operativo —el mismo desde hace veinte
+años, el que de verdad suena a máquina, porque es el más barato de traer
+instalado— y, en Chrome y Edge, una o varias voces en la nube del propio
+navegador que sí varían la entonación con el sentido de la frase. El
+asistente elige entre las de castellano disponibles, y dentro de esas
+prefiere una marcada «Online» o «Natural» en el nombre —así es como Edge
+distingue las suyas—, si no hay ninguna así la primera que no sea del
+sistema (`localService === false`), y si todas son del sistema, esa antes que
+ninguna voz. La heurística vive sola y sin navegador en `elegirVoz`
+(`frontend/src/services/voz.ts`), para poder probarla con una lista inventada
+de voces. Es una preferencia, no una promesa: qué voces ofrece cada
+navegador y cada sistema operativo no lo decide esta aplicación.
 
 ### Cuánto escucha, y en qué castellano
 
@@ -559,6 +601,19 @@ Se puede deshacer con Ctrl+Z mientras no cierres el proyecto.
 
 El botón pasa entonces a **«Sí, borrar»** (en rojo) y hay que pulsarlo una
 segunda vez. Junto a él, **«No, cancelar»**.
+
+Cuando la orden llegó dictada, esto es lo único que la voz **no** hace sola: en
+vez de aplicar y decir «Trabajo hecho.», el asistente enuncia lo que se perdería y pide
+el mismo toque en la pantalla que ve quien escribe —«Elimina la clase Pedido.
+Esto borraría la clase «Pedido», 4 atributos… Toca aplicar para confirmarlo.»—
+y se queda con la propuesta en pantalla esperando el clic. Es la decisión D6
+otra vez: hablar una frase no es lo mismo que querer que se ejecute, y menos
+cuando lo que está en juego no se puede deshacer con solo repetir la orden al
+revés. La lógica que decide entre las dos ramas —aplicar sola o pedir el
+clic— vive en `frontend/src/components/asistente-voz.ts`
+(`decidirAccionVoz`), separada del componente para poder probarla con un
+diagrama y una lista de operaciones, sin micrófono ni voz sintetizada de por
+medio.
 
 Dos detalles del diseño que importan:
 
@@ -2241,8 +2296,9 @@ hagan dejar el reconocimiento local.
 | `frontend/src/services/ollama.test.ts` | El cliente del modelo local **sin Ollama delante**, con un `fetch` falso: que una línea JSON partida entre dos lecturas del socket no se pierda —el fallo silencioso más fácil de escribir aquí—, que el último trozo sin salto de línea final se emita igual, que `onTrozo` respete el orden, que **no se llame al modelo** cuando el manual no tiene nada que citar, que un `404` se traduzca a un error que menciona el modelo, y que la detección de modelos se trague un `Failed to fetch` o una respuesta que no es JSON en vez de propagarlos: no tener Ollama es lo normal, no una avería |
 | `frontend/src/services/ollama.integracion.test.ts` | La guía contra **un Ollama de verdad**, saltada si no hay `TEST_OLLAMA_URL`. Existe porque el `fetch` falso de la fila anterior lo escribimos nosotros: prueba que el lector de NDJSON hace lo que *creemos* que Ollama manda, y si esa creencia es falsa las dos pruebas pasan en verde mientras el panel sale en blanco. No afirma **qué** contesta el modelo —eso cambia con la versión sin que nada se rompa— sino que llega texto, que llega a trozos y que las secciones citadas son las que eligió la búsqueda. Es la que cazó el fallo del prompt contado en §5.7 |
 | `backend-tool/src/ai/guia.test.ts` | La guía del servidor, esta sí contra el **`docs/` de verdad** —es lo único que comprueba que el manual de hoy se puede trocear y buscar—: que un `docs/` ausente haga fallar el arranque en lugar de servir un manual vacío que contestaría «eso no lo cubre» a todo, que una pregunta real sobre exportar encuentre la sección de XMI, y sobre todo que un `402` del proveedor **devuelva el manual con un aviso y no un `500`**, igual que una respuesta vacía del modelo |
-| `frontend/src/services/voz.test.ts` | La lectura en voz alta **sin navegador**, con un `window` de mentira: que se avise del final una sola vez, que se avise también cuando la voz no llega a arrancar, que el final de una lectura **cancelada** no apague el indicador de la que la sustituye —`cancel()` dispara el final de la anterior *después* de que arranque la nueva, y sin un contador la pantalla diría «no está sonando» mientras suena—, que `callar` no vuelva a contar un final que quien llamó ya sabe, y que el puente nativo **no prometa** un aviso que el lado Dart no da: es lo que impide que el móvil se quede con un «Detener» que no se apaga nunca. Y el dictado, con un reconocedor de mentira y relojes falsos: que **una pausa a mitad de la frase no la envíe** —el motor se cansa, se vuelve a arrancar y lo dicho se junta, que es el arreglo de «no me da tiempo»—, que la frase se entregue **una sola vez** al cerrar, que pulsar el micrófono envíe lo que se llevaba dicho, que `no-speech` no apague el micrófono, y que un micrófono olvidado se apague solo al llegar al tope |
+| `frontend/src/services/voz.test.ts` | La lectura en voz alta **sin navegador**, con un `window` de mentira: que se avise del final una sola vez, que se avise también cuando la voz no llega a arrancar, que el final de una lectura **cancelada** no apague el indicador de la que la sustituye —`cancel()` dispara el final de la anterior *después* de que arranque la nueva, y sin un contador la pantalla diría «no está sonando» mientras suena—, que `callar` no vuelva a contar un final que quien llamó ya sabe, y que el puente nativo **no prometa** un aviso que el lado Dart no da: es lo que impide que el móvil se quede con un «Detener» que no se apaga nunca. Que sin ninguna voz que ofrecer el navegador siga hablando con la voz por defecto, y que con una «Online (Natural)» disponible sea esa la que se use —`elegirVoz`, suelta: sin voces de castellano no elige nada, descarta las que no lo son, prefiere la marcada «Online» o «Natural» sobre cualquier otra, si no hay ninguna así prefiere la que no es del sistema, y si todas son locales gana la primera antes que ninguna—. Y el dictado, con un reconocedor de mentira y relojes falsos: que **una pausa a mitad de la frase no la envíe** —el motor se cansa, se vuelve a arrancar y lo dicho se junta, que es el arreglo de «no me da tiempo»—, que la frase se entregue **una sola vez** al cerrar, que pulsar el micrófono envíe lo que se llevaba dicho, que `no-speech` no apague el micrófono, y que un micrófono olvidado se apague solo al llegar al tope |
 | `frontend/src/services/dictado.test.ts` | Las decisiones del dictado, sin navegador ni micrófono: que el idioma salga del **aparato** y no esté escrito a mano —`es-BO` se escucha en `es-BO`, `es_mx` se normaliza a `es-MX`— y que **nunca se caiga en el castellano de España por descarte**, que era la causa de fondo de «no se me entiende»: el modelo de una región devuelve otra palabra por cada palabra que dice quien habla otra. Más el desempate entre las hipótesis que da el motor —de «crea la plaza Pedido» y «crea la clase Pedido» gana la que usa el vocabulario del dominio, y un empate deja el orden del motor intacto— y que los errores que no son averías no terminen la sesión |
+| `frontend/src/components/asistente-voz.test.ts` | La rama que decide si una orden **dictada** se aplica sola o espera el botón (`decidirAccionVoz`), sin montar `Asistente` ni tocar `speechSynthesis`: que una operación que no destruye nada se aplique sola diciendo el simple «Trabajo hecho.» sin repetir la descripción —que sigue por escrito, como «Hecho: …», para quien mira la pantalla—, que borrar una clase con datos exija confirmar y el anuncio hablado diga qué se pierde, que baste **una** operación destructiva dentro de un lote para exigir confirmación aunque las demás no destruyan nada, y que rellenar de filas semilla una tabla que estaba vacía —el caso donde `setSeedRows` no destruye— se aplique sola |
 | `backend-tool/src/frontend-estatico.test.ts` | El servicio sirviendo también el frontend, que es lo que permite desplegar en un solo contenedor. Vigila sobre todo el orden de los middlewares: que `/api/no-existe` siga devolviendo JSON y no el `index.html` con un 200, que `/salud` no quede tapada —si devolviera el index, la comprobación del balanceador pasaría siempre, incluso con el servicio roto—, y que no se pueda escapar del directorio del frontend |
 
 La prueba que mejor resume el diseño está al final de `import.test.ts`: sube una

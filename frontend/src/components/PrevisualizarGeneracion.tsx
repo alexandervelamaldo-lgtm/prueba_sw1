@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { validateDiagram, type Aplicar, type ClassDiagram } from '@app/shared';
-import { api, descargarProyecto, type FicheroGenerado, type Proyecto } from '../services/api';
+import { api, descargarFlutter, descargarProyecto, type FicheroGenerado, type Proyecto } from '../services/api';
 import { ArreglarGeneracion } from './ArreglarGeneracion';
 import { Icono } from './iconos';
 import {
@@ -81,6 +81,7 @@ export function PrevisualizarGeneracion({
   const [estado, setEstado] = useState<Estado>({ fase: 'cargando' });
   const [abierto, setAbierto] = useState<string | null>(null);
   const [bajando, setBajando] = useState(false);
+  const [bajandoFlutter, setBajandoFlutter] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
 
   const validacion = useMemo(() => validateDiagram(diagrama), [diagrama]);
@@ -123,6 +124,19 @@ export function PrevisualizarGeneracion({
   const prefijo = useMemo(() => prefijoComun(ficheros.map((f) => f.ruta)), [ficheros]);
   const activo = ficheros.find((f) => f.ruta === abierto) ?? null;
   const totalBytes = ficheros.reduce((suma, f) => suma + f.bytes, 0);
+
+  const bajarFlutter = async (): Promise<void> => {
+    setBajandoFlutter(true);
+    try {
+      const { donde } = await descargarFlutter(proyecto.id, proyecto.name);
+      const ruta = donde ? ` Guardado en ${donde}.` : '';
+      setAviso(`Frontend Flutter descargado.${ruta}`);
+    } catch (error) {
+      setAviso(error instanceof Error ? error.message : 'No se pudo generar el frontend Flutter');
+    } finally {
+      setBajandoFlutter(false);
+    }
+  };
 
   const bajar = async (): Promise<void> => {
     setBajando(true);
@@ -173,14 +187,25 @@ export function PrevisualizarGeneracion({
               detalle del que cabe en un `title`.
             */}
             {!bloqueado && (
-              <button
-                type="button"
-                className="boton boton--primario"
-                disabled={estado.fase !== 'listo' || bajando}
-                onClick={() => void bajar()}
-              >
-                {bajando ? 'Descargando…' : 'Descargar ZIP'}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="boton boton--primario"
+                  disabled={estado.fase !== 'listo' || bajando}
+                  onClick={() => void bajar()}
+                >
+                  {bajando ? 'Descargando…' : 'Descargar ZIP'}
+                </button>
+                <button
+                  type="button"
+                  className="boton boton--discreto"
+                  disabled={estado.fase !== 'listo' || bajandoFlutter}
+                  onClick={() => void bajarFlutter()}
+                  title="Genera un proyecto Flutter con pantallas CRUD y dictado offline (Whisper)"
+                >
+                  {bajandoFlutter ? 'Generando…' : '📱 Frontend Flutter'}
+                </button>
+              </>
             )}
             <button
               type="button"

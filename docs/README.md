@@ -13,6 +13,7 @@
 | 9 | [Calidad, escalabilidad e innovación](09-calidad-escalabilidad-innovacion.md) | Los tres criterios de evaluación, localizados en el código: qué está verificado por una prueba, qué está implementado sin vigilar y qué sigue pendiente. Incluye el techo real del sistema y un guion de defensa de cinco minutos |
 | 10 | [Asistente móvil](10-asistente-movil.md) | El teléfono contra el backend generado: el manifiesto que hace que un solo APK sirva para cualquier diagrama, el repertorio de órdenes dictadas, el ciclo hablado, la bandeja de salida cuando no hay cobertura y por qué reenviar no duplica |
 | 11 | [Comunicación interna](11-comunicacion-interna.md) | El tablón del proyecto: chat y notas de voz para coordinarse mientras se modela. Quién puede escribir y por qué basta con ser `viewer`, qué queda cuando se retira un mensaje, por qué se sondea en vez de usar el WebSocket que ya hay, y el permiso de micrófono del WebView —el fallo que no da ningún error visible— |
+| 12 | [Tipos de edición y XMI con Enterprise Architect](12-tipos-de-edicion-y-xmi.md) | Con archivo y línea: cómo funcionan la edición normal, con IA y con imágenes, por qué las cuatro vías de escritura convergen en una sola función, y por qué el XMI probado contra un fichero real de EA no debe confundirse con el cliente `architech/` (siempre 501) |
 
 ## Cómo leerlo
 

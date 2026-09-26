@@ -9,18 +9,29 @@ import {
 } from '@app/shared';
 import { ApiError, api } from '../services/api';
 import { puntuarPorVocabulario } from '../services/dictado';
-import { dictadoDisponible, dictar, motivoSinVoz, type SesionDictado } from '../services/voz';
+import { dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDictado } from '../services/voz';
 import { nombreDeshacer, useTecladoFisico } from '../hooks/useDispositivo';
+import { decidirAccionVoz } from './asistente-voz';
 import { Icono } from './iconos';
 
 /**
  * Asistente por voz y texto (RF-IA-01, RF-IA-04).
  *
- * Nunca escribe en el diagrama. Propone, enseña lo que haría en castellano y
- * espera a que el usuario acepte (decisión D6). Esa separación es lo que hace
- * que un modelo equivocado sea un incordio y no una pérdida de trabajo, y es
- * también lo que permite que la vía offline y la del servidor sean
- * intercambiables: las dos producen la misma lista de operaciones.
+ * Nunca escribe en el diagrama sin que alguien lo acepte (decisión D6). Esa
+ * separación es lo que hace que un modelo equivocado sea un incordio y no una
+ * pérdida de trabajo, y es también lo que permite que la vía offline y la del
+ * servidor sean intercambiables: las dos producen la misma lista de
+ * operaciones.
+ *
+ * Quién acepta cambia según el canal: lo escrito a mano siempre para en una
+ * propuesta con botón «Aplicar», porque quien teclea ya está mirando la
+ * pantalla y revisar no le cuesta nada más. Lo dictado que **no** es
+ * destructivo se acepta solo con haberlo dicho —parar a tocar la pantalla
+ * después de hablar deshace la mitad de la ventaja de haber usado la voz— y
+ * el asistente contesta hablado, «Hecho: …», en vez de esperar un clic. D6 no
+ * se toca: sobre lo destructivo la voz vuelve a exigir el mismo botón que ve
+ * quien escribe, solo que además lo anuncia en voz para que se sepa que hay
+ * algo pendiente de confirmar sin tener que mirar la pantalla.
  *
  * Se intenta primero el servidor, que puede tener un modelo de lenguaje
  * detrás, y se recurre a la gramática local si no contesta. El orden importa:
@@ -52,6 +63,20 @@ export interface AsistenteProps {
    * abierto que nadie pidió.
    */
   dictarAlAbrir?: boolean;
+  /**
+   * `'panel'` (por defecto): la franja de siempre, en flujo normal — la usa
+   * `PantallaMovil`, que ya decide desde fuera cuándo montarla (su propio
+   * cajón).
+   *
+   * `'flotante'`: burbuja fija en la esquina que despliega el mismo contenido
+   * en una tarjeta. La usa `EditorDiagrama`, donde antes esto era una barra de
+   * ancho completo siempre presente: en una pantalla ancha era una franja vacía
+   * la mayor parte del tiempo, y tapaba la esquina que también quiere el botón
+   * de ayuda. El requisito de que el asistente esté «siempre disponible»
+   * (RF-IA-01/04) lo sigue cumpliendo: la burbuja no se cierra sola ni se
+   * esconde con el diagrama, solo empieza plegada.
+   */
+  modo?: 'panel' | 'flotante';
 }
 
 export function Asistente({
@@ -60,8 +85,12 @@ export function Asistente({
   diagrama,
   aplicar,
   dictarAlAbrir = false,
+  modo = 'panel',
 }: AsistenteProps): JSX.Element {
   const [texto, setTexto] = useState('');
+  // Solo lo usa el modo flotante, pero se declara aquí y no dentro de un
+  // `if` para que el orden de hooks no dependa de una prop.
+  const [abierto, setAbierto] = useState(false);
   const [propuestas, setPropuestas] = useState<Propuesta[]>([]);
   const [mensaje, setMensaje] = useState<string | null>(null);
   const [origen, setOrigen] = useState<string | null>(null);
@@ -77,7 +106,7 @@ export function Asistente({
   const hayDictado = dictadoDisponible();
 
   const interpretar = useCallback(
-    async (orden: string): Promise<void> => {
+    async (orden: string, porVoz = false): Promise<void> => {
       const limpia = orden.trim();
       if (!limpia) return;
 
@@ -86,13 +115,17 @@ export function Asistente({
       setConfirmando(false);
       setMensaje(null);
 
+      let motor: string | null = null;
+      let propuesta: Propuesta[] = [];
+      let explicacion: string | null = null;
+
       try {
         const respuesta = await api.interpretar(proyectoId, limpia);
-        setOrigen(respuesta.motor);
-        setPropuestas(respuesta.propuesta);
-        setMensaje(respuesta.aclaracion ?? respuesta.explicacion ?? null);
+        motor = respuesta.motor;
+        propuesta = respuesta.propuesta;
+        explicacion = respuesta.aclaracion ?? respuesta.explicacion ?? null;
         if (respuesta.propuesta.length === 0 && !respuesta.aclaracion) {
-          setMensaje('Orden no reconocida. Cabe reformularla con otras palabras.');
+          explicacion = 'Orden no reconocida. Cabe reformularla con otras palabras.';
         }
       } catch (error) {
         // Sin servidor se usa la gramática que viaja en el propio paquete. No es
@@ -100,27 +133,78 @@ export function Asistente({
         // que el usuario sepa por qué de pronto solo entiende frases sencillas.
         if (error instanceof ApiError && (error.esDeRed || error.status >= 500)) {
           const local = interpretCommand(limpia);
-          setOrigen('gramática local (sin conexión)');
-          setPropuestas(
-            local.operations.map((operacion) => ({
-              operacion,
-              descripcion: describeOperation(operacion),
-            })),
-          );
-          setMensaje(
+          motor = 'gramática local (sin conexión)';
+          propuesta = local.operations.map((operacion) => ({
+            operacion,
+            descripcion: describeOperation(operacion),
+          }));
+          explicacion =
             local.operations.length === 0
               ? (local.clarification ??
                   'Sin conexión solo entiendo órdenes sencillas: «crea la clase Cliente», «añade el atributo nombre de tipo String a Cliente».')
-              : local.explanation,
-          );
+              : local.explanation;
         } else {
-          setMensaje(error instanceof Error ? error.message : 'No se pudo interpretar la orden');
+          explicacion = error instanceof Error ? error.message : 'No se pudo interpretar la orden';
         }
       } finally {
         setPensando(false);
       }
+
+      setOrigen(motor);
+
+      if (propuesta.length === 0) {
+        setPropuestas([]);
+        setMensaje(explicacion);
+        // Sin esto, dictar una orden que no se entendió deja el micrófono
+        // callado y solo el texto en pantalla lo dice: quien tenía las manos
+        // ocupadas —la razón de dictar— no se entera de que hay que repetirlo.
+        if (porVoz) hablar(explicacion ?? 'No he entendido la orden.');
+        return;
+      }
+
+      if (!porVoz) {
+        setPropuestas(propuesta);
+        setMensaje(explicacion);
+        return;
+      }
+
+      // `decidirAccionVoz` (en `asistente-voz.ts`) es la que de verdad decide
+      // entre las dos ramas de D6: aquí solo se ejecutan sus efectos —hablar,
+      // aplicar, actualizar el estado— que es lo que no se puede probar sin
+      // montar el componente.
+      const accion = decidirAccionVoz(diagrama, propuesta);
+
+      if (accion.tipo === 'confirmar') {
+        setPropuestas(propuesta);
+        setMensaje(explicacion);
+        hablar(accion.anuncio);
+        return;
+      }
+
+      // Lo dictado y no destructivo se acepta con haberlo dicho: pedir además
+      // un toque en la pantalla es exactamente lo que se quería evitar al
+      // dictar. `Ctrl+Z` sigue siendo la manera de deshacerlo si la
+      // transcripción salió mal.
+      const resultado = aplicar(
+        propuesta.map((p) => p.operacion),
+        { origen: 'asistente', ...(motor ? { propuestoPor: motor } : {}) },
+      );
+      if (!resultado.ok) {
+        setPropuestas(propuesta);
+        setMensaje(resultado.error);
+        hablar(resultado.error);
+        return;
+      }
+      setTexto('');
+      // Lo que se ve y lo que se oye no tienen por qué decir lo mismo: en
+      // pantalla vale la pena repasar qué se hizo, pero decirlo en voz suena a
+      // que la aplicación lee su propio registro de cambios en vez de
+      // contestar a quien le habló (ver el comentario de `CONFIRMACION_HABLADA`
+      // en `asistente-voz.ts`).
+      setMensaje(accion.detalle);
+      hablar(accion.anuncio);
     },
-    [proyectoId],
+    [proyectoId, aplicar, diagrama],
   );
 
   /**
@@ -157,7 +241,9 @@ export function Asistente({
       onParcial: (parcial) => setTexto(parcial),
       onFinal: (final) => {
         setTexto(final);
-        void interpretar(final);
+        // El `true` es lo que distingue «orden dictada» de «orden escrita» y
+        // por tanto lo único que decide si se aplica sola o espera un clic.
+        void interpretar(final, true);
       },
       onError: (error) => {
         setMensaje(error);
@@ -238,8 +324,8 @@ export function Asistente({
     setConfirmando(false);
   };
 
-  return (
-    <section className="asistente">
+  const contenido = (
+    <>
       <form
         className="asistente__entrada"
         onSubmit={(e) => {
@@ -346,6 +432,36 @@ export function Asistente({
           </div>
         </div>
       )}
-    </section>
+    </>
+  );
+
+  if (modo === 'panel') {
+    return <section className="asistente">{contenido}</section>;
+  }
+
+  // Hay algo que contar y el panel está cerrado: el punto en la burbuja es lo
+  // único que distingue «nada nuevo» de «hay una propuesta o un mensaje
+  // esperando», sin obligar a abrir el panel solo para comprobarlo.
+  const hayAvisoPendiente = !abierto && (mensaje !== null || propuestas.length > 0);
+
+  return (
+    <>
+      <button
+        type="button"
+        className={`asistente-flotante__burbuja${
+          hayAvisoPendiente ? ' asistente-flotante__burbuja--aviso' : ''
+        }`}
+        onClick={() => setAbierto((valor) => !valor)}
+        aria-expanded={abierto}
+        aria-label={abierto ? 'Cerrar el asistente' : 'Abrir el asistente'}
+        title="Asistente: escriba o dicte una orden"
+      >
+        <Icono nombre="mensajes" />
+      </button>
+
+      {abierto && (
+        <section className="asistente asistente-flotante__panel">{contenido}</section>
+      )}
+    </>
   );
 }

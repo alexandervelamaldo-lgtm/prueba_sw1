@@ -155,6 +155,20 @@ export const UmlRelationSchema = z.object({
   name: z.string().optional(),
   source: EndPointSchema,
   target: EndPointSchema,
+  /**
+   * Clase de asociación (UML): una clase que cuelga de esta relación —no de uno
+   * de sus dos extremos— y guarda los atributos propios del vínculo (`cantidad`,
+   * `subtotal`... en una relación Venta–Producto). Es un campo de la relación y
+   * no una relación aparte porque no hay un tercer extremo: es la misma relación
+   * N:M vista con datos, como en el símbolo de StarUML/Visual Paradigm.
+   *
+   * Solo tiene sentido sobre una asociación muchos a muchos: `setAssociationClass`
+   * (`shared/src/ops/operations.ts`) y `validateAssociationClasses`
+   * (`shared/src/validation/validate.ts`) lo exigen antes de que llegue aquí.
+   * Sobre cualquier otra multiplicidad la clase del lado «muchos» ya es esa fila,
+   * y no hace falta una tercera clase para guardar lo mismo.
+   */
+  associationClassId: IdSchema.optional(),
 });
 
 export const DiagramMetaSchema = z.object({

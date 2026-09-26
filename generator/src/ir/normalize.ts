@@ -149,7 +149,16 @@ function buildAssociations(
     if (!entityNames.has(toPascalCase(source.name))) continue;
     if (!entityNames.has(toPascalCase(target.name))) continue;
 
-    pending.push(...associationsForRelation(relation, source, target));
+    // Una clase de asociación que ya no es una entidad persistente (borrada, o
+    // convertida en interfaz/enum tras marcarse) se trata como ausente: no es
+    // el trabajo del generador rechazar un diagrama inválido —eso lo hace
+    // `validateAssociationClasses`—, así que aquí simplemente se cae al M:N
+    // con tabla de unión sintética de siempre.
+    const associationClass = relation.associationClassId
+      ? entityClasses.find((c) => c.id === relation.associationClassId)
+      : undefined;
+
+    pending.push(...associationsForRelation(relation, source, target, associationClass));
   }
 
   for (const cls of entityClasses) {
@@ -187,9 +196,20 @@ function associationsForRelation(
   relation: UmlRelation,
   source: UmlClass,
   target: UmlClass,
+  associationClass?: UmlClass,
 ): PendingAssociation[] {
   const sourceToMany = isToMany(relation.source.multiplicity);
   const targetToMany = isToMany(relation.target.multiplicity);
+
+  // Clase de asociación (UML): sustituye por completo la tabla de unión
+  // sintética de la rama M:N de más abajo. Solo tiene sentido si de verdad es
+  // N:M por los dos lados —lo mismo que exige `validateAssociationClasses`—;
+  // si el diagrama quedó en un estado inconsistente (p. ej. alguien bajó la
+  // multiplicidad después de colgar la clase) se prefiere caer al M:N de
+  // siempre antes que fabricar un ManyToOne sin sentido.
+  if (sourceToMany && targetToMany && associationClass) {
+    return associationClassPair(source, target, associationClass, relation);
+  }
 
   // En composición, el «todo» es el extremo source: es quien propaga el borrado.
   const cascadeOnSource = relation.kind === 'composition';
@@ -405,6 +425,125 @@ function oneToManyPair(spec: {
     result.push({ ownerClassId: spec.oneSide.id, association: inverse });
   }
   return result;
+}
+
+/**
+ * Clase de asociación (UML) colgada de una relación N:M.
+ *
+ * A diferencia de la rama M:N de más abajo —que fabrica un `@JoinTable` sin
+ * clase Java propia—, aquí la propia clase de asociación es la tabla de
+ * unión: lleva dos `@ManyToOne` obligatorios (uno a cada extremo, con sus
+ * columnas `..._id`) además de sus propios atributos (`cantidad`, `subtotal`,
+ * lo que sea que el usuario le haya puesto). `buildTable` ya sabe emitir esas
+ * columnas y sus claves ajenas porque son un `ManyToOne` corriente: no hace
+ * falta tocar la generación de tablas para que esto funcione.
+ *
+ * Las dos colecciones inversas (`Set<ClaseAsociacion>` en cada extremo) son
+ * opcionales y no siguen el convenio de «lado propietario» de la rama M:N:
+ * ahí el propietario forzado existía porque alguien tenía que declarar el
+ * `@JoinTable`, pero aquí el dueño de las dos claves ajenas es siempre la
+ * clase de asociación, así que cada colección se añade según la navegabilidad
+ * de su propio extremo, sin depender del otro.
+ */
+function associationClassPair(
+  source: UmlClass,
+  target: UmlClass,
+  associationClass: UmlClass,
+  relation: UmlRelation,
+): PendingAssociation[] {
+  const sourceName = toPascalCase(source.name);
+  const targetName = toPascalCase(target.name);
+  const assocName = toPascalCase(associationClass.name);
+  const selfReference = source.id === target.id;
+
+  const fieldToSource = fieldNameFor(relation.source.role, sourceName, false, selfReference, 'source');
+  const fieldToTarget = fieldNameFor(relation.target.role, targetName, false, selfReference, 'target');
+
+  const result: PendingAssociation[] = [
+    { ownerClassId: associationClass.id, association: manyToOneField(fieldToSource, source) },
+    { ownerClassId: associationClass.id, association: manyToOneField(fieldToTarget, target) },
+  ];
+
+  // Un extremo que es la propia clase de asociación consigo misma (relación
+  // reflexiva) no tiene una colección inversa clara en qué extremo colgarla
+  // sin ambigüedad, así que se omite: el vínculo ya es navegable a través de
+  // los dos `@ManyToOne` de arriba.
+  if (selfReference) return result;
+
+  const collectionField = fieldNameFor(undefined, assocName, true, false, 'items');
+
+  if (relation.source.navigable) {
+    result.push({
+      ownerClassId: source.id,
+      association: {
+        fieldName: collectionField,
+        targetClass: assocName,
+        targetVar: toCamelCase(assocName),
+        targetTable: tableNameFor(associationClass),
+        kind: 'OneToMany',
+        owning: false,
+        mappedBy: fieldToSource,
+        orphanRemoval: false,
+        fetch: 'LAZY',
+        collection: true,
+        javaType: `Set<${assocName}>`,
+        nullable: true,
+        ...accessors(collectionField),
+      },
+    });
+  }
+
+  if (relation.target.navigable) {
+    result.push({
+      ownerClassId: target.id,
+      association: {
+        fieldName: collectionField,
+        targetClass: assocName,
+        targetVar: toCamelCase(assocName),
+        targetTable: tableNameFor(associationClass),
+        kind: 'OneToMany',
+        owning: false,
+        mappedBy: fieldToTarget,
+        orphanRemoval: false,
+        fetch: 'LAZY',
+        collection: true,
+        javaType: `Set<${assocName}>`,
+        nullable: true,
+        ...accessors(collectionField),
+      },
+    });
+  }
+
+  return result;
+}
+
+/**
+ * `@ManyToOne` obligatorio de una clase de asociación hacia uno de los dos
+ * extremos de la relación que representa.
+ *
+ * Siempre `nullable: false`: una fila de la clase de asociación sin uno de
+ * los dos extremos no es un vínculo válido, es un vínculo a medias. Por eso
+ * el borrado de un extremo con filas de la clase de asociación pendientes
+ * sale con `ON DELETE NO ACTION` (ver `buildTable`) en vez de dejar la fila
+ * huérfana con la clave en NULL.
+ */
+function manyToOneField(fieldName: string, target: UmlClass): AssociationIR {
+  const targetName = toPascalCase(target.name);
+  return {
+    fieldName,
+    targetClass: targetName,
+    targetVar: toCamelCase(targetName),
+    targetTable: tableNameFor(target),
+    kind: 'ManyToOne',
+    owning: true,
+    joinColumn: `${toSnakeCase(fieldName)}_id`,
+    orphanRemoval: false,
+    fetch: 'LAZY',
+    collection: false,
+    javaType: targetName,
+    nullable: false,
+    ...accessors(fieldName),
+  };
 }
 
 /**
@@ -787,7 +926,7 @@ function buildMigration(
   for (const entity of entities) {
     for (const assoc of entity.associations) {
       if (assoc.kind !== 'ManyToMany' || !assoc.owning || !assoc.joinTable) continue;
-      tables.push(buildJoinTable(entity, assoc.joinTable, assoc.targetTable));
+      tables.push(buildJoinTable(entity, assoc.joinTable, assoc.targetTable, entities));
     }
   }
 
@@ -871,9 +1010,11 @@ function buildTable(
     if (assoc.kind !== 'ManyToOne' && assoc.kind !== 'OneToOne') continue;
     if (!assoc.joinColumn) continue;
 
+    const targetEntity = allEntities.find((e) => e.className === assoc.targetClass);
+
     const column: ColumnDDL = {
       name: assoc.joinColumn,
-      type: 'BIGINT',
+      type: targetEntity?.identifier.postgresType ?? 'BIGINT',
       nullable: assoc.nullable,
       unique: assoc.kind === 'OneToOne',
       primaryKey: false,
@@ -892,7 +1033,7 @@ function buildTable(
       constraintName: truncateIdentifier(`fk_${entity.tableName}_${assoc.joinColumn}`),
       column: assoc.joinColumn,
       referencesTable: assoc.targetTable,
-      referencesColumn: 'id',
+      referencesColumn: targetEntity?.identifier.columnName ?? 'id',
       // `partOfComposition` y no `cascade`: en un ManyToOne la cascada de JPA
       // está en el lado inverso, que no pasa por aquí porque no lleva clave
       // ajena. Mirando `cascade` la composición uno-a-muchos salía con
@@ -919,23 +1060,27 @@ function buildJoinTable(
   owner: EntityIR,
   joinTable: { name: string; joinColumn: string; inverseJoinColumn: string },
   targetTable: string,
+  allEntities: EntityIR[],
 ): TableDDL {
+  const targetEntity = allEntities.find((e) => e.tableName === targetTable);
+  const ownerColumnType = owner.identifier.postgresType;
+  const targetColumnType = targetEntity?.identifier.postgresType ?? 'BIGINT';
   const columns: ColumnDDL[] = [
     {
       name: joinTable.joinColumn,
-      type: 'BIGINT',
+      type: ownerColumnType,
       nullable: false,
       unique: false,
       primaryKey: true,
-      definition: `${joinTable.joinColumn} BIGINT NOT NULL`,
+      definition: `${joinTable.joinColumn} ${ownerColumnType} NOT NULL`,
     },
     {
       name: joinTable.inverseJoinColumn,
-      type: 'BIGINT',
+      type: targetColumnType,
       nullable: false,
       unique: false,
       primaryKey: true,
-      definition: `${joinTable.inverseJoinColumn} BIGINT NOT NULL`,
+      definition: `${joinTable.inverseJoinColumn} ${targetColumnType} NOT NULL`,
     },
   ];
 
@@ -948,14 +1093,14 @@ function buildJoinTable(
         constraintName: truncateIdentifier(`fk_${joinTable.name}_${joinTable.joinColumn}`),
         column: joinTable.joinColumn,
         referencesTable: owner.tableName,
-        referencesColumn: 'id',
+        referencesColumn: owner.identifier.columnName,
         onDelete: 'CASCADE',
       },
       {
         constraintName: truncateIdentifier(`fk_${joinTable.name}_${joinTable.inverseJoinColumn}`),
         column: joinTable.inverseJoinColumn,
         referencesTable: targetTable,
-        referencesColumn: 'id',
+        referencesColumn: targetEntity?.identifier.columnName ?? 'id',
         onDelete: 'CASCADE',
       },
     ],

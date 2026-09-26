@@ -81,6 +81,7 @@ export function validateDiagram(diagram: ClassDiagram): ValidationResult {
   validateInheritance(diagram, issues);
   validateCompositionCycles(diagram, issues);
   validateMultiplicities(diagram, issues);
+  validateAssociationClasses(diagram, issues);
   validateMethods(diagram, issues);
 
   const errors = issues.filter((i) => i.severity === 'error');
@@ -712,6 +713,72 @@ function validateMultiplicities(diagram: ClassDiagram, issues: ValidationIssue[]
           `«${source.name}» y «${target.name}»: una enumeración no puede participar en una ` +
           `asociación. Úsela como tipo de un atributo.`,
         elementId: relation.id,
+      });
+    }
+  }
+}
+
+/**
+ * Regla 9: la clase de asociación (UML) solo tiene sentido colgada de una
+ * relación N:M real, sin ser ella misma uno de los extremos, y debe poder
+ * materializarse como tabla (el generador la usa como tabla de unión).
+ */
+function validateAssociationClasses(diagram: ClassDiagram, issues: ValidationIssue[]): void {
+  for (const relation of listRelations(diagram)) {
+    if (!relation.associationClassId) continue;
+
+    const assocClass = diagram.classes[relation.associationClassId];
+    if (!assocClass) {
+      issues.push({
+        severity: 'error',
+        code: 'DANGLING_ASSOCIATION_CLASS',
+        message: 'Una relación señala como clase de asociación a una clase que ya no existe.',
+        elementId: relation.id,
+      });
+      continue;
+    }
+
+    if (
+      relation.kind !== 'association' ||
+      !isToMany(relation.source.multiplicity) ||
+      !isToMany(relation.target.multiplicity)
+    ) {
+      issues.push({
+        severity: 'error',
+        code: 'ASSOCIATION_CLASS_REQUIRES_MANY_TO_MANY',
+        message:
+          `«${assocClass.name}» está marcada como clase de asociación de una relación que no ` +
+          `es muchos a muchos. Solo tiene sentido sobre una asociación N:M: sobre cualquier ` +
+          `otra multiplicidad, la clase del lado "muchos" ya guarda esos mismos datos en su ` +
+          `propia fila.`,
+        elementId: relation.id,
+        elementName: assocClass.name,
+      });
+    }
+
+    if (
+      relation.source.classId === relation.associationClassId ||
+      relation.target.classId === relation.associationClassId
+    ) {
+      issues.push({
+        severity: 'error',
+        code: 'ASSOCIATION_CLASS_IS_ENDPOINT',
+        message: `«${assocClass.name}» no puede ser a la vez un extremo de la relación y su clase de asociación.`,
+        elementId: relation.id,
+        elementName: assocClass.name,
+      });
+    }
+
+    if (!isPersistent(assocClass) || assocClass.kind === 'interface' || assocClass.kind === 'enum') {
+      issues.push({
+        severity: 'error',
+        code: 'ASSOCIATION_CLASS_NOT_PERSISTENT',
+        message:
+          `«${assocClass.name}» está marcada como clase de asociación pero no se genera como ` +
+          `tabla (es transitoria, una interfaz o una enumeración), así que no hay dónde guardar ` +
+          `la clave ajena a cada extremo.`,
+        elementId: relation.id,
+        elementName: assocClass.name,
       });
     }
   }

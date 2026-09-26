@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import type { ClassDiagram } from '@app/shared';
 import { readDiagram, toKebabCase } from '@app/shared';
-import { generate, toZipBuffer, validateDiagram } from '@app/generator';
+import { generate, generateFlutter, toZipBuffer, validateDiagram } from '@app/generator';
 import type { ProjectStore } from '../storage/store.js';
 import type { RoomManager } from '../collab/rooms.js';
 import { handler, parseBody, requireRole } from './http.js';
@@ -126,6 +126,38 @@ export function generationRouter(deps: { store: ProjectStore; rooms: RoomManager
       // El cliente lo usa para avisar de problemas que no impiden generar pero
       // que el usuario debería ver; en un ZIP no hay dónde ponerlos si no.
       response.setHeader('X-Avisos', String(outcome.warnings.length));
+      response.send(zip);
+    }),
+  );
+
+  /** Genera el frontend Flutter y lo descarga como ZIP. */
+  router.post(
+    '/:proyectoId/generacion/flutter',
+    requireRole(store, 'viewer'),
+    handler(async (request, response) => {
+      const options = parseBody(OpcionesSchema, request.body ?? {});
+      const projectId = request.params.proyectoId ?? '';
+      const room = await rooms.open(projectId);
+      const outcome = generate(withOverrides(readDiagram(room.doc), options), {
+        inheritanceStrategy: options.estrategiaHerencia,
+      });
+
+      if (!outcome.ok) {
+        response.status(422).json({
+          error: 'El diagrama todavía no puede generarse',
+          code: 'DIAGRAMA_INVALIDO',
+          errores: outcome.validation.errors,
+        });
+        return;
+      }
+
+      const flutterFiles = generateFlutter(outcome.ir);
+      const zip = await toZipBuffer(flutterFiles);
+      const project = await store.getProject(projectId);
+      const fileName = `${toKebabCase(project?.name ?? 'proyecto') || 'proyecto'}-flutter.zip`;
+
+      response.setHeader('Content-Type', 'application/zip');
+      response.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
       response.send(zip);
     }),
   );

@@ -240,6 +240,7 @@ function readRelation(map: Y.Map<unknown>): UmlRelation {
   const name = map.get('name');
   const sourceRole = map.get('sourceRole');
   const targetRole = map.get('targetRole');
+  const associationClassId = map.get('associationClassId');
 
   return {
     id: readString(map, 'id'),
@@ -257,6 +258,8 @@ function readRelation(map: Y.Map<unknown>): UmlRelation {
       multiplicity: readString(map, 'targetMultiplicity', '1'),
       navigable: readBoolean(map, 'targetNavigable', true),
     },
+    associationClassId:
+      typeof associationClassId === 'string' && associationClassId ? associationClassId : undefined,
   };
 }
 
@@ -294,7 +297,15 @@ export function readDiagram(doc: Y.Doc): ClassDiagram {
     // Una relación con un extremo ya borrado no es representable: se omite en
     // lugar de propagar un identificador colgante al generador.
     if (!classes[relation.source.classId] || !classes[relation.target.classId]) continue;
-    relations[id] = { ...relation, id };
+    // Una clase de asociación que apunta a una clase ya borrada sí es
+    // representable como relación corriente: se limpia solo ese campo, no toda
+    // la relación, igual que el borrado de un módulo deja huérfano el `moduleId`
+    // de una clase en lugar de borrar la clase entera.
+    const associationClassId =
+      relation.associationClassId && classes[relation.associationClassId]
+        ? relation.associationClassId
+        : undefined;
+    relations[id] = { ...relation, id, associationClassId };
   }
 
   return {
@@ -418,6 +429,10 @@ export function writeRelation(relation: UmlRelation): Y.Map<unknown> {
   map.set('targetMultiplicity', relation.target.multiplicity);
   map.set('targetNavigable', relation.target.navigable);
   if (relation.target.role) map.set('targetRole', relation.target.role);
+  // Solo se escribe si existe: así una relación corriente no arrastra la clave
+  // vacía y `readRelation` puede seguir usando "ausencia de clave" como señal
+  // de "esta relación no tiene clase de asociación".
+  if (relation.associationClassId) map.set('associationClassId', relation.associationClassId);
   return map;
 }
 

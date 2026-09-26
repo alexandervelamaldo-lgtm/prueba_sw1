@@ -642,6 +642,37 @@ export async function descargarProyecto(
   return { avisos, donde };
 }
 
+/**
+ * Genera el frontend Flutter y lo descarga como ZIP.
+ * Llama a POST /api/proyectos/:id/generacion/flutter.
+ */
+export async function descargarFlutter(
+  id: string,
+  nombreSugerido: string,
+): Promise<{ donde: string }> {
+  const cabeceras = new Headers({ 'Content-Type': 'application/json' });
+  if (tokenActual) cabeceras.set('Authorization', `Bearer ${tokenActual}`);
+
+  const respuesta = await fetch(`/api/proyectos/${id}/generacion/flutter`, {
+    method: 'POST',
+    headers: cabeceras,
+    body: JSON.stringify({}),
+  }).catch(() => { throw new ApiError(0, 'No hay conexión con el servidor'); });
+
+  if (!respuesta.ok) {
+    const d = (await respuesta.json().catch(() => null)) as { error?: string } | null;
+    throw new ApiError(respuesta.status, d?.error ?? `Error ${respuesta.status}`);
+  }
+
+  const bytes = new Uint8Array(await respuesta.arrayBuffer());
+  const donde = await descargar(
+    nombreDeFichero(`${nombreSugerido || 'proyecto'}-flutter`, '.zip'),
+    'application/zip',
+    bytes,
+  );
+  return { donde };
+}
+
 /** URL del canal colaborativo para un proyecto, con el token en la consulta. */
 export function urlColaboracion(proyectoId: string, token: string): string {
   const protocolo = location.protocol === 'https:' ? 'wss:' : 'ws:';

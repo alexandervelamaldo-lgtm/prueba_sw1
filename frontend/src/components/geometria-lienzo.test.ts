@@ -14,6 +14,7 @@ import {
   limitarEscala,
   medidasDe,
   puntoEnCurva,
+  puntoMedioRelacion,
   recortar,
   textoAtributo,
 } from './geometria-lienzo';
@@ -222,6 +223,48 @@ describe('puntoEnCurva', () => {
     // control 34. Si esta relación cambiara, las relaciones paralelas dejarían
     // de estar donde se dijo que estarían.
     expect(puntoEnCurva(p0, { x: 50, y: 40 }, p1, 0.5).y).toBe(20);
+  });
+});
+
+describe('puntoMedioRelacion', () => {
+  const medida = { ancho: 200, alto: 100 };
+
+  it('entre dos clases alineadas y sin desvío, cae justo en el medio de las dos', () => {
+    const a = clase({ id: 'a', name: 'A', position: { x: 0, y: 0 } });
+    const b = clase({ id: 'b', name: 'B', position: { x: 600, y: 0 } });
+    const punto = puntoMedioRelacion(a, b, medida, medida, 0);
+    // Centro de A: (100,50). Centro de B: (700,50). Con desvío 0 el control
+    // está sobre esa misma recta, así que el punto medio de la cuadrática
+    // coincide con el punto medio del segmento entre los dos anclajes.
+    expect(punto.x).toBeCloseTo(400, 6);
+    expect(punto.y).toBeCloseTo(50, 6);
+  });
+
+  it('con desvío, el punto medio se separa hacia el lado del abanico', () => {
+    const a = clase({ id: 'a', name: 'A', position: { x: 0, y: 0 } });
+    const b = clase({ id: 'b', name: 'B', position: { x: 600, y: 0 } });
+    const recto = puntoMedioRelacion(a, b, medida, medida, 0);
+    const desviado = puntoMedioRelacion(a, b, medida, medida, 1);
+    expect(desviado.y).not.toBeCloseTo(recto.y, 6);
+  });
+
+  it('es simétrico: da igual qué clase se pase como origen', () => {
+    const a = clase({ id: 'a', name: 'A', position: { x: 0, y: 0 } });
+    const b = clase({ id: 'b', name: 'B', position: { x: 600, y: 300 } });
+    const desdeA = puntoMedioRelacion(a, b, medida, medida, 0.5);
+    const desdeB = puntoMedioRelacion(b, a, medida, medida, -0.5);
+    // Invertir origen/destino y el signo del desvío es la misma curva mirada
+    // desde el otro lado: mismo trazo, mismo punto medio.
+    expect(desdeA.x).toBeCloseTo(desdeB.x, 6);
+    expect(desdeA.y).toBeCloseTo(desdeB.y, 6);
+  });
+
+  it('reflexiva: no divide por cero y devuelve un punto a la derecha de la caja', () => {
+    const a = clase({ id: 'a', name: 'A', position: { x: 50, y: 50 } });
+    const punto = puntoMedioRelacion(a, a, medida, medida, 0);
+    expect(Number.isFinite(punto.x)).toBe(true);
+    expect(Number.isFinite(punto.y)).toBe(true);
+    expect(punto.x).toBeGreaterThan(a.position.x + medida.ancho);
   });
 });
 

@@ -683,3 +683,148 @@ describe('edición manual de relaciones', () => {
     expect(descripcion).not.toContain('uno a uno');
   });
 });
+
+describe('asociación de clase rápida (associationClassName en addRelation)', () => {
+  // Es el atajo de un solo gesto que ofrece el lienzo: en vez de `addClass` +
+  // `setAssociationClass` por separado —que no se pueden encadenar en un
+  // mismo array de operaciones porque el segundo necesitaría el id que
+  // genera el primero—, `addRelation` crea la clase y la cuelga él mismo.
+
+  it('crea la clase intermedia y la cuelga de la relación cuando es N:M', () => {
+    const doc = nuevoDoc();
+    crearClase(doc, 'Estudiante');
+    crearClase(doc, 'Curso');
+
+    const result = applyOperation(doc, {
+      op: 'addRelation',
+      kind: 'association',
+      source: { name: 'Estudiante' },
+      target: { name: 'Curso' },
+      sourceMultiplicity: '*',
+      targetMultiplicity: '*',
+      associationClassName: 'Inscripcion',
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.relationId).toBeDefined();
+    expect(result.classId).toBeDefined();
+
+    const diagrama = readDiagram(doc);
+    const relacion = diagrama.relations[result.relationId as string];
+    expect(relacion?.associationClassId).toBe(result.classId);
+    const clase = diagrama.classes[result.classId as string];
+    expect(clase?.name).toBe('Inscripcion');
+    // La clase intermedia es una clase más del diagrama, no un objeto aparte:
+    // tiene que poder llevar sus propios atributos igual que cualquier otra.
+    expect(clase?.kind).toBe('class');
+  });
+
+  it('rechaza el atajo si la cardinalidad resultante no es muchos a muchos', () => {
+    const doc = nuevoDoc();
+    crearClase(doc, 'Estudiante');
+    crearClase(doc, 'Curso');
+
+    const result = applyOperation(doc, {
+      op: 'addRelation',
+      kind: 'association',
+      source: { name: 'Estudiante' },
+      target: { name: 'Curso' },
+      sourceMultiplicity: '1',
+      targetMultiplicity: '*',
+      associationClassName: 'Inscripcion',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/muchos a muchos/);
+    // Nada a medias: ni la relación ni la clase deberían haberse creado.
+    const diagrama = readDiagram(doc);
+    expect(Object.keys(diagrama.relations)).toHaveLength(0);
+    expect(Object.keys(diagrama.classes)).toHaveLength(2);
+  });
+
+  it('rechaza el atajo sobre una agregación N:M, igual que setAssociationClass', () => {
+    const doc = nuevoDoc();
+    crearClase(doc, 'Estudiante');
+    crearClase(doc, 'Curso');
+
+    const result = applyOperation(doc, {
+      op: 'addRelation',
+      kind: 'aggregation',
+      source: { name: 'Estudiante' },
+      target: { name: 'Curso' },
+      sourceMultiplicity: '*',
+      targetMultiplicity: '*',
+      associationClassName: 'Inscripcion',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/muchos a muchos/);
+  });
+
+  it('sin associationClassName se comporta como una relación normal, sin clase de más', () => {
+    const doc = nuevoDoc();
+    crearClase(doc, 'Estudiante');
+    crearClase(doc, 'Curso');
+
+    const result = applyOperation(doc, {
+      op: 'addRelation',
+      kind: 'association',
+      source: { name: 'Estudiante' },
+      target: { name: 'Curso' },
+      sourceMultiplicity: '*',
+      targetMultiplicity: '*',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.classId).toBeUndefined();
+    expect(Object.keys(readDiagram(doc).classes)).toHaveLength(2);
+  });
+
+  it('rechaza el atajo si ya existe una clase con ese nombre, en vez de crear una segunda', () => {
+    // Bug real: el asistente propuso crear la relación con clase de
+    // asociación «DetalleVenta» cuando ya había una clase con ese nombre en
+    // el diagrama. `addRelation` creaba una segunda clase homónima sin
+    // avisar, y el `addAttribute` del mismo lote que apuntaba a
+    // «DetalleVenta» por nombre encontraba dos y fallaba con un error que no
+    // mencionaba la colisión real («Hay 2 clases llamadas...»); como el lote
+    // se revierte entero, pulsar «Aplicar» no hacía nada visible.
+    const doc = nuevoDoc();
+    crearClase(doc, 'Estudiante');
+    crearClase(doc, 'Curso');
+    crearClase(doc, 'Inscripcion');
+
+    const result = applyOperation(doc, {
+      op: 'addRelation',
+      kind: 'association',
+      source: { name: 'Estudiante' },
+      target: { name: 'Curso' },
+      sourceMultiplicity: '*',
+      targetMultiplicity: '*',
+      associationClassName: 'Inscripcion',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toContain('Ya existe una clase llamada «Inscripcion»');
+    // Nada a medias, tampoco en este caso: ni la relación ni una segunda
+    // «Inscripcion» deberían haberse creado.
+    const diagrama = readDiagram(doc);
+    expect(Object.keys(diagrama.relations)).toHaveLength(0);
+    expect(Object.keys(diagrama.classes)).toHaveLength(3);
+  });
+
+  it('la descripción menciona la clase de asociación creada', () => {
+    const descripcion = describeOperation({
+      op: 'addRelation',
+      kind: 'association',
+      source: { name: 'Estudiante' },
+      target: { name: 'Curso' },
+      sourceMultiplicity: '*',
+      targetMultiplicity: '*',
+      associationClassName: 'Inscripcion',
+    });
+
+    expect(descripcion).toContain('clase de asociación');
+    expect(descripcion).toContain('Inscripcion');
+  });
+});

@@ -366,7 +366,17 @@ export function useDiagrama(proyectoId: string, autor: Autor | null = null): Est
         if (!r.ok) continue;
         if (r.classId) {
           clases.push(r.classId);
-          if (operaciones[indice]?.op === 'addClass') creadas.push(r.classId);
+          // La "asociación de clase" rápida también crea una clase (ver
+          // `associationClassName` en `addRelation`): sin este segundo caso
+          // esa clase quedaría fuera del historial de creación aunque el
+          // usuario la acabe de crear en el mismo gesto.
+          const operacion = operaciones[indice];
+          if (
+            operacion?.op === 'addClass' ||
+            (operacion?.op === 'addRelation' && operacion.associationClassName)
+          ) {
+            creadas.push(r.classId);
+          }
         }
         if (r.relationId) relaciones.push(r.relationId);
       }

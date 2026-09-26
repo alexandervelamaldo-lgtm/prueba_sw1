@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { callar, dictar, hablar, sintesisDisponible } from './voz';
+import { callar, dictar, elegirVoz, hablar, sintesisDisponible } from './voz';
 import { MS_MAXIMO_ESCUCHANDO, MS_SILENCIO_ANTES_DE_HABLAR, MS_SILENCIO_TRAS_HABLAR } from './dictado';
 
 /**
@@ -22,6 +22,8 @@ import { MS_MAXIMO_ESCUCHANDO, MS_SILENCIO_ANTES_DE_HABLAR, MS_SILENCIO_TRAS_HAB
 /** Una locución de mentira: guarda lo que le enganchan y deja dispararlo. */
 class LocucionFalsa {
   lang = '';
+  rate = 1;
+  voice: unknown = null;
   onend: (() => void) | null = null;
   onerror: (() => void) | null = null;
   constructor(public readonly text: string) {}
@@ -39,8 +41,12 @@ interface Sintesis {
  * de verdad, y **de forma asíncrona**: ahí está el fallo que esto vigila. Si el
  * aviso se emitiera sin comprobar de quién es, la segunda lectura encendería el
  * indicador y el final de la primera lo apagaría un instante después.
+ *
+ * `voces`, si se da, monta también `getVoices()` —opcional a propósito: el
+ * `speechSynthesis` de verdad a veces tarda en tenerlas cargadas, y `hablar`
+ * tiene que seguir funcionando sin ellas.
  */
-function montarNavegador(): Sintesis {
+function montarNavegador(voces?: unknown[]): Sintesis {
   const estado: Sintesis = { hablado: [], cancelaciones: 0 };
   let sonando: LocucionFalsa | null = null;
 
@@ -55,6 +61,7 @@ function montarNavegador(): Sintesis {
       sonando = locucion;
       estado.hablado.push(locucion);
     },
+    ...(voces ? { getVoices: (): unknown[] => voces } : {}),
   };
 
   Object.assign(globalThis, {
@@ -378,6 +385,23 @@ describe('hablar', () => {
     expect(fin).toHaveBeenCalledTimes(1);
   });
 
+  it('sin voces que ofrecer, sigue hablando con la voz por defecto', () => {
+    // Sin `getVoices` en absoluto —el `speechSynthesis` de mentira de arriba— y
+    // con `getVoices` devolviendo una lista vacía son el mismo caso desde aquí:
+    // ninguno debe romper `hablar` ni impedir que se diga el texto.
+    const sintesis = montarNavegador([]);
+    hablar('hola');
+    expect(sintesis.hablado[0]?.voice).toBeNull();
+  });
+
+  it('con una voz «Online (Natural)» disponible, se usa esa', () => {
+    const natural = { lang: 'es-ES', name: 'Microsoft X Online (Natural)', localService: false };
+    const local = { lang: 'es-ES', name: 'Spanish (Spain)', localService: true };
+    const sintesis = montarNavegador([local, natural]);
+    hablar('hola');
+    expect(sintesis.hablado[0]?.voice).toBe(natural);
+  });
+
   /*
     El caso que motivó el contador. Sin él, el `cancel()` de la segunda lectura
     llama al `onerror` de la primera y apaga el indicador de una lectura que
@@ -434,5 +458,34 @@ describe('hablar', () => {
     const enviados = montarPuente();
     callar();
     expect(enviados.map((m) => JSON.parse(m))).toEqual([{ tipo: 'callar' }]);
+  });
+});
+
+describe('elegirVoz', () => {
+  it('sin ninguna voz, no elige nada', () => {
+    expect(elegirVoz([])).toBeUndefined();
+  });
+
+  it('descarta las voces que no son de castellano', () => {
+    const ingles = { lang: 'en-US', name: 'English Online (Natural)', localService: false };
+    expect(elegirVoz([ingles])).toBeUndefined();
+  });
+
+  it('con una marcada «Online» o «Natural», gana esa aunque haya otras', () => {
+    const local = { lang: 'es-MX', name: 'Sabina', localService: true };
+    const enLaNube = { lang: 'es-US', name: 'X Online', localService: false };
+    expect(elegirVoz([local, enLaNube])).toBe(enLaNube);
+  });
+
+  it('sin ninguna marcada así, gana la que no es del sistema', () => {
+    const local = { lang: 'es-ES', name: 'Spanish (Spain)', localService: true };
+    const enLaNube = { lang: 'es-ES', name: 'Google español', localService: false };
+    expect(elegirVoz([local, enLaNube])).toBe(enLaNube);
+  });
+
+  it('si todas son locales, la primera de castellano es mejor que ninguna', () => {
+    const primera = { lang: 'es-BO', name: 'Spanish (Bolivia)', localService: true };
+    const segunda = { lang: 'es-AR', name: 'Spanish (Argentina)', localService: true };
+    expect(elegirVoz([primera, segunda])).toBe(primera);
   });
 });

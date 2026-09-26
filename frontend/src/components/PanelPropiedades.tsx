@@ -88,13 +88,45 @@ function tieneCardinalidad(kind: RelationKind): boolean {
  * (`isToMany` sobre cada extremo), no una aproximación: si divergieran, el panel
  * estaría prometiendo algo que el ZIP no cumple.
  */
-function mapeoJpa(relacion: UmlRelation): string | null {
+export function mapeoJpa(relacion: UmlRelation, diagrama: ClassDiagram): string | null {
   if (!tieneCardinalidad(relacion.kind)) return '@Inheritance / extends';
   const origenMuchos = isToMany(relacion.source.multiplicity);
   const destinoMuchos = isToMany(relacion.target.multiplicity);
-  if (origenMuchos && destinoMuchos) return '@ManyToMany (con tabla de unión)';
+  if (origenMuchos && destinoMuchos) {
+    if (relacion.associationClassId) {
+      const nombre = diagrama.classes[relacion.associationClassId]?.name ?? '?';
+      // No hay «tabla de unión» sintética que anunciar: la propia clase de
+      // asociación es la tabla, con sus dos claves ajenas y sus atributos.
+      return `clase de asociación «${nombre}» (dos @ManyToOne, sin @JoinTable)`;
+    }
+    return '@ManyToMany (con tabla de unión)';
+  }
   if (!origenMuchos && !destinoMuchos) return '@OneToOne (clave ajena)';
   return '@OneToMany / @ManyToOne (clave ajena en el lado «muchos»)';
+}
+
+/**
+ * Candidatas a colgarse como clase de asociación de una relación N:M.
+ *
+ * Se excluyen los dos extremos (una clase de asociación no puede ser a la vez
+ * uno de los lados de su propia relación —lo rechaza `setAssociationClass`—),
+ * las interfaces y enumeraciones (no se generan como tabla) y las clases
+ * transitorias (tampoco tienen fila que guardar la clave ajena). Es la misma
+ * regla que aplica `validateAssociationClasses`, adelantada aquí para no
+ * ofrecer una opción que el servidor va a rechazar de todas formas.
+ */
+export function clasesElegiblesComoAsociacion(
+  diagrama: ClassDiagram,
+  relacion: UmlRelation,
+): UmlClass[] {
+  return Object.values(diagrama.classes).filter(
+    (c) =>
+      c.id !== relacion.source.classId &&
+      c.id !== relacion.target.classId &&
+      c.kind !== 'interface' &&
+      c.kind !== 'enum' &&
+      !c.transient,
+  );
 }
 
 export function PanelPropiedades({
@@ -485,8 +517,41 @@ export function PanelPropiedades({
                     .
                   </p>
                 )}
+
+                {/* Solo tiene sentido sobre una N:M real: sobre cualquier otra
+                    cardinalidad la clase del lado «muchos» ya guarda esos
+                    mismos datos en su propia fila. */}
+                {relacion.kind === 'association' &&
+                  isToMany(relacion.source.multiplicity) &&
+                  isToMany(relacion.target.multiplicity) && (
+                    <label className="campo campo--asociacion">
+                      <span>Clase de asociación</span>
+                      <select
+                        className="mini"
+                        value={relacion.associationClassId ?? ''}
+                        disabled={deshabilitado}
+                        onChange={(e) =>
+                          ejecutar([
+                            {
+                              op: 'setAssociationClass',
+                              relationId: relacion.id,
+                              classRef: e.target.value ? { id: e.target.value } : null,
+                            },
+                          ])
+                        }
+                      >
+                        <option value="">(ninguna — tabla de unión automática)</option>
+                        {clasesElegiblesComoAsociacion(diagrama, relacion).map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+
                 <p className="relacion__mapeo">
-                  <code>{mapeoJpa(relacion)}</code>
+                  <code>{mapeoJpa(relacion, diagrama)}</code>
                 </p>
               </li>
             );

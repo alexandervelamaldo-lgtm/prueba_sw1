@@ -354,6 +354,11 @@ describe('la sombra dice qué capa recibe el clic, no adorna', () => {
     // una y con el porqué escrito es lo que la mantiene siendo una lista y no
     // un permiso general.
     '.recorrido__caja',
+    // La burbuja y el panel del asistente flotante (Asistente.tsx,
+    // modo="flotante"): la burbuja flota sobre el lienzo igual que
+    // `.boton-ayuda`, y el panel que despliega flota sobre la burbuja misma.
+    '.asistente-flotante__burbuja',
+    '.asistente-flotante__panel',
   ];
 
   it('solo llevan sombra las superficies que están en otra capa', () => {

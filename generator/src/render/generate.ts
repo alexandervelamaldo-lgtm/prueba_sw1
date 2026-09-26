@@ -10,6 +10,7 @@ import type {
   ProjectIR,
 } from '../ir/types.js';
 import { render } from './engine.js';
+import { buildPostmanCollection } from './postman.js';
 
 /**
  * Construcción de los modelos de vista y del árbol de ficheros.
@@ -424,6 +425,7 @@ export function generateProject(ir: GenerationIR): GeneratedFile[] {
   };
 
   files.push({ path: 'pom.xml', content: render('pom.xml.hbs', context) });
+  files.push({ path: 'run.bat', content: render('run.bat.hbs', context) });
   files.push({ path: 'README.md', content: render('README.md.hbs', context) });
   files.push({ path: '.gitignore', content: render('gitignore.hbs', context) });
   files.push({ path: 'docker-compose.yml', content: render('docker-compose.yml.hbs', context) });
@@ -508,6 +510,8 @@ export function generateProject(ir: GenerationIR): GeneratedFile[] {
     });
   }
 
+  const entityViews: EntityView[] = [];
+
   for (const entity of ir.entities) {
     const view = buildEntityView(ir, entity);
     const name = entity.className;
@@ -524,6 +528,8 @@ export function generateProject(ir: GenerationIR): GeneratedFile[] {
     // Una entidad abstracta no se instancia: no tiene sentido darle un CRUD.
     // Sus subclases exponen el suyo y arrastran los campos heredados.
     if (entity.isAbstract) continue;
+
+    entityViews.push(view);
 
     files.push({
       path: `${raiz}/repository/${name}Repository.java`,
@@ -554,6 +560,13 @@ export function generateProject(ir: GenerationIR): GeneratedFile[] {
       content: render('controller.java.hbs', view),
     });
   }
+
+  // Al final: necesita la vista de cada entidad concreta, que solo existe una
+  // vez recorrido el bucle de arriba.
+  files.push({
+    path: 'postman_collection.json',
+    content: buildPostmanCollection(ir, entityViews),
+  });
 
   assertSafePaths(files);
   return files;

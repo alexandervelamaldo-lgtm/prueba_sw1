@@ -28,15 +28,18 @@ import {
   ESCALA_MAXIMA,
   ESCALA_MINIMA,
   PADDING,
+  SEPARACION_ABANICO,
   anclaje,
   desviosPorPar,
   etiquetaClase,
   medidasDe,
   puntoEnCurva,
+  puntoMedioRelacion,
   recortar,
   textoAtributo,
   textoMetodo,
   type Medida,
+  type Punto,
 } from './geometria-lienzo';
 import type { LienzoProps } from './Lienzo';
 import { usePantallaEstrecha } from '../hooks/useDispositivo';
@@ -119,8 +122,26 @@ interface DatosArista extends Record<string, unknown> {
   desvio: number;
 }
 
+/**
+ * Lo que viaja dentro de la arista punteada de una clase de asociación.
+ *
+ * No lleva `relacion` ni `desvio`: a esta arista solo le hace falta la propia
+ * clase colgada, su medida, y el punto exacto del lienzo al que apunta —el
+ * punto medio de la relación N:M de la que cuelga, ya calculado con
+ * `puntoMedioRelacion`—. Recalcularlo aquí otra vez, a partir de la relación,
+ * obligaría a este componente a conocer el desvío del abanico y el caso
+ * reflexivo, que ya resuelve `aristas` una sola vez para las dos aristas.
+ */
+interface DatosAristaAsociacion extends Record<string, unknown> {
+  claseAsociacion: UmlClass;
+  medidaAsociacion: Medida;
+  punto: Punto;
+}
+
 type NodoClase = Node<DatosNodo, 'claseUml'>;
 type AristaRelacion = Edge<DatosArista, 'relacionUml'>;
+type AristaAsociacion = Edge<DatosAristaAsociacion, 'asociacionClase'>;
+type AristaLienzo = AristaRelacion | AristaAsociacion;
 
 /* --------------------------------------------------------------------------
    Las puntas de flecha
@@ -337,9 +358,6 @@ function estiloRelacion(kind: UmlRelation['kind']): {
   }
 }
 
-/** Cuánto se abre el abanico entre relaciones que unen el mismo par. */
-const SEPARACION_ABANICO = 34;
-
 /**
  * La arista, calculada con nuestra geometría y no con la de React Flow.
  *
@@ -440,6 +458,39 @@ function AristaRelacionUml({ data }: EdgeProps<AristaRelacion>): JSX.Element | n
 }
 
 /**
+ * La línea punteada de una clase de asociación (UML).
+ *
+ * Es la notación de «esta clase cuelga de esa relación, no de uno de sus dos
+ * extremos»: una caja aparte, unida por una línea discontinua y sin punta de
+ * flecha —no es una asociación, no tiene sentido ni cardinalidad ni
+ * navegabilidad— al punto medio exacto de la relación N:M que documenta. Ese
+ * punto ya viene calculado en `data` (ver `puntoMedioRelacion`, en
+ * `geometria-lienzo.ts`), así que aquí solo queda anclar la línea al borde de
+ * la caja de la clase de asociación, igual que hace `anclaje` para cualquier
+ * otra relación.
+ *
+ * No se reutiliza `AristaRelacionUml` para esto: esa función asume dos cajas
+ * unidas por una curva con dos multiplicidades y un desvío de abanico, y nada
+ * de eso aplica aquí. Forzarlo habría significado rellenar campos que no
+ * significan nada solo para encajar en la misma forma.
+ */
+function AristaAsociacionClase({ data }: EdgeProps<AristaAsociacion>): JSX.Element | null {
+  if (!data) return null;
+  const { claseAsociacion, medidaAsociacion, punto } = data;
+  const desde = anclaje(claseAsociacion, medidaAsociacion, punto);
+  const d = `M ${desde.x} ${desde.y} L ${punto.x} ${punto.y}`;
+
+  return (
+    <g className="relacion relacion--asociacion">
+      <path d={d} fill="none" stroke="var(--texto-2)" strokeWidth="1.5" strokeDasharray="3 4" />
+      {/* El punto sobre la relación marca dónde «engancha», que es lo que una
+          línea suelta sin punta de flecha no deja ver por sí sola. */}
+      <circle cx={punto.x} cy={punto.y} r="2.5" fill="var(--texto-2)" />
+    </g>
+  );
+}
+
+/**
  * Cómo se anuncia una clase a quien no ve el dibujo.
  *
  * Sin esto React Flow anuncia el nodo por su identificador, y un lector de
@@ -463,7 +514,7 @@ function descripcionDe(cls: UmlClass): string {
 }
 
 const TIPOS_NODO = { claseUml: NodoClaseUml };
-const TIPOS_ARISTA = { relacionUml: AristaRelacionUml };
+const TIPOS_ARISTA = { relacionUml: AristaRelacionUml, asociacionClase: AristaAsociacionClase };
 
 /* --------------------------------------------------------------------------
    El lienzo
@@ -579,8 +630,9 @@ function LienzoInterno({
     [clases, medidas, participantes, seleccion, soloLectura],
   );
 
-  const aristas: AristaRelacion[] = useMemo(() => {
+  const aristas: AristaLienzo[] = useMemo(() => {
     const desvios = desviosPorPar(relaciones);
+    const porDefecto: Medida = { ancho: ANCHO_MINIMO, alto: 80 };
     return relaciones.flatMap((relacion) => {
       const origen = diagrama.classes[relacion.source.classId];
       const destino = diagrama.classes[relacion.target.classId];
@@ -588,23 +640,55 @@ function LienzoInterno({
       // borrado llega antes por el socket. Dibujar la mitad que queda daría una
       // línea que sale de la nada.
       if (!origen || !destino) return [];
-      const porDefecto: Medida = { ancho: ANCHO_MINIMO, alto: 80 };
-      return [
+      const medidaOrigen = medidas.get(origen.id) ?? porDefecto;
+      const medidaDestino = medidas.get(destino.id) ?? porDefecto;
+      const desvio = desvios.get(relacion.id) ?? 0;
+
+      const resultado: AristaLienzo[] = [
         {
           id: relacion.id,
           source: relacion.source.classId,
           target: relacion.target.classId,
           type: 'relacionUml' as const,
-          data: {
-            relacion,
-            origen,
-            destino,
-            medidaOrigen: medidas.get(origen.id) ?? porDefecto,
-            medidaDestino: medidas.get(destino.id) ?? porDefecto,
-            desvio: desvios.get(relacion.id) ?? 0,
-          },
+          data: { relacion, origen, destino, medidaOrigen, medidaDestino, desvio },
         },
       ];
+
+      /*
+        La clase de asociación cuelga como una arista aparte, no como parte de
+        la de la relación: son dos dibujos independientes —una curva entre dos
+        cajas, y una línea recta de una tercera caja a un punto de esa curva— y
+        forzarlos dentro del mismo `<path>` habría significado codificar en un
+        solo `d` dos trazos que ni comparten estilo (una es discontinua siempre,
+        la otra según el tipo de relación) ni punta de flecha.
+
+        `claseAsociacion` puede faltar si la relación quedó apuntando a una
+        clase que ya no existe (borrada por otra vía mientras esto llegaba) o
+        que el generador ya trata como ausente en `normalize.ts`; aquí se hace
+        lo mismo que allí y simplemente no se dibuja nada colgando.
+      */
+      const claseAsociacion = relacion.associationClassId
+        ? diagrama.classes[relacion.associationClassId]
+        : undefined;
+      if (claseAsociacion) {
+        const medidaAsociacion = medidas.get(claseAsociacion.id) ?? porDefecto;
+        const punto = puntoMedioRelacion(origen, destino, medidaOrigen, medidaDestino, desvio);
+        resultado.push({
+          id: `${relacion.id}--asociacion`,
+          // `target` no se usa para dibujar —`AristaAsociacionClase` traza su
+          // propio trazo a partir de `data.punto`—, pero React Flow exige que
+          // apunte a un nodo real para no descartar la arista entera; el
+          // origen de la propia relación siempre existe en este punto.
+          source: claseAsociacion.id,
+          target: relacion.source.classId,
+          type: 'asociacionClase' as const,
+          selectable: false,
+          focusable: false,
+          data: { claseAsociacion, medidaAsociacion, punto },
+        });
+      }
+
+      return resultado;
     });
   }, [relaciones, diagrama.classes, medidas]);
 
@@ -708,7 +792,7 @@ function LienzoInterno({
   return (
     <div className={clase}>
       <Marcadores />
-      <ReactFlow<NodoClase, AristaRelacion>
+      <ReactFlow<NodoClase, AristaLienzo>
         nodes={nodos}
         edges={aristas}
         nodeTypes={TIPOS_NODO}

@@ -1,18 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  type Aplicar,
-  describeBatchImpact,
-  describeOperation,
-  interpretCommand,
-  type ClassDiagram,
-  type Operation,
-} from '@app/shared';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { type Aplicar, describeOperation, interpretCommand, type ClassDiagram } from '@app/shared';
 import { ApiError, api } from '../services/api';
 import { puntuarPorVocabulario } from '../services/dictado';
 import { dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDictado } from '../services/voz';
-import { nombreDeshacer, useTecladoFisico } from '../hooks/useDispositivo';
 import { decidirAccionVoz } from './asistente-voz';
 import { Icono } from './iconos';
+import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
 
 /**
  * Asistente por voz y texto (RF-IA-01, RF-IA-04).
@@ -38,11 +31,6 @@ import { Icono } from './iconos';
  * al revés, la gramática —que solo entiende un repertorio cerrado— se comería
  * las órdenes que el modelo sí sabría interpretar.
  */
-
-interface Propuesta {
-  operacion: Operation;
-  descripcion: string;
-}
 
 export interface AsistenteProps {
   proyectoId: string;
@@ -96,9 +84,7 @@ export function Asistente({
   const [origen, setOrigen] = useState<string | null>(null);
   const [pensando, setPensando] = useState(false);
   const [escuchando, setEscuchando] = useState(false);
-  const [confirmando, setConfirmando] = useState(false);
   const dictadoRef = useRef<SesionDictado | null>(null);
-  const hayTeclado = useTecladoFisico();
 
   // Se pregunta una vez por render y no dos veces dentro del JSX: son la misma
   // respuesta y separarlas invita a que el botón y su explicación se
@@ -112,7 +98,6 @@ export function Asistente({
 
       setPensando(true);
       setPropuestas([]);
-      setConfirmando(false);
       setMensaje(null);
 
       let motor: string | null = null;
@@ -275,55 +260,6 @@ export function Asistente({
     alternarMicrofono();
   }, [dictarAlAbrir, soloLectura, hayDictado, alternarMicrofono]);
 
-  /**
-   * Qué se pierde si se acepta la propuesta (RF-IA-05).
-   *
-   * Se calcula sobre el diagrama de verdad y no sobre la lista de operaciones,
-   * porque la misma orden destruye cosas distintas según lo que haya: «elimina
-   * la clase Pedido» se lleva por delante sus atributos, sus filas de datos y
-   * las relaciones que salían de ella, y quien dictó esa frase estaba pensando
-   * en una caja del lienzo, no en las tres flechas que la tocan.
-   */
-  const impacto = useMemo(
-    () => describeBatchImpact(diagrama, propuestas.map((p) => p.operacion)),
-    [diagrama, propuestas],
-  );
-
-  const ejecutar = (): void => {
-    // `origen` es el motor que interpretó la orden —el modelo remoto o la
-    // gramática local—. Va al historial como proponente, separado de quien
-    // pulsa este botón, que es quien responde del cambio.
-    const resultado = aplicar(
-      propuestas.map((p) => p.operacion),
-      { origen: 'asistente', ...(origen ? { propuestoPor: origen } : {}) },
-    );
-    setConfirmando(false);
-    if (resultado.ok) {
-      setPropuestas([]);
-      setTexto('');
-      setMensaje('Aplicado.');
-    } else {
-      setMensaje(resultado.error);
-    }
-  };
-
-  const aceptarTodo = (): void => {
-    // Un «¿seguro?» genérico no es una confirmación: no dice qué se pierde, así
-    // que quien lo lee acaba pulsando «Sí» por costumbre. Solo se interpone
-    // cuando hay algo concreto que enumerar, para que interponerse signifique
-    // algo cuando ocurre.
-    if (impacto.destructiva && !confirmando) {
-      setConfirmando(true);
-      return;
-    }
-    ejecutar();
-  };
-
-  const descartar = (): void => {
-    setPropuestas([]);
-    setConfirmando(false);
-  };
-
   const contenido = (
     <>
       <form
@@ -379,59 +315,22 @@ export function Asistente({
 
       {mensaje && <p className="asistente__mensaje">{mensaje}</p>}
 
-      {propuestas.length > 0 && (
-        <div
-          className={`asistente__propuesta${
-            impacto.destructiva ? ' asistente__propuesta--destructiva' : ''
-          }`}
-        >
-          <p className="asistente__origen">
-            Propuesta de <span className="asistente__origen-badge">{origen}</span>:
-          </p>
-          <ol>
-            {propuestas.map((p, indice) => (
-              <li key={indice}>{p.descripcion}</li>
-            ))}
-          </ol>
-
-          {impacto.destructiva && (
-            <div className="asistente__impacto">
-              <p>
-                <strong>Se va a borrar</strong>, y el diagrama no conserva copia:
-              </p>
-              <ul>
-                {impacto.perdidas.map((perdida, indice) => (
-                  <li key={indice}>{perdida}</li>
-                ))}
-              </ul>
-              {/* El aparato decide el nombre del gesto: en un teléfono no hay
-                  Ctrl, y esta frase se lee justo antes de aceptar un borrado. */}
-              <p className="asistente__impacto-nota">
-                Se puede deshacer con {nombreDeshacer(hayTeclado)} mientras no cierres el proyecto.
-              </p>
-            </div>
-          )}
-
-          <div className="asistente__acciones">
-            <button
-              type="button"
-              className={`boton ${
-                impacto.destructiva && confirmando ? 'boton--peligro' : 'boton--primario'
-              }`}
-              onClick={aceptarTodo}
-            >
-              {impacto.destructiva && confirmando
-                ? 'Sí, borrar'
-                : `Aplicar ${
-                    propuestas.length === 1 ? 'el cambio' : `los ${propuestas.length} cambios`
-                  }`}
-            </button>
-            <button type="button" className="boton" onClick={descartar}>
-              {confirmando ? 'No, cancelar' : 'Descartar'}
-            </button>
-          </div>
-        </div>
-      )}
+      <PropuestaOperaciones
+        propuestas={propuestas}
+        diagrama={diagrama}
+        origen={origen}
+        aplicar={aplicar}
+        onAplicar={(resultado) => {
+          if (resultado.ok) {
+            setPropuestas([]);
+            setTexto('');
+            setMensaje('Aplicado.');
+          } else {
+            setMensaje(resultado.error);
+          }
+        }}
+        onDescartar={() => setPropuestas([])}
+      />
     </>
   );
 

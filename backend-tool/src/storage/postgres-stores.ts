@@ -29,6 +29,8 @@ import type {
   PublicacionVoz,
   TablonStore,
 } from './tablon.js';
+import { MAXIMO_TURNOS, type ChatMessage, type ConversationStore } from './conversaciones.js';
+import type { CrearVersion, Version, VersionResumen, VersionStore } from './versiones.js';
 import {
   aIso,
   enTransaccion,
@@ -732,5 +734,186 @@ export class PostgresTablonStore implements TablonStore {
     // lo mismo en las dos implementaciones.
     await this.pool.query('delete from tablon_mensajes where proyecto_id = $1', [proyectoId]);
     await this.pool.query('delete from tablon_contadores where proyecto_id = $1', [proyectoId]);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Conversación con el asistente de IA
+// ---------------------------------------------------------------------------
+
+interface FilaMensajeIA {
+  id: string | number;
+  usuario_id: string | null;
+  rol: 'user' | 'assistant';
+  contenido: string;
+  creado_en: Date | string;
+  tipo: 'respuesta' | 'observacion';
+}
+
+function aChatMessage(fila: FilaMensajeIA): ChatMessage {
+  return {
+    role: fila.rol,
+    texto: fila.contenido,
+    autorId: fila.usuario_id,
+    creadoEn: aIso(fila.creado_en),
+    tipo: fila.tipo,
+  };
+}
+
+/**
+ * El historial del Modo IA en PostgreSQL: un hilo por proyecto, no por
+ * `(proyecto, usuario)`. Ver la cabecera de `storage/conversaciones.ts` para
+ * el motivo. `usuario_id` solo se guarda en las filas de rol `user` —queda
+ * `null` en las del asistente— porque ahí es quien escribió, no de quién es
+ * el hilo.
+ *
+ * `id` es `bigserial` y no un contador por proyecto como en el tablón: aquí
+ * no hace falta que el número tenga sentido de cara al cliente (no se manda
+ * en ninguna URL), solo que ordene sin empates, y una clave autoincremental
+ * ya lo garantiza sin una segunda tabla de contadores.
+ */
+export class PostgresConversationStore implements ConversationStore {
+  constructor(private readonly pool: PoolPostgres) {}
+
+  /** Recorta el hilo del proyecto al tope, entre todos sus integrantes. */
+  private async recortar(cliente: ClientePostgres, proyectoId: string): Promise<void> {
+    await cliente.query(
+      `delete from conversaciones_ia
+        where proyecto_id = $1
+          and id <= coalesce((
+            select id from conversaciones_ia
+             where proyecto_id = $1
+             order by id desc
+             offset $2 limit 1
+          ), -1)`,
+      [proyectoId, MAXIMO_TURNOS * 2],
+    );
+  }
+
+  async getHistory(proyectoId: string, limite: number): Promise<ChatMessage[]> {
+    const { rows } = await this.pool.query<FilaMensajeIA>(
+      `select id, usuario_id, rol, contenido, creado_en, tipo from (
+         select id, usuario_id, rol, contenido, creado_en, tipo from conversaciones_ia
+          where proyecto_id = $1
+          order by id desc limit $2
+       ) recientes order by id asc`,
+      [proyectoId, Math.max(1, Math.trunc(limite))],
+    );
+    return rows.map(aChatMessage);
+  }
+
+  async appendTurn(
+    proyectoId: string,
+    autorId: string,
+    usuario: string,
+    asistente: string,
+  ): Promise<void> {
+    await enTransaccion(this.pool, async (cliente) => {
+      await cliente.query(
+        `insert into conversaciones_ia (proyecto_id, usuario_id, rol, contenido)
+         values ($1, $2, 'user', $3), ($1, null, 'assistant', $4)`,
+        [proyectoId, autorId, usuario, asistente],
+      );
+      await this.recortar(cliente, proyectoId);
+    });
+  }
+
+  async appendComentario(proyectoId: string, texto: string): Promise<void> {
+    await enTransaccion(this.pool, async (cliente) => {
+      await cliente.query(
+        `insert into conversaciones_ia (proyecto_id, usuario_id, rol, contenido, tipo)
+         values ($1, null, 'assistant', $2, 'observacion')`,
+        [proyectoId, texto],
+      );
+      await this.recortar(cliente, proyectoId);
+    });
+  }
+
+  async borrarProyecto(proyectoId: string): Promise<void> {
+    // Cuelga de `proyectos` con `on delete cascade`; explícito por la misma
+    // razón que `PostgresTablonStore.borrarProyecto`.
+    await this.pool.query('delete from conversaciones_ia where proyecto_id = $1', [proyectoId]);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Versiones del proyecto
+// ---------------------------------------------------------------------------
+
+interface FilaVersionResumen {
+  id: string;
+  proyecto_id: string;
+  mensaje: string;
+  autor_id: string;
+  creado_en: Date | string;
+}
+
+interface FilaVersion extends FilaVersionResumen {
+  estado: Buffer;
+}
+
+function aVersionResumen(fila: FilaVersionResumen): VersionResumen {
+  return {
+    id: fila.id,
+    proyectoId: fila.proyecto_id,
+    mensaje: fila.mensaje,
+    autorId: fila.autor_id,
+    creadoEn: aIso(fila.creado_en),
+  };
+}
+
+const COLUMNAS_VERSION_RESUMEN = 'id, proyecto_id, mensaje, autor_id, creado_en';
+const COLUMNAS_VERSION = `id, proyecto_id, estado, mensaje, autor_id, creado_en`;
+
+/**
+ * Las versiones del proyecto en PostgreSQL.
+ *
+ * Sin recorte ni tope, a diferencia del tablón y la conversación con la IA:
+ * ver el comentario de `versiones_proyecto` en `sql/esquema.sql` sobre por
+ * qué podar aquí sería una decisión que no le corresponde al esquema.
+ */
+export class PostgresVersionStore implements VersionStore {
+  constructor(private readonly pool: PoolPostgres) {}
+
+  async crear(entrada: CrearVersion): Promise<VersionResumen> {
+    const { rows } = await this.pool.query<FilaVersionResumen>(
+      `insert into versiones_proyecto (id, proyecto_id, estado, mensaje, autor_id)
+       values ($1, $2, $3, $4, $5)
+       returning ${COLUMNAS_VERSION_RESUMEN}`,
+      [randomUUID(), entrada.proyectoId, Buffer.from(entrada.estado), entrada.mensaje, entrada.autorId],
+    );
+    const fila = rows[0];
+    if (!fila) throw new Error('La inserción de la versión no devolvió ninguna fila');
+    return aVersionResumen(fila);
+  }
+
+  async listar(proyectoId: string): Promise<VersionResumen[]> {
+    // Mismo orden que el índice `versiones_por_proyecto`: por fecha y, para
+    // desempatar dos versiones del mismo instante, por id.
+    const { rows } = await this.pool.query<FilaVersionResumen>(
+      `select ${COLUMNAS_VERSION_RESUMEN} from versiones_proyecto
+        where proyecto_id = $1 order by creado_en asc, id asc`,
+      [proyectoId],
+    );
+    return rows.map(aVersionResumen);
+  }
+
+  async obtener(proyectoId: string, versionId: string): Promise<Version | null> {
+    // La columna es `uuid`: sin este cerrojo, un identificador que no lo sea
+    // llegaría como un error de tipo en vez de como «no encontrado».
+    if (!ES_UUID.test(versionId)) return null;
+    const { rows } = await this.pool.query<FilaVersion>(
+      `select ${COLUMNAS_VERSION} from versiones_proyecto where proyecto_id = $1 and id = $2`,
+      [proyectoId, versionId],
+    );
+    const fila = rows[0];
+    if (!fila) return null;
+    return { ...aVersionResumen(fila), estado: new Uint8Array(fila.estado) };
+  }
+
+  async borrarProyecto(proyectoId: string): Promise<void> {
+    // Cuelga de `proyectos` con `on delete cascade`; explícito por la misma
+    // razón que `PostgresTablonStore.borrarProyecto`.
+    await this.pool.query('delete from versiones_proyecto where proyecto_id = $1', [proyectoId]);
   }
 }

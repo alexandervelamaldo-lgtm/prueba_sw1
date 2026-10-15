@@ -5,6 +5,8 @@ import type { IdentityProvider } from '../auth/identity.js';
 import type { ProjectStore } from '../storage/store.js';
 import type { RoomManager } from '../collab/rooms.js';
 import type { TablonStore } from '../storage/tablon.js';
+import type { ConversationStore } from '../storage/conversaciones.js';
+import type { VersionStore } from '../storage/versiones.js';
 import { badRequest, handler, notFound, parseBody, requireRole } from './http.js';
 
 /**
@@ -52,8 +54,10 @@ export function projectsRouter(deps: {
   identity: IdentityProvider;
   rooms: RoomManager;
   tablon: TablonStore;
+  conversations: ConversationStore;
+  versiones: VersionStore;
 }): Router {
-  const { store, identity, rooms, tablon } = deps;
+  const { store, identity, rooms, tablon, conversations, versiones } = deps;
   const router = Router();
 
   router.get(
@@ -129,6 +133,12 @@ export function projectsRouter(deps: {
       // quedarían en `datos/tablones/` para siempre, ocupando disco y
       // conservando conversaciones de un proyecto que alguien pidió borrar.
       await tablon.borrarProyecto(projectId);
+      // Mismo motivo que el tablón: sin esto, el historial del Modo IA de cada
+      // miembro quedaría en `datos/conversaciones/` para siempre.
+      await conversations.borrarProyecto(projectId);
+      // Mismo motivo: sin esto, las versiones guardadas de este proyecto
+      // quedarían en `datos/versiones/` para siempre.
+      await versiones.borrarProyecto(projectId);
       await store.deleteProject(projectId);
       response.status(204).end();
     }),

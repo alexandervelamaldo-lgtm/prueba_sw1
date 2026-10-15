@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { validateDiagram, type Aplicar, type ClassDiagram } from '@app/shared';
+import { validateDiagram, type Aplicar, type ClassDiagram, type DatabaseTarget } from '@app/shared';
 import { api, descargarFlutter, descargarProyecto, type FicheroGenerado, type Proyecto } from '../services/api';
 import { ArreglarGeneracion } from './ArreglarGeneracion';
 import { Icono } from './iconos';
@@ -71,6 +71,20 @@ type Estado =
   | { fase: 'error'; mensaje: string }
   | { fase: 'listo'; ficheros: FicheroGenerado[]; avisos: number };
 
+/**
+ * Motores que el generador produce de verdad.
+ *
+ * Los tres tienen plantillas propias (`generateProject` en
+ * `generator/src/render/generate.ts`): PostgreSQL con JPA/Flyway, y
+ * MongoDB/Cassandra compartiendo el mismo esquema de asociación por id
+ * plano, sin joins.
+ */
+const MOTORES_DISPONIBLES: { valor: DatabaseTarget; etiqueta: string }[] = [
+  { valor: 'postgres', etiqueta: 'PostgreSQL' },
+  { valor: 'mongodb', etiqueta: 'MongoDB' },
+  { valor: 'cassandra', etiqueta: 'Cassandra' },
+];
+
 export function PrevisualizarGeneracion({
   proyecto,
   diagrama,
@@ -83,6 +97,10 @@ export function PrevisualizarGeneracion({
   const [bajando, setBajando] = useState(false);
   const [bajandoFlutter, setBajandoFlutter] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
+  // Arranca con el motor guardado en el diagrama; cambiarlo aquí solo afecta
+  // a esta generación (RF-GEN-01), igual que `estrategiaHerencia`, sin tocar
+  // `diagrama.meta.motorBD`.
+  const [motorBD, setMotorBD] = useState<DatabaseTarget>(diagrama.meta.motorBD);
 
   const validacion = useMemo(() => validateDiagram(diagrama), [diagrama]);
   const bloqueado = !validacion.ok;
@@ -94,7 +112,7 @@ export function PrevisualizarGeneracion({
 
     let vivo = true;
     api
-      .previsualizarGeneracion(proyecto.id)
+      .previsualizarGeneracion(proyecto.id, { motorBD })
       .then((respuesta) => {
         if (!vivo) return;
         setEstado({ fase: 'listo', ficheros: respuesta.ficheros, avisos: respuesta.avisos.length });
@@ -116,7 +134,7 @@ export function PrevisualizarGeneracion({
     return () => {
       vivo = false;
     };
-  }, [proyecto.id, bloqueado]);
+  }, [proyecto.id, bloqueado, motorBD]);
 
   const ficheros = estado.fase === 'listo' ? estado.ficheros : [];
   const capas = useMemo(() => porCapas(ficheros), [ficheros]);
@@ -128,7 +146,7 @@ export function PrevisualizarGeneracion({
   const bajarFlutter = async (): Promise<void> => {
     setBajandoFlutter(true);
     try {
-      const { donde } = await descargarFlutter(proyecto.id, proyecto.name);
+      const { donde } = await descargarFlutter(proyecto.id, proyecto.name, { motorBD });
       const ruta = donde ? ` Guardado en ${donde}.` : '';
       setAviso(`Frontend Flutter descargado.${ruta}`);
     } catch (error) {
@@ -141,7 +159,7 @@ export function PrevisualizarGeneracion({
   const bajar = async (): Promise<void> => {
     setBajando(true);
     try {
-      const { avisos, donde } = await descargarProyecto(proyecto.id, proyecto.name);
+      const { avisos, donde } = await descargarProyecto(proyecto.id, proyecto.name, { motorBD });
       // `donde` viene vacío en el navegador, que guarda en su carpeta de
       // descargas y no lo cuenta. En el móvil el ZIP ha pasado por el diálogo
       // de compartir del sistema, y ahí sí hace falta decir la ruta: si se ha
@@ -188,6 +206,20 @@ export function PrevisualizarGeneracion({
             */}
             {!bloqueado && (
               <>
+                <label className="campo campo--motor-bd">
+                  <span>Motor de base de datos</span>
+                  <select
+                    value={motorBD}
+                    disabled={bajando || bajandoFlutter}
+                    onChange={(e) => setMotorBD(e.target.value as DatabaseTarget)}
+                  >
+                    {MOTORES_DISPONIBLES.map((motor) => (
+                      <option key={motor.valor} value={motor.valor}>
+                        {motor.etiqueta}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <button
                   type="button"
                   className="boton boton--primario"

@@ -93,7 +93,12 @@ export function createRelation(init: {
   };
 }
 
-export function createDiagram(init: Partial<ClassDiagram> & { name: string }): ClassDiagram {
+export function createDiagram(
+  init: Partial<Omit<ClassDiagram, 'meta'>> & {
+    name: string;
+    meta?: Partial<ClassDiagram['meta']>;
+  },
+): ClassDiagram {
   return {
     id: init.id ?? ulid(),
     name: init.name,
@@ -104,6 +109,7 @@ export function createDiagram(init: Partial<ClassDiagram> & { name: string }): C
       basePackage: init.meta?.basePackage ?? 'com.ejemplo.proyecto',
       artifactId: init.meta?.artifactId ?? 'proyecto',
       description: init.meta?.description ?? '',
+      motorBD: init.meta?.motorBD ?? 'postgres',
       createdAt: init.meta?.createdAt,
       updatedAt: init.meta?.updatedAt,
     },

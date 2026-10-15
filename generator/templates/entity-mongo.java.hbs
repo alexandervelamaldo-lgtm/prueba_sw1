@@ -1,0 +1,100 @@
+package {{{pkg}}}.domain;
+
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+{{#if hasValidations}}
+import jakarta.validation.constraints.*;
+{{/if}}
+{{#each imports}}
+import {{{this}}};
+{{/each}}
+import java.util.Objects;
+
+/**
+ * Documento {{{entity.className}}} (MongoDB).
+ *
+ * Generado a partir del diagrama «{{{project.name}}}». No editar a mano: los
+ * cambios se pierden en la siguiente generación. La herencia del diagrama se
+ * aplana aquí: esta clase lleva sus propios campos más los de cada
+ * superclase, sin `extends` ni jerarquía de documentos. Las asociaciones a-uno
+ * se guardan como el identificador plano del documento referido, nunca como
+ * `@DBRef` ni documento embebido.
+ */
+@Document(collection = "{{{entity.tableName}}}")
+public class {{{entity.className}}} {
+
+    @Id
+    private {{{entity.identifier.javaType}}} {{{entity.identifier.name}}};
+
+{{#each allFields}}
+{{#each validations}}
+    {{{this}}}
+{{/each}}
+    private {{{javaType}}} {{{name}}};
+
+{{/each}}
+{{#each toOneAssociations}}
+    private {{{idJavaType}}} {{{idFieldName}}};
+
+{{/each}}
+    public {{{entity.className}}}() {
+        // Constructor sin argumentos requerido por Spring Data MongoDB.
+    }
+
+    public {{{entity.identifier.javaType}}} {{{entity.identifier.getterName}}}() {
+        return {{{entity.identifier.name}}};
+    }
+
+    public void {{{entity.identifier.setterName}}}({{{entity.identifier.javaType}}} {{{entity.identifier.name}}}) {
+        this.{{{entity.identifier.name}}} = {{{entity.identifier.name}}};
+    }
+
+{{#each allFields}}
+    public {{{javaType}}} {{{getterName}}}() {
+        return {{{name}}};
+    }
+
+    public void {{{setterName}}}({{{javaType}}} {{{name}}}) {
+        this.{{{name}}} = {{{name}}};
+    }
+
+{{/each}}
+{{#each toOneAssociations}}
+    public {{{idJavaType}}} {{{idGetterName}}}() {
+        return {{{idFieldName}}};
+    }
+
+    public void {{{idSetterName}}}({{{idJavaType}}} {{{idFieldName}}}) {
+        this.{{{idFieldName}}} = {{{idFieldName}}};
+    }
+
+{{/each}}
+{{#each interfaceMethods}}
+    @Override
+    public {{{signature}}} {
+        throw new UnsupportedOperationException(
+                "Declarado en el diagrama y pendiente de implementar: {{{name}}}");
+    }
+
+{{/each}}
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof {{{entity.className}}})) {
+            return false;
+        }
+        {{{entity.className}}} that = ({{{entity.className}}}) other;
+        return {{{entity.identifier.getterName}}}() != null
+            && Objects.equals({{{entity.identifier.getterName}}}(), that.{{{entity.identifier.getterName}}}());
+    }
+
+    @Override
+    public int hashCode() {
+        // Constante deliberada: el identificador es null antes de guardar y
+        // cambiar el hash tras el insert rompería cualquier HashSet que ya
+        // contenga el documento.
+        return getClass().hashCode();
+    }
+}

@@ -6,6 +6,7 @@ import {
   PostgresDocumentStore,
   PostgresIdentityProvider,
   PostgresProjectStore,
+  PostgresVersionStore,
 } from './postgres-stores.js';
 
 /**
@@ -483,6 +484,96 @@ describe('almacén de documentos', () => {
   });
 });
 
+describe('almacén de versiones', () => {
+  const PROYECTO = '55555555-5555-4555-8555-555555555555';
+  const VERSION_ID = '66666666-6666-4666-8666-666666666666';
+  const FECHA_VERSION = new Date('2026-03-02T09:00:00.000Z');
+
+  function filaVersion(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: VERSION_ID,
+      proyecto_id: PROYECTO,
+      mensaje: 'Antes de refactorizar Pedido',
+      autor_id: 'usuario-1',
+      creado_en: FECHA_VERSION,
+      ...extra,
+    };
+  }
+
+  it('crear devuelve el resumen con la fecha convertida a ISO', async () => {
+    const pool = new PoolFalso(() => [filaVersion()]);
+    const store = new PostgresVersionStore(pool);
+
+    const resumen = await store.crear({
+      proyectoId: PROYECTO,
+      estado: new Uint8Array([1, 2, 3]),
+      mensaje: 'Antes de refactorizar Pedido',
+      autorId: 'usuario-1',
+    });
+
+    expect(resumen).toEqual({
+      id: VERSION_ID,
+      proyectoId: PROYECTO,
+      mensaje: 'Antes de refactorizar Pedido',
+      autorId: 'usuario-1',
+      creadoEn: '2026-03-02T09:00:00.000Z',
+    });
+    expect(resumen).not.toHaveProperty('estado');
+  });
+
+  it('no concatena en el SQL nada que haya escrito el usuario (RNF-SEG-06)', async () => {
+    const pool = new PoolFalso(() => [filaVersion()]);
+    const store = new PostgresVersionStore(pool);
+    const mensajeHostil = "'; drop table versiones_proyecto; --";
+
+    await store.crear({
+      proyectoId: PROYECTO,
+      estado: new Uint8Array([1, 2, 3]),
+      mensaje: mensajeHostil,
+      autorId: 'usuario-1',
+    });
+
+    expect(pool.textoCompleto).not.toContain('drop table');
+    expect(pool.valoresEnviados).toContain(mensajeHostil);
+  });
+
+  it('listar ordena por fecha y, para desempatar, por id', async () => {
+    const pool = new PoolFalso(() => [filaVersion()]);
+    const store = new PostgresVersionStore(pool);
+
+    const versiones = await store.listar(PROYECTO);
+
+    expect(pool.textoCompleto).toContain('order by creado_en asc, id asc');
+    expect(versiones).toHaveLength(1);
+    expect(versiones[0]?.mensaje).toBe('Antes de refactorizar Pedido');
+  });
+
+  it('obtener devuelve la versión con su estado como bytes', async () => {
+    const pool = new PoolFalso(() => [filaVersion({ estado: Buffer.from([7, 8, 9]) })]);
+    const store = new PostgresVersionStore(pool);
+
+    const version = await store.obtener(PROYECTO, VERSION_ID);
+
+    expect(version).not.toBeNull();
+    expect([...version!.estado]).toEqual([7, 8, 9]);
+  });
+
+  it('un identificador que no es un UUID se descarta sin consultar', async () => {
+    // La columna es `uuid`: comparar contra texto arbitrario hace que
+    // PostgreSQL conteste con un error de tipo, no con «no encontrado».
+    const pool = new PoolFalso();
+    const store = new PostgresVersionStore(pool);
+
+    expect(await store.obtener(PROYECTO, "no-soy-un-uuid'; select 1")).toBeNull();
+    expect(pool.llamadas).toHaveLength(0);
+  });
+
+  it('una versión que no existe da null, que no es un error', async () => {
+    const store = new PostgresVersionStore(new PoolFalso());
+    expect(await store.obtener(PROYECTO, VERSION_ID)).toBeNull();
+  });
+});
+
 /**
  * Batería contra una base de datos real.
  *
@@ -505,6 +596,7 @@ describe.runIf(urlDePruebas)('contra PostgreSQL de verdad', () => {
     const identity = new PostgresIdentityProvider(pool, 'secreto-de-prueba', 3600);
     const store = new PostgresProjectStore(pool);
     const documentos = new PostgresDocumentStore(pool, false);
+    const versiones = new PostgresVersionStore(pool);
 
     const sufijo = Date.now();
     try {
@@ -536,6 +628,15 @@ describe.runIf(urlDePruebas)('contra PostgreSQL de verdad', () => {
 
       await documentos.delete(proyecto.id);
       expect(await documentos.load(proyecto.id)).toBeNull();
+
+      const version = await versiones.crear({
+        proyectoId: proyecto.id,
+        estado: new Uint8Array([1, 2, 3]),
+        mensaje: 'punto de control',
+        autorId: ana.id,
+      });
+      expect(await versiones.listar(proyecto.id)).toHaveLength(1);
+      expect([...(await versiones.obtener(proyecto.id, version.id))!.estado]).toEqual([1, 2, 3]);
 
       expect(await store.deleteProject(proyecto.id)).toBe(true);
       // La cascada se lleva la pertenencia; si no, quedaría apuntando a un

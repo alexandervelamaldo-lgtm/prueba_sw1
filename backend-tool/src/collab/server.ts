@@ -7,6 +7,7 @@ import type { IdentityProvider, UserProfile } from '../auth/identity.js';
 import { roleAllows, type ProjectStore } from '../storage/store.js';
 import { isValidRoomId, RoomManager, type Room, type RoomConnection } from './rooms.js';
 import { encodeAwareness, encodeSyncStep1, encodeUpdate, handleMessage } from './protocol.js';
+import type { VigilanteDiagrama } from '../ai/vigilancia.js';
 
 /**
  * Servidor de colaboración en tiempo real.
@@ -51,6 +52,8 @@ export interface CollabServerDeps {
   identity: IdentityProvider;
   store: ProjectStore;
   rooms: RoomManager;
+  /** Opcional para que las pruebas que no necesitan vigilar nada no tengan que construir uno. */
+  vigilante?: VigilanteDiagrama;
 }
 
 export class CollabServer {
@@ -110,6 +113,12 @@ export class CollabServer {
 
       const canWrite = roleAllows(role, 'editor');
       const room = await this.deps.rooms.open(projectId);
+      // Se llama en cada conexión y no solo la primera: la guarda está dentro
+      // del propio vigilante (`WeakSet<Room>`), que es quien sabe si esta sala
+      // concreta ya tiene oyente o es una sala nueva que sustituye a una
+      // destruida. Repetir la llamada aquí es más simple que llevar esa misma
+      // cuenta por duplicado en este fichero.
+      this.deps.vigilante?.observar(projectId, room);
 
       this.wss.handleUpgrade(request, socket, head, (ws) => {
         this.register(ws, room, user, canWrite);

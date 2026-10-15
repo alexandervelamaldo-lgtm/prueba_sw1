@@ -1,0 +1,18 @@
+# El nombre de la base se declara como propiedad propia y se referencia desde
+# la URI, igual que en la variante PostgreSQL.
+app:
+  database-name: {{{project.databaseName}}}
+
+spring:
+  application:
+    name: {{{project.artifactId}}}
+  data:
+    mongodb:
+      uri: mongodb://${DB_HOST:localhost}:${DB_PORT:27017}/${DB_NAME:${app.database-name}}
+
+server:
+  port: ${SERVER_PORT:8080}
+
+logging:
+  level:
+    {{{project.basePackage}}}: INFO

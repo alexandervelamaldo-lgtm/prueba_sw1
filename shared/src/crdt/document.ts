@@ -318,6 +318,7 @@ export function readDiagram(doc: Y.Doc): ClassDiagram {
       basePackage: readString(meta, 'basePackage', 'com.ejemplo.proyecto'),
       artifactId: readString(meta, 'artifactId', 'proyecto'),
       description: readString(meta, 'description', ''),
+      motorBD: readString(meta, 'motorBD', 'postgres') as ClassDiagram['meta']['motorBD'],
       createdAt: (meta.get('createdAt') as string | undefined) ?? undefined,
       updatedAt: (meta.get('updatedAt') as string | undefined) ?? undefined,
     },
@@ -451,6 +452,7 @@ export function initializeDiagram(doc: Y.Doc, diagram: ClassDiagram): void {
     meta.set('basePackage', diagram.meta.basePackage);
     meta.set('artifactId', diagram.meta.artifactId);
     meta.set('description', diagram.meta.description);
+    meta.set('motorBD', diagram.meta.motorBD);
     meta.set('createdAt', diagram.meta.createdAt ?? new Date().toISOString());
 
     const modules = getModulesMap(doc);

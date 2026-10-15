@@ -154,3 +154,85 @@ create table if not exists tablon_contadores (
   proyecto_id uuid primary key references proyectos(id) on delete cascade,
   contador    bigint not null default 0
 );
+
+-- Historial del Modo IA: un hilo por proyecto, compartido por todos sus
+-- integrantes, no uno por usuario.
+--
+-- `usuario_id` identifica quién escribió cada fila de rol `user` —igual que
+-- `autor_id` en `tablon_mensajes`, y sin clave foránea por la misma razón
+-- (decisión D8): la identidad definitiva la da un proveedor externo. Queda
+-- `null` en las filas de rol `assistant`, que no tienen autor humano. Ya no
+-- forma parte de cómo se filtra el hilo: toda consulta sobre esta tabla va
+-- solo por `proyecto_id`, para que la IA vea lo que le dijo cualquier
+-- integrante, no solo quien pregunta ahora.
+
+create table if not exists conversaciones_ia (
+  id          bigserial primary key,
+  proyecto_id uuid not null references proyectos(id) on delete cascade,
+  usuario_id  text,
+  rol         text not null check (rol in ('user', 'assistant')),
+  contenido   text not null,
+  creado_en   timestamptz not null default now()
+);
+
+-- `not null` de una versión anterior, en la que cada fila (también las del
+-- asistente) llevaba el usuario del hilo al que pertenecía. Idempotente igual
+-- que los `add column if not exists` de más arriba: en una base ya migrada
+-- esta sentencia no encuentra la restricción y no hace nada.
+alter table conversaciones_ia alter column usuario_id drop not null;
+
+-- Sustituye al índice anterior, que llevaba `usuario_id` porque las lecturas
+-- filtraban por `(proyecto_id, usuario_id)`. Ahora toda lectura va solo por
+-- proyecto.
+drop index if exists conversaciones_por_usuario;
+create index if not exists conversaciones_por_proyecto
+  on conversaciones_ia (proyecto_id, id);
+
+-- `tipo` distingue una respuesta de las de siempre —alguien preguntó, la IA
+-- contestó— de un comentario que la IA soltó sola al vigilar el diagrama
+-- (`ai/vigilancia.ts`). `default 'respuesta'` cubre tanto las filas que ya
+-- existían antes de esta columna como cualquier fila nueva de rol `user`, que
+-- nunca necesita decir que es una `observacion`: solo las del asistente lo son,
+-- y solo cuando nadie le escribió primero.
+alter table conversaciones_ia add column if not exists tipo
+  text not null default 'respuesta';
+
+-- Versiones del proyecto -----------------------------------------------------
+--
+-- Puntos de control del documento: el estado Yjs entero (otra vez
+-- `Y.encodeStateAsUpdate`, como en `documentos`) en el instante en que alguien
+-- decidió guardarlo. Es lo que falta para poder volver atrás: `documentos`
+-- solo guarda el estado *actual* y lo sobrescribe en cada guardado, así que
+-- hoy no hay ningún sitio al que restaurar algo.
+--
+-- Va en su propia tabla y no como filas adicionales de `documentos` por el
+-- mismo motivo que separó esa tabla de `proyectos`: aquí cada fila es un blob
+-- grande que además no se sobrescribe nunca, se acumula. Mezclarlo con la fila
+-- que se lee y escribe en cada guardado automático sería cargar ese camino
+-- caliente con historia que casi nunca se consulta.
+--
+-- A diferencia de `tablon_mensajes` y `conversaciones_ia`, esta tabla no lleva
+-- tope ni se poda sola: una versión la crea una persona a propósito, pulsando
+-- «guardar versión», no una escritura automática en cada pulsación. El ritmo
+-- de llegada es otro y podar en silencio invalidaría lo que esto existe para
+-- ofrecer —volver a un punto concreto—, así que la poda, si algún día hace
+-- falta, es una decisión de quien usa el proyecto, no del esquema.
+--
+-- `autor_id` no lleva clave foránea, por la misma razón que en `tablon_mensajes`
+-- y `conversaciones_ia` (decisión D8).
+
+create table if not exists versiones_proyecto (
+  id          uuid primary key,
+  proyecto_id uuid not null references proyectos(id) on delete cascade,
+  estado      bytea not null,
+  mensaje     text not null,
+  autor_id    text not null,
+  creado_en   timestamptz not null default now()
+);
+
+-- La única lectura es «las versiones de este proyecto, en orden de creación»;
+-- `id` no es monótono (es un UUID aleatorio) y no sirve para ordenar por su
+-- cuenta, así que entra como segunda clave solo para que el orden sea
+-- determinista entre dos filas con el mismo instante.
+create index if not exists versiones_por_proyecto
+  on versiones_proyecto (proyecto_id, creado_en, id);

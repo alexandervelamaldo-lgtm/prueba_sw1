@@ -3194,6 +3194,16 @@ select:focus {
   gap: 8px;
 }
 
+/* Igual que `.campo`, pero sin su margen de formulario suelto: aquí vive en
+   la fila de acciones de la cabecera, junto a los botones de descarga. */
+.campo--motor-bd {
+  margin: 0;
+}
+
+.campo--motor-bd > span {
+  font-size: 11px;
+}
+
 .generado__avisos {
   display: flex;
   align-items: center;
@@ -3602,6 +3612,130 @@ select:focus {
   margin: 0;
   font-size: 12px;
   color: var(--texto-2);
+}
+
+.modo-ia {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 12px;
+}
+
+.modo-ia__resumen {
+  color: var(--texto-2);
+  font-size: 12px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+/* La insignia es la única pista, dentro del propio panel, de que esta
+   conversación la lleva la IA y no otro integrante del equipo: el panel
+   acoplado ya dice «Modo IA» en su cabecera, pero esa cabecera se pierde de
+   vista al desplazar la transcripción hacia abajo. */
+.modo-ia__insignia {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  border-radius: var(--radio-ajustado);
+  background: var(--acento);
+  color: var(--sobre-acento);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* Quién escribió este turno, no solo que alguien lo escribió: el hilo es
+   compartido por todo el proyecto (ver `conversaciones.ts`), así que sin esto
+   los mensajes de dos integrantes serían indistinguibles entre sí. */
+.modo-ia__autor {
+  margin: 0;
+  font-size: 11px;
+  color: var(--texto-2);
+}
+
+.modo-ia__transcripcion {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+  padding-right: 2px;
+}
+
+.modo-ia__vacio {
+  margin: 0;
+  color: var(--texto-2);
+  font-size: 13px;
+}
+
+.modo-ia__turno {
+  display: flex;
+  flex-direction: column;
+  max-width: 85%;
+}
+
+/* El turno del usuario se alinea a la derecha, como en cualquier chat: la
+   columna por la que entró el mensaje es la pista visual más rápida de
+   quién dijo qué, antes incluso de leer el texto. */
+.modo-ia__turno--user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.modo-ia__turno--assistant {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.modo-ia__burbuja {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radio-ajustado);
+  font-size: 13px;
+  white-space: pre-line;
+}
+
+.modo-ia__turno--user .modo-ia__burbuja {
+  background: var(--acento);
+  color: var(--sobre-acento);
+}
+
+.modo-ia__turno--assistant .modo-ia__burbuja {
+  background: var(--fondo-3);
+  border: 1px solid var(--borde);
+}
+
+.modo-ia__turno--assistant .asistente__propuesta {
+  width: 100%;
+}
+
+/* La IA habla sin que nadie le pregunte (`ai/vigilancia.ts`): el mismo tono
+   de aviso que usa `revision__hallazgo--aviso` para la revisión bajo demanda,
+   porque es la misma clase de comentario —"esto merece atención"— solo que
+   esta vez llegó solo. */
+.modo-ia__turno--observacion .modo-ia__burbuja {
+  background: var(--superficie-aviso);
+  border: 1px solid var(--borde-aviso);
+}
+
+.modo-ia__autor--observacion {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--aviso);
+  font-weight: 600;
+}
+
+.modo-ia__autor--observacion svg {
+  width: 12px;
+  height: 12px;
+}
+
+.modo-ia__entrada {
+  flex-shrink: 0;
 }
 
 @media (max-width: 900px) {
@@ -6349,4 +6483,174 @@ select:focus {
     min-width: 44px;
     min-height: 44px;
   }
+}
+
+/* ---- El panel de versiones --------------------------------------------- */
+
+.versiones {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  height: 100%;
+  min-height: 0;
+  gap: 8px;
+}
+
+.versiones__hilo {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+
+.versiones__lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.versiones__version {
+  border: 1px solid var(--borde);
+  border-radius: var(--radio-ajustado);
+  padding: 8px;
+}
+
+.versiones__mensaje {
+  margin: 0;
+  font-weight: 600;
+  font-size: var(--fuente-ui);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.versiones__meta {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--texto-2);
+}
+
+.versiones__fila-botones {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.versiones__error {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--borde-error);
+  background: var(--superficie-error);
+  border-radius: var(--radio-ajustado);
+  font-size: 11px;
+}
+
+.versiones__aviso {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--superficie-exito);
+  border-radius: var(--radio-ajustado);
+  font-size: 11px;
+  color: var(--exito);
+}
+
+/* ---- La diferencia estructural ------------------------------------------ */
+
+.versiones__diferencia {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--borde);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.versiones__lista-cambios {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.versiones__cambio {
+  border-left: 3px solid var(--borde);
+  padding-left: 8px;
+}
+
+.versiones__cambio--añadido {
+  border-left-color: var(--exito);
+}
+
+.versiones__cambio--eliminado {
+  border-left-color: var(--error);
+}
+
+.versiones__cambio--modificado {
+  border-left-color: var(--acento);
+}
+
+.versiones__titulo-cambio {
+  margin: 0;
+  font-size: var(--fuente-ui);
+}
+
+.versiones__etiqueta-tipo {
+  color: var(--texto-2);
+  font-size: 11px;
+}
+
+.versiones__campos,
+.versiones__sublista ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+  color: var(--texto-2);
+}
+
+.versiones__sublista {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--texto-2);
+}
+
+/* ---- Guardar una versión nueva ------------------------------------------ */
+
+.versiones__crear {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--borde);
+  padding-top: 8px;
+}
+
+.versiones__entrada {
+  width: 100%;
+  resize: vertical;
+  min-height: 48px;
+  font: inherit;
+  color: var(--texto);
+  background: var(--fondo-2);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio-ajustado);
+  padding: 6px 8px;
+}
+
+.versiones__entrada:focus-visible {
+  outline: 2px solid var(--acento);
+  outline-offset: 1px;
+}
+
+.versiones__acciones {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.versiones__restantes {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--texto-2);
+  font-variant-numeric: tabular-nums;
 }

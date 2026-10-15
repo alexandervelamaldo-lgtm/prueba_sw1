@@ -1,5 +1,6 @@
 import type { AssistantResponse, ClassDiagram } from '@app/shared';
-import { interpretCommand, listSupportedTypes, parseAssistantResponse } from '@app/shared';
+import { interpretCommand, listSupportedTypes, parseAssistantResponse, revisarDiagrama } from '@app/shared';
+import type { ChatMessage } from '../storage/conversaciones.js';
 import { pedirAlModelo } from './transporte.js';
 
 /**
@@ -10,11 +11,46 @@ import { pedirAlModelo } from './transporte.js';
  * 2. Una gramática local fija (cuando no hay internet o falla el modelo).
  */
 
+/**
+ * Un turno del historial ya con el nombre de quien lo escribió resuelto. El
+ * propio `ChatMessage` solo guarda `autorId`; `api/assistant.ts` lo resuelve a
+ * nombre (igual que `conNombres` en `api/tablon.ts`) antes de construir el
+ * contexto, porque aquí, ya con varios integrantes compartiendo el mismo
+ * hilo, la IA necesita saber quién dijo qué para no confundir "lo que pediste
+ * antes" entre dos personas distintas.
+ */
+export interface TurnoConAutor extends ChatMessage {
+  autorNombre: string | null;
+}
+
+/**
+ * Lo que el Modo IA sabe además del diagrama: la propia conversación (para que
+ * "ahora añádele X" se entienda sin repetir de qué clase se habla, y ahora
+ * compartida entre todos los integrantes del proyecto, no solo quien
+ * pregunta) y, solo como dato de contexto, el nombre de otros proyectos de
+ * este mismo usuario (nunca su contenido: ver `api/assistant.ts` y
+ * `storage/conversaciones.ts` para la garantía de aislamiento por proyecto).
+ */
+export interface AssistantContext {
+  historial: TurnoConAutor[];
+  otrosProyectos: string[];
+}
+
 // Define la "plantilla" o contrato que debe cumplir cualquier motor de asistente:
 // debe tener un nombre y una función para interpretar lo que pide el usuario.
 export interface AssistantEngine {
   readonly name: string;
-  interpret(prompt: string, diagram: ClassDiagram): Promise<AssistantResponse>;
+  interpret(prompt: string, diagram: ClassDiagram, contexto?: AssistantContext): Promise<AssistantResponse>;
+  /**
+   * Mira el diagrama sin que nadie haya preguntado nada y decide si hay algo
+   * que merezca la pena decir en voz alta en el hilo compartido. Devuelve
+   * `null` cuando no hay nada que comentar, que es la respuesta correcta casi
+   * siempre: hablar en cada cambio por hablar sería ruido, no ayuda.
+   *
+   * Nunca propone operaciones (decisión D6, también aquí): es solo texto, el
+   * mismo tipo de voz que `explanation` en `interpret`.
+   */
+  revisar(diagram: ClassDiagram, contexto?: AssistantContext): Promise<string | null>;
 }
 
 /**
@@ -29,6 +65,17 @@ export class GrammarAssistant implements AssistantEngine {
   async interpret(prompt: string): Promise<AssistantResponse> {
     return interpretCommand(prompt);
   }
+
+  // Versión sin conexión de "hablar sola": usa el mismo revisor de calidad de
+  // modelado que ya tenía el proyecto (`revisarDiagrama`, en `@app/shared`),
+  // pensado desde su propio comentario de cabecera para que lo reutilizara el
+  // asistente. El hallazgo más grave ya viene primero (`revisarDiagrama`
+  // ordena por gravedad), así que basta con tomar el primero.
+  async revisar(diagram: ClassDiagram): Promise<string | null> {
+    const [principal] = revisarDiagrama(diagram);
+    if (!principal) return null;
+    return `He revisado el diagrama: ${principal.titulo}. ${principal.detalle}`;
+  }
 }
 
 // INSTRUCCIONES SECRETAS PARA LA IA (System Prompt):
@@ -36,6 +83,10 @@ export class GrammarAssistant implements AssistantEngine {
 // para indicarle exactamente cómo debe comportarse, qué operaciones puede hacer
 // y exigirle que responda ÚNICAMENTE en un formato estructurado (JSON).
 const SYSTEM_PROMPT = `Eres un asistente de modelado UML. Traduces peticiones en castellano a operaciones sobre un diagrama de clases.
+
+Cuando el mensaje incluya turnos anteriores de esta misma conversación, ya los has leído: no te vuelvas a presentar ni repitas lo ya dicho, y entiende referencias como "ahora", "esa clase" o "lo de antes" igual que lo haría alguien que lleva un rato colaborando en este proyecto contigo. "explanation" es tu voz: puede saludar, reconocer lo que ya se habló o hacer una pregunta de aclaración en tono natural y breve, sin dejar de ser preciso sobre qué cambios propones y por qué. Esto no cambia ninguna regla de las operaciones.
+
+Este hilo es compartido: varios integrantes del mismo proyecto te hablan en la misma conversación, y los turnos de usuario anteriores vienen firmados como "Nombre: texto". Usa esa firma para no mezclar lo que pidió una persona con lo que pidió otra ("lo que dijiste antes" significa lo que dijo esa misma persona, no cualquiera del equipo), pero no la repitas tú mismo al firmar tu "explanation": tu respuesta no lleva firma, solo la entiendes en los turnos ajenos.
 
 Respondes ÚNICAMENTE con un objeto JSON, sin texto alrededor y sin vallas de código, con esta forma:
 {"operations": [...], "confidence": 0.0-1.0, "clarification": string|null, "explanation": string}
@@ -81,6 +132,21 @@ Cuando el usuario pida "crear una clase intermedia", "clase de asociación", "ro
 7. Si no puedes identificar con certeza el id real de la relación N:M en el resumen, no propongas "setAssociationClass": dilo en "explanation" y pide al usuario que señale la relación en el lienzo.
 Para quitarle a una relación su clase de asociación sin borrar la clase, usa "setAssociationClass" con "classRef": null.`;
 
+/**
+ * INSTRUCCIONES PARA "HABLAR SOLA":
+ * A diferencia de `SYSTEM_PROMPT`, aquí no se pide traducir ninguna orden —no
+ * hay orden, nadie ha escrito nada— sino decidir si el cambio que alguien
+ * acaba de hacer en el diagrama merece un comentario espontáneo, y responder
+ * en texto llano (nunca JSON) o con la palabra "NADA" cuando no lo merece.
+ */
+const REVIEW_SYSTEM_PROMPT = `Eres el mismo asistente de modelado UML de siempre, pero ahora hablas sin que nadie te haya preguntado nada: acabas de ver un cambio reciente en el diagrama de un proyecto y decides si vale la pena decir algo.
+
+Responde con un comentario breve (una o dos frases), en castellano y en primera persona, como lo diría alguien del equipo que lleva un rato mirando el diagrama por encima del hombro: qué le preocupa, qué sugeriría o, si procede, qué le parece bien. No te presentes ni repitas lo que ya dijiste en turnos anteriores de esta conversación.
+
+Si no hay nada que de verdad merezca un comentario, responde exactamente con la palabra NADA y nada más alrededor. No inventes un problema solo para tener algo que decir: la respuesta correcta casi siempre es NADA, y hablar en cada cambio sería ruido, no ayuda.
+
+No propongas operaciones ni devuelvas JSON ni código: solo el comentario en texto llano, o NADA.`;
+
 // Define las opciones de configuración para conectar con la IA (clave API, proveedor, modelo, etc.).
 export interface LlmOptions {
   apiKey: string;
@@ -117,10 +183,14 @@ export class LlmAssistant implements AssistantEngine {
   // FUNCIÓN PRINCIPAL DEL MOTOR CON IA:
   // Intenta pedirle la respuesta a la IA remota. Si la IA responde bien, devuelve el resultado.
   // Si la IA falla o la respuesta no es válida, recurre al sistema local sin conexión.
-  async interpret(prompt: string, diagram: ClassDiagram): Promise<AssistantResponse> {
+  async interpret(
+    prompt: string,
+    diagram: ClassDiagram,
+    contexto?: AssistantContext,
+  ): Promise<AssistantResponse> {
     try {
-      // 1. Envía el texto y el dibujo actual a la IA.
-      const raw = await this.ask(prompt, diagram);
+      // 1. Envía el texto, el dibujo actual y la conversación previa a la IA.
+      const raw = await this.ask(prompt, diagram, contexto);
       // 2. Comprueba que la respuesta de la IA sea un código JSON correcto.
       const parsed = parseAssistantResponse(extractJson(raw));
       if (parsed.ok) return parsed.value;
@@ -137,37 +207,115 @@ export class LlmAssistant implements AssistantEngine {
     };
   }
 
+  // "HABLAR SOLA" CON MODELO REMOTO:
+  // Mismo transporte que `interpret`, pero con el prompt de revisión y sin
+  // exigir JSON: aquí la respuesta es texto llano o la palabra NADA. Si el
+  // modelo falla, se recurre al mismo motor local que usa `interpret`.
+  async revisar(diagram: ClassDiagram, contexto?: AssistantContext): Promise<string | null> {
+    try {
+      const raw = (await this.pedirRevision(diagram, contexto)).trim();
+      if (raw === '' || raw.toUpperCase() === 'NADA') return null;
+      return raw;
+    } catch (error) {
+      console.warn('El modelo no pudo revisar el diagrama en solitario:', (error as Error).message);
+      return this.fallback.revisar(diagram, contexto);
+    }
+  }
+
+  private historialFirmado(contexto?: AssistantContext): { role: 'user' | 'assistant'; content: string }[] {
+    // Los turnos previos se mandan como mensajes reales de la conversación, no
+    // como texto plano dentro del prompt: así el modelo conversa de verdad en
+    // vez de releer un resumen cada vez. Los de rol "user" llevan el nombre de
+    // quien los escribió por delante (ver la nota de SYSTEM_PROMPT sobre el
+    // hilo compartido): sin esa firma la IA no podría distinguir a un
+    // integrante de otro dentro de la misma conversación.
+    return (contexto?.historial ?? []).map((turno) => ({
+      role: turno.role,
+      content:
+        turno.role === 'user' && turno.autorNombre ? `${turno.autorNombre}: ${turno.texto}` : turno.texto,
+    }));
+  }
+
   // FUNCIÓN PRIVADA DE COMUNICACIÓN CON LA IA:
   // Se encarga de empaquetar la petición y enviarla por internet según el proveedor (Anthropic u OpenAI).
-  private async ask(prompt: string, diagram: ClassDiagram): Promise<string> {
+  private async ask(prompt: string, diagram: ClassDiagram, contexto?: AssistantContext): Promise<string> {
     // Prepara las instrucciones agregando los tipos de datos válidos.
     const system = SYSTEM_PROMPT.replace('TIPOS', listSupportedTypes().join(', '));
+
+    // Los otros proyectos del usuario van en el mensaje de esta petición, como
+    // una línea de contexto y no como instrucción: la IA puede mencionar que
+    // existen, pero nunca ha visto ni verá sus clases o relaciones, porque
+    // quien construye este contexto (`api/assistant.ts`) nunca abre esos
+    // proyectos para leerlos.
+    const otrosProyectos = contexto?.otrosProyectos ?? [];
+    const lineaOtrosProyectos =
+      otrosProyectos.length > 0
+        ? `\n\nOtros proyectos de este usuario (solo el nombre, para contexto; nunca mezcles su contenido con este diagrama): ${otrosProyectos.join(', ')}.`
+        : '';
     // Crea el mensaje combinando el diagrama actual y la petición del usuario.
-    const user = `Diagrama actual:\n${summarize(diagram)}\n\nPetición: ${prompt}`;
+    const user = `Diagrama actual:\n${summarize(diagram)}${lineaOtrosProyectos}\n\nPetición: ${prompt}`;
+
+    return this.enviarConversacion(system, user, this.historialFirmado(contexto), 2048, true);
+  }
+
+  // PETICIÓN PRIVADA DE REVISIÓN ESPONTÁNEA:
+  // Mismo transporte, con el prompt de "hablar sola" y sin forzar el "{" con
+  // el que `ask` obliga al modelo a empezar un JSON: aquí la respuesta es
+  // texto llano. Las pistas del revisor local (`revisarDiagrama`) viajan en el
+  // mensaje para que el modelo no tenga que repetir ese trabajo desde cero,
+  // aunque puede ignorarlas o fijarse en otra cosa que le parezca más
+  // importante.
+  private async pedirRevision(diagram: ClassDiagram, contexto?: AssistantContext): Promise<string> {
+    const hallazgos = revisarDiagrama(diagram);
+    const pistas =
+      hallazgos.length > 0
+        ? `\n\nUn revisor automático ya detectó esto (puedes mencionarlo con tus palabras, ignorarlo si no lo ves relevante, o fijarte en otra cosa que te parezca más importante):\n${hallazgos
+            .slice(0, 5)
+            .map((hallazgo) => `- ${hallazgo.titulo}: ${hallazgo.detalle}`)
+            .join('\n')}`
+        : '';
+    const user = `Diagrama actual:\n${summarize(diagram)}${pistas}`;
+
+    return this.enviarConversacion(REVIEW_SYSTEM_PROMPT, user, this.historialFirmado(contexto), 300, false);
+  }
+
+  /**
+   * TRANSPORTE COMÚN A `ask` Y `pedirRevision`:
+   * Empaqueta y envía la conversación al proveedor configurado. El único
+   * comportamiento que varía entre los dos usos es `forzarJsonInicial`: lo
+   * necesita `ask` (la respuesta tiene que ser JSON) y no `pedirRevision` (la
+   * respuesta es texto llano o "NADA"), y solo tiene efecto con Anthropic —
+   * OpenAI nunca lo necesitó, ni antes de este refactor.
+   */
+  private async enviarConversacion(
+    system: string,
+    user: string,
+    historial: { role: 'user' | 'assistant'; content: string }[],
+    maxTokens: number,
+    forzarJsonInicial: boolean,
+  ): Promise<string> {
     const defectos = DEFECTOS[this.provider];
     const baseUrl = (this.options.baseUrl ?? defectos.baseUrl).replace(/\/+$/, '');
     const model = this.options.model ?? defectos.model;
 
     // Caso A: Si el proveedor elegido es Anthropic (Claude).
     if (this.provider === 'anthropic') {
+      const mensajes = [...historial, { role: 'user' as const, content: user }];
+      if (forzarJsonInicial) {
+        // Obliga a la IA a empezar respondiendo en formato JSON.
+        mensajes.push({ role: 'assistant', content: '{' });
+      }
       const payload = await pedirAlModelo<{ content?: { type: string; text?: string }[] }>({
         url: `${baseUrl}/v1/messages`,
         headers: {
           'x-api-key': this.options.apiKey,
           'anthropic-version': '2023-06-01',
         },
-        body: {
-          model,
-          max_tokens: 2048,
-          system,
-          messages: [
-            { role: 'user', content: user },
-            { role: 'assistant', content: '{' }, // Obliga a la IA a empezar respondiendo en formato JSON.
-          ],
-        },
+        body: { model, max_tokens: maxTokens, system, messages: mensajes },
         timeoutMs: this.options.timeoutMs ?? 20_000,
       });
-      return `{${payload.content?.find((block) => block.type === 'text')?.text ?? ''}`;
+      const texto = payload.content?.find((block) => block.type === 'text')?.text ?? '';
+      return forzarJsonInicial ? `{${texto}` : texto;
     }
 
     // Caso B: Si el proveedor elegido es OpenAI (ChatGPT) u otro compatible.
@@ -176,12 +324,9 @@ export class LlmAssistant implements AssistantEngine {
       headers: { authorization: `Bearer ${this.options.apiKey}` },
       body: {
         model,
-        max_tokens: 2048,
+        max_tokens: maxTokens,
         stream: false,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
+        messages: [{ role: 'system', content: system }, ...historial, { role: 'user', content: user }],
       },
       timeoutMs: this.options.timeoutMs ?? 20_000,
     });

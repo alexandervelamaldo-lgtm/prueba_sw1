@@ -18,6 +18,7 @@ import type { OrdenVista } from './Lienzo';
 import { LienzoFlow } from './LienzoFlow';
 import { PanelPropiedades } from './PanelPropiedades';
 import { Asistente } from './Asistente';
+import { ModoIA } from './ModoIA';
 import { ImportarDiagrama } from './ImportarDiagrama';
 import { ImportarXmi } from './ImportarXmi';
 import { PrevisualizarGeneracion } from './PrevisualizarGeneracion';
@@ -28,6 +29,7 @@ import { RevisionDiagrama } from './RevisionDiagrama';
 import { HistorialCambios } from './HistorialCambios';
 import { ColumnaAcoplada } from './PanelAcoplado';
 import { PanelTablon } from './PanelTablon';
+import { PanelVersiones } from './PanelVersiones';
 import type { Acoplado, EstadoColumna } from './paneles';
 import { ArbolProyecto } from './ArbolProyecto';
 import { Paleta } from './Paleta';
@@ -449,6 +451,18 @@ export function EditorDiagrama({
             etiqueta: 'Comunicación interna',
             icono: 'personas',
             marcado: paneles.disposicion.abiertos.tablon,
+          },
+          {
+            id: 'ver:ia',
+            etiqueta: 'Modo IA',
+            icono: 'mensajes',
+            marcado: paneles.disposicion.abiertos.ia,
+          },
+          {
+            id: 'ver:versiones',
+            etiqueta: 'Versiones',
+            icono: 'comprobado',
+            marcado: paneles.disposicion.abiertos.versiones,
           },
           { id: 'zoom:acercar', etiqueta: 'Acercar', separadorAntes: true },
           { id: 'zoom:alejar', etiqueta: 'Alejar' },
@@ -889,6 +903,33 @@ export function EditorDiagrama({
                     rol={proyecto.role}
                   />
                 ) : null,
+            },
+            {
+              acoplado: 'ia',
+              // Mismo motivo que el tablón: el panel sondea al servidor
+              // mientras está montado, así que no se deja vivo detrás de un
+              // panel plegado que nadie está mirando.
+              contenido:
+                autor && paneles.disposicion.abiertos.ia ? (
+                  <ModoIA
+                    proyecto={proyecto}
+                    diagrama={estado.diagrama}
+                    aplicar={aplicar}
+                    soloLectura={soloLectura}
+                    usuario={autor}
+                  />
+                ) : null,
+            },
+            {
+              acoplado: 'versiones',
+              contenido: usuario ? (
+                <PanelVersiones
+                  proyectoId={proyecto.id}
+                  usuarioId={usuario.id}
+                  rol={proyecto.role}
+                  diagrama={estado.diagrama}
+                />
+              ) : null,
             },
           ]}
         />

@@ -7,22 +7,24 @@
  * prueban sin montar un navegador. Aquí no se toca `localStorage` ni el DOM.
  */
 
-/** Los cinco paneles acoplados: dos a la izquierda y tres a la derecha. */
-export type Acoplado = 'arbol' | 'paleta' | 'propiedades' | 'historial' | 'tablon';
+/** Los seis paneles acoplados: dos a la izquierda y cuatro a la derecha. */
+export type Acoplado = 'arbol' | 'paleta' | 'propiedades' | 'historial' | 'tablon' | 'ia' | 'versiones';
 
 export type Lado = 'izquierda' | 'derecha';
 
 /**
- * El tablón va a la derecha, con el historial.
+ * El tablón va a la derecha, con el historial, y la IA con ellos.
  *
- * Los dos contestan a «qué ha pasado aquí» —uno con los cambios y otro con lo
- * que se dijo sobre ellos— mientras que la izquierda es con lo que se trabaja.
- * Puestos en la misma columna se alternan en vez de competir por el ancho, y
- * leer la discusión de un cambio no obliga a estrechar el lienzo.
+ * Los tres contestan a «qué ha pasado aquí» —cambios, lo que se dijo sobre
+ * ellos y lo que se le pidió a la IA— mientras que la izquierda es con lo que
+ * se trabaja. Puestos en la misma columna se alternan en vez de competir por
+ * el ancho, y abrir el Modo IA no obliga a estrechar el lienzo ni tapa el
+ * resto del editor, que es justo lo que hacía el modal que este panel
+ * sustituye.
  */
 export const ACOPLADOS_POR_LADO: Record<Lado, readonly Acoplado[]> = {
   izquierda: ['arbol', 'paleta'],
-  derecha: ['propiedades', 'historial', 'tablon'],
+  derecha: ['propiedades', 'historial', 'tablon', 'ia', 'versiones'],
 };
 
 export const TITULOS: Record<Acoplado, string> = {
@@ -31,6 +33,8 @@ export const TITULOS: Record<Acoplado, string> = {
   propiedades: 'Propiedades',
   historial: 'Historial',
   tablon: 'Comunicación',
+  ia: 'Modo IA',
+  versiones: 'Versiones',
 };
 
 export interface EstadoColumna {
@@ -73,10 +77,18 @@ export function disposicionInicial(estrecha: boolean): Disposicion {
   return {
     izquierda: { ancho: POR_DEFECTO.izquierda, plegada: estrecha },
     derecha: { ancho: POR_DEFECTO.derecha, plegada: estrecha },
-    // El tablón empieza cerrado como el historial: se abre cuando hay algo que
-    // decir, y abierto de partida convertiría el editor en un chat con un
-    // diagrama al lado.
-    abiertos: { arbol: true, paleta: true, propiedades: true, historial: false, tablon: false },
+    // El tablón y la IA empiezan cerrados como el historial: se abren cuando
+    // hay algo que decir o preguntar, y abiertos de partida convertirían el
+    // editor en un chat con un diagrama al lado.
+    abiertos: {
+      arbol: true,
+      paleta: true,
+      propiedades: true,
+      historial: false,
+      tablon: false,
+      ia: false,
+      versiones: false,
+    },
   };
 }
 

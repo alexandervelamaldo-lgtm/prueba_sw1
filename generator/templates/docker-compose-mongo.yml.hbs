@@ -1,0 +1,18 @@
+services:
+  db:
+    image: mongo:7
+    container_name: {{{project.artifactId}}}-db
+    environment:
+      MONGO_INITDB_DATABASE: {{{project.databaseName}}}
+    ports:
+      - "27017:27017"
+    volumes:
+      - db-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  db-data:

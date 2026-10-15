@@ -1,0 +1,33 @@
+package {{{pkg}}}.repository;
+
+import {{{pkg}}}.domain.{{{entity.className}}};
+import org.springframework.data.cassandra.repository.CassandraRepository;
+import org.springframework.stereotype.Repository;
+{{#if hasUniqueFields}}
+import java.util.Optional;
+{{/if}}
+{{#each repositoryImports}}
+import {{{this}}};
+{{/each}}
+
+/**
+ * Capa 2 — Repositorio de {{{entity.className}}} (Cassandra).
+ *
+ * `CassandraRepository` solo extiende `CrudRepository`: a diferencia de
+ * `MongoRepository`, no hay `findAll(Pageable)` ni `count()` paginado, así
+ * que la paginación de la capa 3 se hace a mano (ver
+ * `service-impl-cassandra.java.hbs`). Las consultas derivadas de abajo
+ * exigen que el campo correspondiente lleve `@Indexed` en la entidad.
+ *
+ * Generado a partir del diagrama «{{{project.name}}}». No editar a mano.
+ */
+@Repository
+public interface {{{entity.className}}}Repository
+        extends CassandraRepository<{{{entity.className}}}, {{{entity.identifier.javaType}}}> {
+{{#each uniqueFields}}
+
+    Optional<{{{../entity.className}}}> findBy{{{pascalName}}}({{{javaType}}} {{{name}}});
+
+    boolean existsBy{{{pascalName}}}({{{javaType}}} {{{name}}});
+{{/each}}
+}

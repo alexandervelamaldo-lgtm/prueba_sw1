@@ -20,6 +20,7 @@ const OpcionesSchema = z.object({
   paqueteBase: z.string().trim().optional(),
   artifactId: z.string().trim().optional(),
   estrategiaHerencia: z.enum(['SINGLE_TABLE', 'JOINED', 'TABLE_PER_CLASS']).optional(),
+  motorBD: z.enum(['postgres', 'mongodb', 'cassandra']).optional(),
 });
 
 type Opciones = z.infer<typeof OpcionesSchema>;
@@ -75,6 +76,7 @@ export function generationRouter(deps: { store: ProjectStore; rooms: RoomManager
       const room = await rooms.open(request.params.proyectoId ?? '');
       const outcome = generate(withOverrides(readDiagram(room.doc), options), {
         inheritanceStrategy: options.estrategiaHerencia,
+        databaseTarget: options.motorBD,
       });
 
       if (!outcome.ok) {
@@ -106,6 +108,7 @@ export function generationRouter(deps: { store: ProjectStore; rooms: RoomManager
       const room = await rooms.open(projectId);
       const outcome = generate(withOverrides(readDiagram(room.doc), options), {
         inheritanceStrategy: options.estrategiaHerencia,
+        databaseTarget: options.motorBD,
       });
 
       if (!outcome.ok) {
@@ -140,6 +143,7 @@ export function generationRouter(deps: { store: ProjectStore; rooms: RoomManager
       const room = await rooms.open(projectId);
       const outcome = generate(withOverrides(readDiagram(room.doc), options), {
         inheritanceStrategy: options.estrategiaHerencia,
+        databaseTarget: options.motorBD,
       });
 
       if (!outcome.ok) {

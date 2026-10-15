@@ -1,0 +1,147 @@
+package {{{project.basePackage}}}.infraestructura;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Optional;
+import org.springframework.data.cassandra.core.CassandraTemplate;
+import org.springframework.data.cassandra.core.InsertOptions;
+import org.springframework.data.cassandra.core.cql.WriteResult;
+import org.springframework.data.cassandra.core.mapping.Column;
+import org.springframework.data.cassandra.core.mapping.PrimaryKey;
+import org.springframework.data.cassandra.core.mapping.Table;
+import org.springframework.data.cassandra.core.query.Criteria;
+import org.springframework.data.cassandra.core.query.Query;
+import org.springframework.data.cassandra.core.query.Update;
+import org.springframework.stereotype.Component;
+
+/**
+ * Acceso a la tabla `idempotencia` (Cassandra).
+ *
+ * La clave de idempotencia es la clave de partición de la tabla: un `INSERT
+ * ... IF NOT EXISTS` (LWT) devuelve `wasApplied() == false` cuando la fila ya
+ * existe, en vez de sobrescribirla. Es la misma exclusión mutua que el
+ * `ON CONFLICT (clave) DO NOTHING` de la variante PostgreSQL y el `_id`
+ * duplicado de Mongo, resuelta aquí por el compare-and-set nativo de
+ * Cassandra en lugar de un índice único.
+ *
+ * Todas las columnas llevan `@Column` explícito: así el nombre de columna
+ * usado en `Criteria`/`Update` (cadenas, sin comprobación del compilador)
+ * coincide siempre con el de la entidad, sin depender de qué estrategia de
+ * nombres use Spring Data Cassandra por defecto.
+ *
+ * Generado a partir del diagrama «{{{project.name}}}». No editar a mano.
+ */
+@Component
+public class AlmacenIdempotencia {
+
+    /**
+     * A partir de aquí, una reserva sin completar se da por abandonada. Mismo
+     * plazo y mismo motivo que en las variantes PostgreSQL y MongoDB.
+     */
+    private static final Duration PLAZO_ABANDONO = Duration.ofMinutes(2);
+
+    private final CassandraTemplate cassandra;
+
+    public AlmacenIdempotencia(CassandraTemplate cassandra) {
+        this.cassandra = cassandra;
+    }
+
+    @Table("idempotencia")
+    static class Documento {
+        @PrimaryKey
+        @Column("id")
+        String id;
+
+        @Column("huella")
+        String huella;
+
+        @Column("completada")
+        boolean completada;
+
+        @Column("estado_http")
+        Integer estadoHttp;
+
+        @Column("cuerpo")
+        String cuerpo;
+
+        @Column("tipo_contenido")
+        String tipoContenido;
+
+        @Column("creada_en")
+        Instant creadaEn;
+    }
+
+    /** Lo que se sabe de una clave ya vista. */
+    public record Registro(String huella, boolean completada, Integer estadoHttp,
+                           String cuerpo, String tipoContenido) {
+    }
+
+    /**
+     * Intenta reservar la clave.
+     *
+     * Devuelve `true` si esta petición es la primera y debe ejecutarse.
+     */
+    public boolean reservar(String clave, String huella) {
+        Documento doc = new Documento();
+        doc.id = clave;
+        doc.huella = huella;
+        doc.completada = false;
+        doc.creadaEn = Instant.now();
+
+        InsertOptions opciones = InsertOptions.builder().withIfNotExists().build();
+        WriteResult resultado = cassandra.insert(doc, opciones);
+        return resultado.wasApplied();
+    }
+
+    public Optional<Registro> buscar(String clave) {
+        Documento doc = cassandra.selectOneById(clave, Documento.class);
+        if (doc == null) {
+            return Optional.empty();
+        }
+        return Optional.of(
+                new Registro(doc.huella, doc.completada, doc.estadoHttp, doc.cuerpo, doc.tipoContenido));
+    }
+
+    /** Guarda la respuesta para poder repetirla ante un reenvío. */
+    public void completar(String clave, int estadoHttp, String cuerpo, String tipoContenido) {
+        Query query = Query.query(Criteria.where("id").is(clave));
+        Update update = Update.empty()
+                .set("completada", true)
+                .set("estado_http", estadoHttp)
+                .set("cuerpo", cuerpo)
+                .set("tipo_contenido", tipoContenido);
+        cassandra.update(query, update, Documento.class);
+    }
+
+    /**
+     * Libera la reserva sin guardar respuesta.
+     *
+     * Se llama cuando la petición no terminó en 2xx. Mismo motivo que en las
+     * otras variantes: repetir no duplica nada si no se escribió nada.
+     */
+    public void liberar(String clave) {
+        cassandra.delete(Query.query(Criteria.where("id").is(clave)), Documento.class);
+    }
+
+    /**
+     * Retira una reserva abandonada para que quien pregunta pueda quedársela.
+     * Devuelve `true` si la retiró.
+     *
+     * La condición se comprueba en memoria tras leer por clave de partición,
+     * no en la consulta: Cassandra no admite un `WHERE` por columnas que no
+     * son la clave de partición ni la de agrupación sin `ALLOW FILTERING`
+     * (que aquí se evita a propósito), y un índice secundario no soporta
+     * comparaciones `<` sobre una marca de tiempo.
+     */
+    public boolean caducarSiAbandonada(String clave) {
+        Documento doc = cassandra.selectOneById(clave, Documento.class);
+        if (doc == null || doc.completada) {
+            return false;
+        }
+        Instant limite = Instant.now().minus(PLAZO_ABANDONO);
+        if (doc.creadaEn.isAfter(limite)) {
+            return false;
+        }
+        return cassandra.delete(Query.query(Criteria.where("id").is(clave)), Documento.class);
+    }
+}

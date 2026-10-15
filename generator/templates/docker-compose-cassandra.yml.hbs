@@ -1,0 +1,34 @@
+services:
+  db:
+    image: cassandra:5
+    container_name: {{{project.artifactId}}}-db
+    ports:
+      - "9042:9042"
+    volumes:
+      - db-data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  # La imagen oficial de Cassandra, a diferencia de la de Postgres o Mongo, no
+  # crea un keyspace a partir de una variable de entorno: `schema-action` de
+  # Spring solo crea tablas dentro de un keyspace que ya existe. Este servicio
+  # espera a que `db` esté sana y lo crea con `cqlsh`; termina y no se
+  # reinicia, así que no compite por el puerto ni queda corriendo de más.
+  db-init:
+    image: cassandra:5
+    container_name: {{{project.artifactId}}}-db-init
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint:
+      - cqlsh
+      - db
+      - -e
+      - "CREATE KEYSPACE IF NOT EXISTS {{{project.databaseName}}} WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1};"
+    restart: "no"
+
+volumes:
+  db-data:

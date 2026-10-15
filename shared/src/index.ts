@@ -9,6 +9,10 @@ export * from './model/comunicacion-uml.js';
 export * from './model/comunicacion-integridad.js';
 export * from './model/id.js';
 export * from './model/factory.js';
+// La diferencia estructural entre dos diagramas: la usa el panel de versiones
+// para comparar una versión guardada contra el diagrama en curso, sin tocar
+// el CRDT. Ver la cabecera del fichero.
+export * from './model/diff.js';
 export * from './ops/operations.js';
 export * from './ops/impact.js';
 export * from './ops/import-table.js';

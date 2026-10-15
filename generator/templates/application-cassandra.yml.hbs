@@ -1,0 +1,24 @@
+# El nombre del keyspace se declara como propiedad propia y se referencia
+# desde la configuración de Cassandra, igual que en las variantes
+# PostgreSQL y MongoDB. El keyspace en sí lo crea el servicio `db-init` del
+# docker-compose: Cassandra, a diferencia de Postgres/Mongo, no lo crea solo
+# a partir de una variable de entorno.
+app:
+  database-name: {{{project.databaseName}}}
+
+spring:
+  application:
+    name: {{{project.artifactId}}}
+  cassandra:
+    contact-points: ${DB_HOST:localhost}
+    port: ${DB_PORT:9042}
+    local-datacenter: ${DB_DATACENTER:datacenter1}
+    keyspace-name: ${DB_NAME:${app.database-name}}
+    schema-action: create-if-not-exists
+
+server:
+  port: ${SERVER_PORT:8080}
+
+logging:
+  level:
+    {{{project.basePackage}}}: INFO

@@ -1,0 +1,49 @@
+package {{{pkg}}}.dto.mapper;
+
+import {{{pkg}}}.domain.{{{entity.className}}};
+import {{{pkg}}}.dto.{{{entity.className}}}Request;
+import {{{pkg}}}.dto.{{{entity.className}}}Response;
+import org.springframework.stereotype.Component;
+{{#each dtoImports}}
+import {{{this}}};
+{{/each}}
+
+/**
+ * Traducción entre {{{entity.className}}} y sus DTOs (Cassandra).
+ *
+ * Las asociaciones a-uno viajan como el identificador plano de la fila
+ * referida: no hay clave ajena ni fila embebida, así que —a diferencia de la
+ * variante JPA— el mapeador no necesita el repositorio de la otra entidad
+ * para resolverlas.
+ *
+ * Generado a partir del diagrama «{{{project.name}}}». No editar a mano.
+ */
+@Component
+public class {{{entity.className}}}Mapper {
+
+    public {{{entity.className}}}Mapper() {
+    }
+
+    public {{{entity.className}}}Response toResponse({{{entity.className}}} entity) {
+        return new {{{entity.className}}}Response(
+{{#each responseComponents}}
+                {{{accessor}}}{{#unless @last}},{{/unless}}
+{{/each}}
+        );
+    }
+
+    public {{{entity.className}}} toEntity({{{entity.className}}}Request request) {
+        {{{entity.className}}} entity = new {{{entity.className}}}();
+        update(entity, request);
+        return entity;
+    }
+
+    public void update({{{entity.className}}} entity, {{{entity.className}}}Request request) {
+{{#each allFields}}
+        entity.{{{setterName}}}(request.{{{name}}}());
+{{/each}}
+{{#each toOneAssociations}}
+        entity.{{{idSetterName}}}(request.{{{idComponentName}}}());
+{{/each}}
+    }
+}

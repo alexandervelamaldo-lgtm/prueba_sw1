@@ -459,6 +459,165 @@ describe('diagrama', () => {
   });
 });
 
+describe('versiones', () => {
+  it('crea una versión y la lista con su resumen, sin el estado', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+
+    const creada = await request(app)
+      .post(`/api/proyectos/${proyectoId}/versiones`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ mensaje: 'Antes de refactorizar' });
+    expect(creada.status).toBe(201);
+    expect(creada.body.version.mensaje).toBe('Antes de refactorizar');
+    expect(creada.body.version).not.toHaveProperty('estado');
+
+    const listado = await request(app)
+      .get(`/api/proyectos/${proyectoId}/versiones`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(listado.status).toBe(200);
+    expect(listado.body.versiones.map((v: { mensaje: string }) => v.mensaje)).toEqual([
+      'Antes de refactorizar',
+    ]);
+  });
+
+  it('restaura el diagrama al estado de una versión guardada', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+    const cabecera = { Authorization: `Bearer ${token}` };
+
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/diagrama/operaciones`)
+      .set(cabecera)
+      .send({ operaciones: [{ op: 'addClass', name: 'Cliente', kind: 'class' }] });
+
+    const version = await request(app)
+      .post(`/api/proyectos/${proyectoId}/versiones`)
+      .set(cabecera)
+      .send({ mensaje: 'con Cliente' });
+
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/diagrama/operaciones`)
+      .set(cabecera)
+      .send({ operaciones: [{ op: 'addClass', name: 'Pedido', kind: 'class' }] });
+
+    const restaurada = await request(app)
+      .post(`/api/proyectos/${proyectoId}/versiones/${version.body.version.id}/restaurar`)
+      .set(cabecera);
+    expect(restaurada.status).toBe(200);
+    expect(Object.values(restaurada.body.diagrama.classes).map((c: any) => c.name)).toEqual([
+      'Cliente',
+    ]);
+
+    const diagrama = await request(app)
+      .get(`/api/proyectos/${proyectoId}/diagrama`)
+      .set(cabecera);
+    expect(Object.values(diagrama.body.diagrama.classes).map((c: any) => c.name)).toEqual([
+      'Cliente',
+    ]);
+  });
+
+  it('consulta el diagrama de una versión sin restaurarla', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+    const cabecera = { Authorization: `Bearer ${token}` };
+
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/diagrama/operaciones`)
+      .set(cabecera)
+      .send({ operaciones: [{ op: 'addClass', name: 'Cliente', kind: 'class' }] });
+
+    const version = await request(app)
+      .post(`/api/proyectos/${proyectoId}/versiones`)
+      .set(cabecera)
+      .send({ mensaje: 'con Cliente' });
+
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/diagrama/operaciones`)
+      .set(cabecera)
+      .send({ operaciones: [{ op: 'addClass', name: 'Pedido', kind: 'class' }] });
+
+    const vista = await request(app)
+      .get(`/api/proyectos/${proyectoId}/versiones/${version.body.version.id}`)
+      .set(cabecera);
+    expect(vista.status).toBe(200);
+    expect(vista.body.version.mensaje).toBe('con Cliente');
+    expect(vista.body.version).not.toHaveProperty('estado');
+    expect(Object.values(vista.body.diagrama.classes).map((c: any) => c.name)).toEqual(['Cliente']);
+
+    // Consultar no restaura: el diagrama en vivo sigue con las dos clases.
+    const diagrama = await request(app)
+      .get(`/api/proyectos/${proyectoId}/diagrama`)
+      .set(cabecera);
+    expect(Object.values(diagrama.body.diagrama.classes).map((c: any) => c.name).sort()).toEqual([
+      'Cliente',
+      'Pedido',
+    ]);
+  });
+
+  it('consultar una versión inexistente devuelve 404', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+
+    const respuesta = await request(app)
+      .get(`/api/proyectos/${proyectoId}/versiones/no-existe`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(respuesta.status).toBe(404);
+  });
+
+  it('restaurar una versión inexistente devuelve 404', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+
+    const respuesta = await request(app)
+      .post(`/api/proyectos/${proyectoId}/versiones/no-existe/restaurar`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(respuesta.status).toBe(404);
+  });
+
+  it('un editor puede crear una versión pero no restaurarla', async () => {
+    const ana = await registrar('ana@ejemplo.com');
+    const beto = await registrar('beto@ejemplo.com');
+    const proyectoId = await crearProyecto(ana);
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/miembros`)
+      .set('Authorization', `Bearer ${ana}`)
+      .send({ email: 'beto@ejemplo.com', rol: 'editor' });
+
+    const creada = await request(app)
+      .post(`/api/proyectos/${proyectoId}/versiones`)
+      .set('Authorization', `Bearer ${beto}`)
+      .send({ mensaje: 'de beto' });
+    expect(creada.status).toBe(201);
+
+    const restaurar = await request(app)
+      .post(`/api/proyectos/${proyectoId}/versiones/${creada.body.version.id}/restaurar`)
+      .set('Authorization', `Bearer ${beto}`);
+    expect(restaurar.status).toBe(403);
+  });
+
+  it('un lector no puede crear versiones, solo listarlas', async () => {
+    const ana = await registrar('ana@ejemplo.com');
+    const beto = await registrar('beto@ejemplo.com');
+    const proyectoId = await crearProyecto(ana);
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/miembros`)
+      .set('Authorization', `Bearer ${ana}`)
+      .send({ email: 'beto@ejemplo.com', rol: 'viewer' });
+
+    const creada = await request(app)
+      .post(`/api/proyectos/${proyectoId}/versiones`)
+      .set('Authorization', `Bearer ${beto}`)
+      .send({ mensaje: 'intento' });
+    expect(creada.status).toBe(403);
+
+    const listado = await request(app)
+      .get(`/api/proyectos/${proyectoId}/versiones`)
+      .set('Authorization', `Bearer ${beto}`);
+    expect(listado.status).toBe(200);
+  });
+});
+
 describe('generación', () => {
   async function proyectoConDiagrama(): Promise<{ token: string; proyectoId: string }> {
     const token = await registrar('ana@ejemplo.com');
@@ -518,6 +677,41 @@ describe('generación', () => {
     expect(rutas).toContain('src/main/java/com/tienda/api/repository/ClienteRepository.java');
     expect(rutas).toContain('src/main/java/com/tienda/api/service/ClienteService.java');
     expect(rutas).toContain('src/main/java/com/tienda/api/controller/ClienteController.java');
+  });
+
+  it('genera un backend MongoDB cuando se pide motorBD', async () => {
+    const { token, proyectoId } = await proyectoConDiagrama();
+
+    const previa = await request(app)
+      .post(`/api/proyectos/${proyectoId}/generacion/previsualizacion`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ motorBD: 'mongodb' });
+
+    expect(previa.status).toBe(200);
+    const ficheros = previa.body.ficheros as { ruta: string; contenido: string }[];
+    const pom = ficheros.find((f) => f.ruta === 'pom.xml');
+    expect(pom?.contenido).toContain('spring-boot-starter-data-mongodb');
+
+    const entidad = ficheros.find((f) => f.ruta.endsWith('domain/Cliente.java'));
+    expect(entidad?.contenido).toContain('@Document(collection');
+  });
+
+  it('genera un backend Cassandra cuando se pide motorBD', async () => {
+    const { token, proyectoId } = await proyectoConDiagrama();
+
+    const previa = await request(app)
+      .post(`/api/proyectos/${proyectoId}/generacion/previsualizacion`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ motorBD: 'cassandra' });
+
+    expect(previa.status).toBe(200);
+    const ficheros = previa.body.ficheros as { ruta: string; contenido: string }[];
+    const pom = ficheros.find((f) => f.ruta === 'pom.xml');
+    expect(pom?.contenido).toContain('spring-boot-starter-data-cassandra');
+
+    const entidad = ficheros.find((f) => f.ruta.endsWith('domain/Cliente.java'));
+    expect(entidad?.contenido).toContain('@Table(');
+    expect(entidad?.contenido).toContain('@PrimaryKey');
   });
 
   it('devuelve un ZIP descargable', async () => {
@@ -585,6 +779,57 @@ describe('asistente', () => {
 
     expect(response.body.propuesta).toHaveLength(0);
     expect(response.body.aclaracion).toBeTruthy();
+  });
+
+  it('el historial devuelve lo que guardó una orden previa', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/asistente`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ texto: 'crea la clase Cliente' });
+
+    const historial = await request(app)
+      .get(`/api/proyectos/${proyectoId}/asistente/historial`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(historial.status).toBe(200);
+    expect(historial.body.turnos.map((t: { texto: string }) => t.texto)).toContain(
+      'crea la clase Cliente',
+    );
+  });
+
+  it('el historial se comparte entre los integrantes del mismo proyecto, cada turno firmado por su autor', async () => {
+    const ana = await registrar('ana@ejemplo.com');
+    const beto = await registrar('beto@ejemplo.com');
+    const proyectoId = await crearProyecto(ana);
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/miembros`)
+      .set('Authorization', `Bearer ${ana}`)
+      .send({ email: 'beto@ejemplo.com', rol: 'editor' });
+
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/asistente`)
+      .set('Authorization', `Bearer ${ana}`)
+      .send({ texto: 'crea la clase Cliente' });
+
+    // Beto no escribió nada todavía y ya ve lo que pidió Ana: es un hilo de
+    // proyecto, no uno privado por integrante.
+    const historialDeBeto = await request(app)
+      .get(`/api/proyectos/${proyectoId}/asistente/historial`)
+      .set('Authorization', `Bearer ${beto}`);
+
+    expect(historialDeBeto.status).toBe(200);
+    const turnoDeAna = historialDeBeto.body.turnos.find(
+      (t: { texto: string }) => t.texto === 'crea la clase Cliente',
+    );
+    expect(turnoDeAna).toMatchObject({ role: 'user', autorNombre: 'ana' });
+
+    const turnoDelAsistente = historialDeBeto.body.turnos.find(
+      (t: { role: string }) => t.role === 'assistant',
+    );
+    expect(turnoDelAsistente).toMatchObject({ autorNombre: null });
   });
 });
 

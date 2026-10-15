@@ -11,6 +11,8 @@
  * convención final, anotaciones JPA elegidas, columnas calculadas.
  */
 
+export type DatabaseTarget = 'postgres' | 'mongodb' | 'cassandra';
+
 export interface ProjectIR {
   groupId: string;
   artifactId: string;
@@ -22,6 +24,8 @@ export interface ProjectIR {
   javaVersion: string;
   springBootVersion: string;
   databaseName: string;
+  /** Motor de persistencia objetivo: decide qué plantillas usa generate.ts. */
+  databaseTarget: DatabaseTarget;
 }
 
 export type JpaAssociationKind = 'OneToOne' | 'OneToMany' | 'ManyToOne' | 'ManyToMany';

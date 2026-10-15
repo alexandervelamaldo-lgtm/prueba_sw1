@@ -1,0 +1,112 @@
+package {{{pkg}}}.service.impl;
+
+import {{{pkg}}}.domain.{{{entity.className}}};
+import {{{pkg}}}.dto.{{{entity.className}}}Request;
+import {{{pkg}}}.dto.{{{entity.className}}}Response;
+import {{{pkg}}}.dto.mapper.{{{entity.className}}}Mapper;
+import {{{project.basePackage}}}.exception.ResourceNotFoundException;
+import {{{pkg}}}.repository.{{{entity.className}}}Repository;
+import {{{pkg}}}.service.{{{entity.className}}}Service;
+import java.util.ArrayList;
+import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
+{{#if identifierImport}}
+import {{{identifierImport}}};
+{{/if}}
+{{#each serviceImports}}
+import {{{this}}};
+{{/each}}
+
+/**
+ * Capa 3 — Implementación del servicio de {{{entity.className}}} (Cassandra).
+ *
+ * Generado a partir del diagrama «{{{project.name}}}». No editar a mano: la
+ * lógica de negocio propia va en una clase aparte que colabore con esta.
+ *
+ * `CassandraRepository` no soporta `findAll(Pageable)` —a diferencia de
+ * `MongoRepository`, no extiende `PagingAndSortingRepository`—, así que
+ * `findAll` trae todas las filas y pagina en memoria. Para un volumen de
+ * datos que no cabe en memoria esto no escala, pero es el mismo límite que
+ * ya acepta esta herramienta en la variante PostgreSQL para una paginación
+ * fuera de índice.
+ *
+ * Sin `@Transactional`: igual que en Mongo, no hay un gestor de transacciones
+ * configurado y declarar la anotación sin él falla en tiempo de ejecución en
+ * vez de simplemente no hacer nada.
+ */
+@Service
+public class {{{entity.className}}}ServiceImpl implements {{{entity.className}}}Service {
+
+    private final {{{entity.className}}}Repository repository;
+    private final {{{entity.className}}}Mapper mapper;
+
+    public {{{entity.className}}}ServiceImpl({{{entity.className}}}Repository repository,
+                                            {{{entity.className}}}Mapper mapper) {
+        this.repository = repository;
+        this.mapper = mapper;
+    }
+
+    @Override
+    public Page<{{{entity.className}}}Response> findAll(Pageable pageable) {
+        List<{{{entity.className}}}> todas = new ArrayList<>();
+        repository.findAll().forEach(todas::add);
+
+        int total = todas.size();
+        int desde = Math.min((int) pageable.getOffset(), total);
+        int hasta = Math.min(desde + pageable.getPageSize(), total);
+
+        List<{{{entity.className}}}Response> contenido = todas.subList(desde, hasta).stream()
+                .map(mapper::toResponse)
+                .toList();
+        return new PageImpl<>(contenido, pageable, total);
+    }
+
+    @Override
+    public {{{entity.className}}}Response findById({{{entity.identifier.javaType}}} id) {
+        return repository.findById(id)
+                .map(mapper::toResponse)
+                .orElseThrow(() -> new ResourceNotFoundException("{{{entity.className}}}", id));
+    }
+
+    @Override
+    public {{{entity.className}}}Response create({{{entity.className}}}Request request) {
+        {{{entity.className}}} entity = mapper.toEntity(request);
+        return mapper.toResponse(repository.save(entity));
+    }
+
+    @Override
+    public {{{entity.className}}}Response update({{{entity.identifier.javaType}}} id, {{{entity.className}}}Request request) {
+        {{{entity.className}}} entity = repository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("{{{entity.className}}}", id));
+        mapper.update(entity, request);
+        return mapper.toResponse(repository.save(entity));
+    }
+
+    @Override
+    public void delete({{{entity.identifier.javaType}}} id) {
+        if (!repository.existsById(id)) {
+            throw new ResourceNotFoundException("{{{entity.className}}}", id);
+        }
+        repository.deleteById(id);
+    }
+{{#if hasServiceMethods}}
+
+    // Operaciones del diagrama.
+    //
+    // Lanzan en lugar de devolver un valor por defecto a propósito. El diagrama
+    // declara la firma pero no dice qué hace el método, y un `return null`
+    // compilaría, pasaría desapercibido y reventaría más tarde y en otro sitio.
+    // Así el fallo ocurre donde está la causa y con el nombre puesto.
+{{#each serviceMethods}}
+
+    @Override
+    public {{{this.signature}}} {
+        throw new UnsupportedOperationException(
+                "Sin implementar: «{{{this.name}}}» viene del diagrama, que no dice qué hace.");
+    }
+{{/each}}
+{{/if}}
+}

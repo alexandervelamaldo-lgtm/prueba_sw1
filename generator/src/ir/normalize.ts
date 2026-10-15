@@ -20,6 +20,7 @@ import {
 import type {
   AssociationIR,
   ColumnDDL,
+  DatabaseTarget,
   EntityIR,
   EnumIR,
   FieldIR,
@@ -50,6 +51,8 @@ export interface NormalizeOptions {
   springBootVersion?: string;
   groupId?: string;
   inheritanceStrategy?: 'SINGLE_TABLE' | 'JOINED' | 'TABLE_PER_CLASS';
+  /** Anula `diagram.meta.motorBD`, igual que `inheritanceStrategy` anula la estrategia persistida. */
+  databaseTarget?: DatabaseTarget;
 }
 
 export function normalize(
@@ -79,6 +82,18 @@ export function normalize(
       entityClasses,
     }),
   );
+
+  // Simplificación deliberada de las variantes MongoDB y Cassandra: todo
+  // identificador pasa a String. El tipo por omisión (Long, pensado para una
+  // secuencia de PostgreSQL) no se autogenera en ninguna de las dos, y forzar
+  // String deja que tanto el id sintetizado como el de cualquier asociación
+  // (ver `idJavaType` en `render/generate.ts`) salgan consistentes sin tocar
+  // `buildEntity`.
+  if (project.databaseTarget === 'mongodb' || project.databaseTarget === 'cassandra') {
+    for (const entity of entities) {
+      entity.identifier = { ...entity.identifier, javaType: 'String', javaImport: undefined };
+    }
+  }
 
   const enums: EnumIR[] = enumClasses.map((cls) => ({
     className: toPascalCase(cls.name),
@@ -113,6 +128,7 @@ function buildProject(diagram: ClassDiagram, options: NormalizeOptions): Project
     javaVersion: options.javaVersion ?? '17',
     springBootVersion: options.springBootVersion ?? '3.3.5',
     databaseName: toSnakeCase(diagram.meta.artifactId) || 'app',
+    databaseTarget: options.databaseTarget ?? diagram.meta.motorBD ?? 'postgres',
   };
 }
 

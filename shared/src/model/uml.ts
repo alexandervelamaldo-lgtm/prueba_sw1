@@ -171,11 +171,21 @@ export const UmlRelationSchema = z.object({
   associationClassId: IdSchema.optional(),
 });
 
+export const DatabaseTargetSchema = z.enum(['postgres', 'mongodb', 'cassandra']);
+
 export const DiagramMetaSchema = z.object({
   /** Paquete base del proyecto generado. */
   basePackage: z.string().default('com.ejemplo.proyecto'),
   artifactId: z.string().default('proyecto'),
   description: z.string().default(''),
+  /**
+   * Motor de persistencia del backend generado. `postgres` mapea a JPA con
+   * relaciones reales (`@ManyToOne`, `@JoinTable`); `mongodb` y `cassandra` no
+   * tienen joins, así que las asociaciones salen como un campo `*Id` plano que
+   * el servicio resuelve a mano. Por defecto `postgres` para no cambiar el
+   * comportamiento de ningún diagrama ya guardado.
+   */
+  motorBD: DatabaseTargetSchema.default('postgres'),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
 });
@@ -190,6 +200,7 @@ export const ClassDiagramSchema = z.object({
 });
 
 export type Id = z.infer<typeof IdSchema>;
+export type DatabaseTarget = z.infer<typeof DatabaseTargetSchema>;
 export type Visibility = z.infer<typeof VisibilitySchema>;
 export type ClassKind = z.infer<typeof ClassKindSchema>;
 export type RelationKind = z.infer<typeof RelationKindSchema>;

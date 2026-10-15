@@ -1,0 +1,109 @@
+package {{{pkg}}}.domain;
+
+import org.springframework.data.cassandra.core.mapping.Indexed;
+import org.springframework.data.cassandra.core.mapping.PrimaryKey;
+import org.springframework.data.cassandra.core.mapping.Table;
+{{#if hasValidations}}
+import jakarta.validation.constraints.*;
+{{/if}}
+{{#each imports}}
+import {{{this}}};
+{{/each}}
+import java.util.Objects;
+
+/**
+ * Fila {{{entity.className}}} (Cassandra).
+ *
+ * Generado a partir del diagrama «{{{project.name}}}». No editar a mano: los
+ * cambios se pierden en la siguiente generación. La herencia del diagrama se
+ * aplana aquí: esta clase lleva sus propios campos más los de cada
+ * superclase, sin `extends` ni jerarquía de tablas. Las asociaciones a-uno se
+ * guardan como el identificador plano de la fila referida, nunca como una
+ * clave ajena ni una fila embebida (Cassandra no soporta joins).
+ *
+ * Los campos únicos llevan `@Indexed`: Cassandra exige un índice secundario
+ * para resolver `findBy{{{entity.className}}}` sobre una columna que no es la
+ * clave de partición, o la consulta falla en tiempo de ejecución en vez de
+ * caer a un `ALLOW FILTERING` silencioso.
+ */
+@Table("{{{entity.tableName}}}")
+public class {{{entity.className}}} {
+
+    @PrimaryKey
+    private {{{entity.identifier.javaType}}} {{{entity.identifier.name}}};
+
+{{#each allFields}}
+{{#each validations}}
+    {{{this}}}
+{{/each}}
+{{#if unique}}
+    @Indexed
+{{/if}}
+    private {{{javaType}}} {{{name}}};
+
+{{/each}}
+{{#each toOneAssociations}}
+    private {{{idJavaType}}} {{{idFieldName}}};
+
+{{/each}}
+    public {{{entity.className}}}() {
+        // Constructor sin argumentos requerido por Spring Data Cassandra.
+    }
+
+    public {{{entity.identifier.javaType}}} {{{entity.identifier.getterName}}}() {
+        return {{{entity.identifier.name}}};
+    }
+
+    public void {{{entity.identifier.setterName}}}({{{entity.identifier.javaType}}} {{{entity.identifier.name}}}) {
+        this.{{{entity.identifier.name}}} = {{{entity.identifier.name}}};
+    }
+
+{{#each allFields}}
+    public {{{javaType}}} {{{getterName}}}() {
+        return {{{name}}};
+    }
+
+    public void {{{setterName}}}({{{javaType}}} {{{name}}}) {
+        this.{{{name}}} = {{{name}}};
+    }
+
+{{/each}}
+{{#each toOneAssociations}}
+    public {{{idJavaType}}} {{{idGetterName}}}() {
+        return {{{idFieldName}}};
+    }
+
+    public void {{{idSetterName}}}({{{idJavaType}}} {{{idFieldName}}}) {
+        this.{{{idFieldName}}} = {{{idFieldName}}};
+    }
+
+{{/each}}
+{{#each interfaceMethods}}
+    @Override
+    public {{{signature}}} {
+        throw new UnsupportedOperationException(
+                "Declarado en el diagrama y pendiente de implementar: {{{name}}}");
+    }
+
+{{/each}}
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof {{{entity.className}}})) {
+            return false;
+        }
+        {{{entity.className}}} that = ({{{entity.className}}}) other;
+        return {{{entity.identifier.getterName}}}() != null
+            && Objects.equals({{{entity.identifier.getterName}}}(), that.{{{entity.identifier.getterName}}}());
+    }
+
+    @Override
+    public int hashCode() {
+        // Constante deliberada: el identificador es null antes de guardar y
+        // cambiar el hash tras el insert rompería cualquier HashSet que ya
+        // contenga la fila.
+        return getClass().hashCode();
+    }
+}

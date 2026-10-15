@@ -1,6 +1,7 @@
 import type {
   AvisoImportacion,
   ClassDiagram,
+  DatabaseTarget,
   DiagramaExtraido,
   MensajePublico,
   Operation,
@@ -51,6 +52,15 @@ export interface Proyecto {
   createdAt: string;
   updatedAt: string;
   role: Rol;
+}
+
+/** Un punto de control guardado, sin el estado Yjs que lo respalda. */
+export interface VersionResumen {
+  id: string;
+  proyectoId: string;
+  mensaje: string;
+  autorId: string;
+  creadoEn: string;
 }
 
 export interface Miembro {
@@ -319,6 +329,10 @@ export const api = {
       body: JSON.stringify({ texto }),
     }),
 
+  /** Lo ya hablado con el asistente en este proyecto: un hilo compartido por todo el equipo (Modo IA). */
+  obtenerHistorialAsistente: (id: string) =>
+    pedir<{ turnos: TurnoAsistente[] }>(`/proyectos/${id}/asistente/historial`),
+
   /**
    * Pregunta a la guía a través del servidor.
    *
@@ -455,6 +469,29 @@ export const api = {
    */
   descargarAudioDelTablon: (id: string, mensajeId: string) =>
     pedirBinario(`/proyectos/${id}/tablon/${mensajeId}/audio`),
+
+  // -------------------------------------------------------------------------
+  // Versiones del proyecto
+  // -------------------------------------------------------------------------
+
+  /** En orden cronológico ascendente, igual que la respuesta del servidor. */
+  listarVersiones: (id: string) => pedir<{ versiones: VersionResumen[] }>(`/proyectos/${id}/versiones`),
+
+  crearVersion: (id: string, mensaje: string) =>
+    pedir<{ version: VersionResumen }>(`/proyectos/${id}/versiones`, {
+      method: 'POST',
+      body: JSON.stringify({ mensaje }),
+    }),
+
+  /** El diagrama de una versión guardada, sin tocar el documento en vivo: para comparar, no para restaurar. */
+  verVersion: (id: string, versionId: string) =>
+    pedir<{ version: VersionResumen; diagrama: ClassDiagram }>(`/proyectos/${id}/versiones/${versionId}`),
+
+  /** Sustituye el diagrama en vivo por el de esta versión. Solo `owner`. */
+  restaurarVersion: (id: string, versionId: string) =>
+    pedir<{ diagrama: ClassDiagram }>(`/proyectos/${id}/versiones/${versionId}/restaurar`, {
+      method: 'POST',
+    }),
 };
 
 export interface RelacionRevisada {
@@ -529,6 +566,27 @@ export interface RespuestaAsistente {
   propuesta: PropuestaAsistente[];
 }
 
+/**
+ * Un turno del historial del Modo IA (ver `GET /:proyectoId/asistente/historial`).
+ *
+ * `autorId`/`autorNombre` son `null` en los turnos del propio asistente. En
+ * los de un integrante llevan quién escribió ese turno: el hilo es del
+ * proyecto entero, no uno privado por persona.
+ */
+export interface TurnoAsistente {
+  role: 'user' | 'assistant';
+  texto: string;
+  autorId: string | null;
+  autorNombre: string | null;
+  creadoEn: string;
+  /**
+   * `'observacion'` es un comentario que la IA soltó sola, sin que nadie le
+   * escribiera —ver `ai/vigilancia.ts` en el backend—, y por eso solo aparece
+   * en turnos de rol `assistant`. `'respuesta'` es un turno de los de siempre.
+   */
+  tipo: 'respuesta' | 'observacion';
+}
+
 /** Una sección del manual tal y como la manda el servidor. */
 export interface FuenteDeLaGuia {
   documento: string;
@@ -579,6 +637,7 @@ export interface OpcionesGeneracion {
   paqueteBase?: string;
   artifactId?: string;
   estrategiaHerencia?: string;
+  motorBD?: DatabaseTarget;
 }
 
 /**
@@ -649,6 +708,7 @@ export async function descargarProyecto(
 export async function descargarFlutter(
   id: string,
   nombreSugerido: string,
+  opciones: OpcionesGeneracion = {},
 ): Promise<{ donde: string }> {
   const cabeceras = new Headers({ 'Content-Type': 'application/json' });
   if (tokenActual) cabeceras.set('Authorization', `Bearer ${tokenActual}`);
@@ -656,7 +716,7 @@ export async function descargarFlutter(
   const respuesta = await fetch(`/api/proyectos/${id}/generacion/flutter`, {
     method: 'POST',
     headers: cabeceras,
-    body: JSON.stringify({}),
+    body: JSON.stringify(opciones),
   }).catch(() => { throw new ApiError(0, 'No hay conexión con el servidor'); });
 
   if (!respuesta.ok) {

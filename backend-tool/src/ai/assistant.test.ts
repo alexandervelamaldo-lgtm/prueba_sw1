@@ -234,6 +234,65 @@ describe('LlmAssistant contra un proveedor simulado', () => {
   });
 });
 
+const diagramaProblematico = createDiagram({
+  id: 'D2',
+  name: 'Prueba',
+  classes: {
+    C1: createClass({
+      id: 'C1',
+      name: 'Factura',
+      attributes: [createAttribute({ id: 'A1', name: 'precio', type: 'String' })],
+    }),
+  },
+});
+
+describe('GrammarAssistant.revisar', () => {
+  it('un diagrama sin nada que objetar no produce comentario', async () => {
+    expect(await new GrammarAssistant().revisar(diagrama)).toBeNull();
+  });
+
+  it('con un hallazgo, lo convierte en un comentario en primera persona', async () => {
+    const comentario = await new GrammarAssistant().revisar(diagramaProblematico);
+    expect(comentario).toContain('He revisado el diagrama');
+    expect(comentario).toContain('Factura.precio');
+  });
+});
+
+describe('LlmAssistant.revisar contra un proveedor simulado', () => {
+  it('manda el prompt de revisión, no el de interpretar órdenes', async () => {
+    responder = () => ({ status: 200, payload: comoOpenAi('NADA') });
+    await motor().revisar(diagrama);
+
+    const mensajes = recibidos[0]?.messages as { role: string; content: string }[];
+    const sistema = mensajes.find((m) => m.role === 'system')?.content ?? '';
+    expect(sistema).toContain('hablas sin que nadie te haya preguntado nada');
+  });
+
+  it('cuando el modelo responde NADA, no hay comentario', async () => {
+    responder = () => ({ status: 200, payload: comoOpenAi('NADA') });
+    expect(await motor().revisar(diagrama)).toBeNull();
+  });
+
+  it('devuelve el comentario del modelo tal cual, sin pasarlo por JSON', async () => {
+    responder = () => ({
+      status: 200,
+      payload: comoOpenAi('Esta relación entre Factura y Cliente parece de agregación.'),
+    });
+
+    const comentario = await motor().revisar(diagrama);
+    expect(comentario).toBe('Esta relación entre Factura y Cliente parece de agregación.');
+  });
+
+  it('degrada al revisor local cuando el proveedor falla', async () => {
+    responder = () => ({ status: 500, payload: { error: 'boom' } });
+
+    const comentario = await motor().revisar(diagramaProblematico);
+    // La misma salida que daría GrammarAssistant.revisar sobre el mismo diagrama.
+    expect(comentario).toContain('He revisado el diagrama');
+    expect(comentario).toContain('Factura.precio');
+  });
+});
+
 describe('createAssistant', () => {
   it('sin clave devuelve la gramática, que no es un modo degradado', () => {
     const motorSinClave = createAssistant({});

@@ -97,9 +97,11 @@ describe('leer lo guardado', () => {
     expect(Object.keys(disposicion.abiertos).sort()).toEqual([
       'arbol',
       'historial',
+      'ia',
       'paleta',
       'propiedades',
       'tablon',
+      'versiones',
     ]);
   });
 });

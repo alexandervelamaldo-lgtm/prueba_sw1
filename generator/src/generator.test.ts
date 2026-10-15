@@ -1066,3 +1066,171 @@ describe('métodos del diagrama en la capa de servicio', () => {
     expect(fileNamed(rrhh, 'domain/Auditable.java').content).toContain('String obtenerResumen();');
   });
 });
+
+describe('generación con MongoDB', () => {
+  const ir = normalize(tiendaDiagram(), { databaseTarget: 'mongodb' });
+  const files = generateProject(ir);
+
+  it('usa el starter de Mongo en el pom y no el de JPA/Flyway', () => {
+    const pom = fileNamed(files, 'pom.xml').content;
+    expect(pom).toContain('spring-boot-starter-data-mongodb');
+    expect(pom).not.toContain('spring-boot-starter-data-jpa');
+    expect(pom).not.toContain('flyway');
+  });
+
+  it('no emite migraciones ni datos semilla en SQL', () => {
+    expect(files.some((f) => f.path.includes('db/migration'))).toBe(false);
+    expect(files.some((f) => f.path.endsWith('.sql'))).toBe(false);
+  });
+
+  it('configura Mongo en application.yml y docker-compose.yml', () => {
+    const yml = fileNamed(files, 'application.yml').content;
+    expect(yml).toContain('mongodb:');
+    expect(yml).toContain('uri: mongodb://');
+
+    const compose = fileNamed(files, 'docker-compose.yml').content;
+    expect(compose).toContain('image: mongo:');
+  });
+
+  it('declara la entidad como @Document, no @Entity', () => {
+    const pedido = fileNamed(files, 'domain/Pedido.java').content;
+    expect(pedido).toContain('@Document(collection = "pedidos")');
+    expect(pedido).not.toContain('@Entity');
+    expect(pedido).not.toContain('@ManyToOne');
+    expect(pedido).not.toContain('@OneToMany');
+  });
+
+  it('guarda las asociaciones a-uno como identificador plano', () => {
+    const pedido = fileNamed(files, 'domain/Pedido.java').content;
+    expect(pedido).toContain('private String clienteId;');
+    expect(pedido).toContain('public String getClienteId()');
+    expect(pedido).not.toContain('private Cliente cliente;');
+
+    const request = fileNamed(files, 'dto/PedidoRequest.java').content;
+    expect(request).toContain('String clienteId');
+  });
+
+  it('usa MongoRepository en lugar de JpaRepository', () => {
+    const repo = fileNamed(files, 'repository/PedidoRepository.java').content;
+    expect(repo).toContain('extends MongoRepository<Pedido, String>');
+  });
+
+  it('no usa @Transactional sin un gestor de transacciones de Mongo configurado', () => {
+    const impl = fileNamed(files, 'service/impl/PedidoServiceImpl.java').content;
+    // La anotación real está en una línea propia; el comentario explicativo
+    // la menciona entre comillas, así que una búsqueda de subcadena simple
+    // marcaría ese comentario como un falso positivo.
+    expect(impl).not.toMatch(/^\s*@Transactional\s*$/m);
+    expect(impl).not.toContain('import org.springframework.transaction.annotation.Transactional;');
+  });
+
+  it('no deja marcadores de plantilla sin sustituir', () => {
+    for (const file of files.filter((f) => f.path !== 'postman_collection.json')) {
+      expect(file.content, file.path).not.toContain('{{');
+      expect(file.content, file.path).not.toContain('undefined');
+    }
+  });
+
+  it('no genera documento ni CRUD para una superclase abstracta', () => {
+    const rrhhFiles = generateProject(normalize(rrhhDiagram(), { databaseTarget: 'mongodb' }));
+    expect(rrhhFiles.some((f) => f.path.endsWith('domain/Persona.java'))).toBe(false);
+    expect(rrhhFiles.some((f) => f.path.endsWith('controller/PersonaController.java'))).toBe(
+      false,
+    );
+    expect(rrhhFiles.some((f) => f.path.endsWith('domain/Empleado.java'))).toBe(true);
+
+    const empleado = fileNamed(rrhhFiles, 'domain/Empleado.java').content;
+    // Herencia aplanada: sin `extends`, los campos de Persona viven aquí.
+    expect(empleado).not.toContain('extends Persona');
+    expect(empleado).toContain('private String nombre;');
+    expect(empleado).toContain('private String documento;');
+  });
+});
+
+describe('generación con Cassandra', () => {
+  const ir = normalize(tiendaDiagram(), { databaseTarget: 'cassandra' });
+  const files = generateProject(ir);
+
+  it('usa el starter de Cassandra en el pom y no el de JPA/Flyway/Mongo', () => {
+    const pom = fileNamed(files, 'pom.xml').content;
+    expect(pom).toContain('spring-boot-starter-data-cassandra');
+    expect(pom).not.toContain('spring-boot-starter-data-jpa');
+    expect(pom).not.toContain('spring-boot-starter-data-mongodb');
+    expect(pom).not.toContain('flyway');
+  });
+
+  it('no emite migraciones ni datos semilla en SQL', () => {
+    expect(files.some((f) => f.path.includes('db/migration'))).toBe(false);
+    expect(files.some((f) => f.path.endsWith('.sql'))).toBe(false);
+  });
+
+  it('configura Cassandra en application.yml y un keyspace en docker-compose.yml', () => {
+    const yml = fileNamed(files, 'application.yml').content;
+    expect(yml).toContain('cassandra:');
+    expect(yml).toContain('schema-action: create-if-not-exists');
+
+    const compose = fileNamed(files, 'docker-compose.yml').content;
+    expect(compose).toContain('image: cassandra:');
+    // La imagen oficial no crea el keyspace sola: hace falta el servicio aparte.
+    expect(compose).toContain('db-init');
+    expect(compose).toContain('CREATE KEYSPACE IF NOT EXISTS');
+  });
+
+  it('declara la entidad como @Table/@PrimaryKey, no @Entity ni @Document', () => {
+    const pedido = fileNamed(files, 'domain/Pedido.java').content;
+    expect(pedido).toContain('@Table("pedidos")');
+    expect(pedido).toContain('@PrimaryKey');
+    expect(pedido).not.toContain('@Entity');
+    expect(pedido).not.toContain('@Document');
+    expect(pedido).not.toContain('@ManyToOne');
+    expect(pedido).not.toContain('@OneToMany');
+  });
+
+  it('guarda las asociaciones a-uno como identificador plano', () => {
+    const pedido = fileNamed(files, 'domain/Pedido.java').content;
+    expect(pedido).toContain('private String clienteId;');
+    expect(pedido).toContain('public String getClienteId()');
+    expect(pedido).not.toContain('private Cliente cliente;');
+
+    const request = fileNamed(files, 'dto/PedidoRequest.java').content;
+    expect(request).toContain('String clienteId');
+  });
+
+  it('usa CassandraRepository en lugar de JpaRepository/MongoRepository', () => {
+    const repo = fileNamed(files, 'repository/PedidoRepository.java').content;
+    expect(repo).toContain('extends CassandraRepository<Pedido, String>');
+  });
+
+  it('pagina en memoria en vez de usar findAll(Pageable), que CassandraRepository no ofrece', () => {
+    const impl = fileNamed(files, 'service/impl/PedidoServiceImpl.java').content;
+    expect(impl).not.toContain('findAll(pageable)');
+    expect(impl).toContain('new PageImpl<>(');
+  });
+
+  it('no usa @Transactional sin un gestor de transacciones configurado', () => {
+    const impl = fileNamed(files, 'service/impl/PedidoServiceImpl.java').content;
+    expect(impl).not.toMatch(/^\s*@Transactional\s*$/m);
+    expect(impl).not.toContain('import org.springframework.transaction.annotation.Transactional;');
+  });
+
+  it('no deja marcadores de plantilla sin sustituir', () => {
+    for (const file of files.filter((f) => f.path !== 'postman_collection.json')) {
+      expect(file.content, file.path).not.toContain('{{');
+      expect(file.content, file.path).not.toContain('undefined');
+    }
+  });
+
+  it('no genera fila ni CRUD para una superclase abstracta', () => {
+    const rrhhFiles = generateProject(normalize(rrhhDiagram(), { databaseTarget: 'cassandra' }));
+    expect(rrhhFiles.some((f) => f.path.endsWith('domain/Persona.java'))).toBe(false);
+    expect(rrhhFiles.some((f) => f.path.endsWith('controller/PersonaController.java'))).toBe(
+      false,
+    );
+    expect(rrhhFiles.some((f) => f.path.endsWith('domain/Empleado.java'))).toBe(true);
+
+    const empleado = fileNamed(rrhhFiles, 'domain/Empleado.java').content;
+    expect(empleado).not.toContain('extends Persona');
+    expect(empleado).toContain('private String nombre;');
+    expect(empleado).toContain('private String documento;');
+  });
+});

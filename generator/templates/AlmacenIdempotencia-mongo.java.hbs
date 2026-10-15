@@ -1,0 +1,114 @@
+package {{{project.basePackage}}}.infraestructura;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Optional;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.stereotype.Component;
+
+/**
+ * Acceso a la colección `idempotencia` (MongoDB).
+ *
+ * La clave de idempotencia es el `_id` del documento: un `insert()` con `_id`
+ * repetido falla con `DuplicateKeyException` en lugar de sobrescribir, que es
+ * la misma exclusión mutua que el `ON CONFLICT (clave) DO NOTHING` de la
+ * variante PostgreSQL, resuelta aquí por el índice único implícito del `_id`
+ * en vez de una cláusula SQL.
+ *
+ * Generado a partir del diagrama «{{{project.name}}}». No editar a mano.
+ */
+@Component
+public class AlmacenIdempotencia {
+
+    /**
+     * A partir de aquí, una reserva sin completar se da por abandonada. Mismo
+     * plazo y mismo motivo que en la variante PostgreSQL.
+     */
+    private static final Duration PLAZO_ABANDONO = Duration.ofMinutes(2);
+
+    private final MongoTemplate mongo;
+
+    public AlmacenIdempotencia(MongoTemplate mongo) {
+        this.mongo = mongo;
+    }
+
+    @Document(collection = "idempotencia")
+    static class Documento {
+        String id;
+        String huella;
+        boolean completada;
+        Integer estadoHttp;
+        String cuerpo;
+        String tipoContenido;
+        Instant creadaEn;
+    }
+
+    /** Lo que se sabe de una clave ya vista. */
+    public record Registro(String huella, boolean completada, Integer estadoHttp,
+                           String cuerpo, String tipoContenido) {
+    }
+
+    /**
+     * Intenta reservar la clave.
+     *
+     * Devuelve `true` si esta petición es la primera y debe ejecutarse.
+     */
+    public boolean reservar(String clave, String huella) {
+        Documento doc = new Documento();
+        doc.id = clave;
+        doc.huella = huella;
+        doc.completada = false;
+        doc.creadaEn = Instant.now();
+        try {
+            mongo.insert(doc);
+            return true;
+        } catch (DuplicateKeyException ex) {
+            return false;
+        }
+    }
+
+    public Optional<Registro> buscar(String clave) {
+        Documento doc = mongo.findById(clave, Documento.class);
+        if (doc == null) {
+            return Optional.empty();
+        }
+        return Optional.of(
+                new Registro(doc.huella, doc.completada, doc.estadoHttp, doc.cuerpo, doc.tipoContenido));
+    }
+
+    /** Guarda la respuesta para poder repetirla ante un reenvío. */
+    public void completar(String clave, int estadoHttp, String cuerpo, String tipoContenido) {
+        Update update = new Update()
+                .set("completada", true)
+                .set("estadoHttp", estadoHttp)
+                .set("cuerpo", cuerpo)
+                .set("tipoContenido", tipoContenido);
+        mongo.updateFirst(Query.query(Criteria.where("_id").is(clave)), update, Documento.class);
+    }
+
+    /**
+     * Libera la reserva sin guardar respuesta.
+     *
+     * Se llama cuando la petición no terminó en 2xx. Mismo motivo que en la
+     * variante PostgreSQL: repetir no duplica nada si no se escribió nada.
+     */
+    public void liberar(String clave) {
+        mongo.remove(Query.query(Criteria.where("_id").is(clave)), Documento.class);
+    }
+
+    /**
+     * Retira una reserva abandonada para que quien pregunta pueda quedársela.
+     * Devuelve `true` si la retiró.
+     */
+    public boolean caducarSiAbandonada(String clave) {
+        Instant limite = Instant.now().minus(PLAZO_ABANDONO);
+        Query query = Query.query(
+                Criteria.where("_id").is(clave).and("completada").is(false).and("creadaEn").lt(limite));
+        return mongo.remove(query, Documento.class).getDeletedCount() > 0;
+    }
+}

@@ -41,6 +41,15 @@ export interface ToOneView {
   targetVar: string;
   idComponentName: string;
   nullable: boolean;
+  /**
+   * Campo de id plano y sus accesores. Solo los usa la variante MongoDB, que
+   * no guarda un objeto de referencia sino directamente el identificador del
+   * documento referido (ver `entity-mongo.java.hbs`).
+   */
+  idFieldName: string;
+  idJavaType: string;
+  idGetterName: string;
+  idSetterName: string;
 }
 
 export interface RepositoryDependency {
@@ -114,7 +123,9 @@ export function buildEntityView(ir: GenerationIR, entity: EntityIR): EntityView 
   // Solo el lado propietario: es el que lleva la clave ajena. Fijar el extremo
   // inverso desde el DTO no escribiría nada en la base de datos.
   const owningToOne = entity.associations.filter((a) => !a.collection && a.owning);
-  const toOneAssociations = owningToOne.map(toOneView);
+  const toOneAssociations = owningToOne.map((a) =>
+    toOneView(a, byName.get(a.targetClass)?.identifier?.javaType ?? 'Long'),
+  );
 
   const identifierComponent: DtoComponent = {
     name: 'id',
@@ -132,16 +143,25 @@ export function buildEntityView(ir: GenerationIR, entity: EntityIR): EntityView 
     }),
   );
 
+  // Mongo y Cassandra comparten el mismo esquema de asociación: id plano en
+  // la propia entidad, sin objeto de referencia ni joins (ver `ToOneView`).
+  const usaIdPlano =
+    ir.project.databaseTarget === 'mongodb' || ir.project.databaseTarget === 'cassandra';
   const associationComponents = owningToOne.map((association): DtoComponent => {
     const targetId = byName.get(association.targetClass)?.identifier;
     const idGetter = targetId?.getterName ?? 'getId';
+    // Con id plano la asociación ya vive en la propia entidad (ver
+    // `toOneAssociations`), así que el DTO lo lee directo en vez de recorrer
+    // un objeto de referencia que esta variante no tiene.
+    const accessor = usaIdPlano
+      ? `entity.get${capitalize(association.fieldName)}Id()`
+      : `entity.${association.getterName}() == null ? null ` +
+        `: entity.${association.getterName}().${idGetter}()`;
     return {
       name: `${association.fieldName}Id`,
       javaType: targetId?.javaType ?? 'Long',
       validations: association.nullable ? [] : ['@NotNull'],
-      accessor:
-        `entity.${association.getterName}() == null ? null ` +
-        `: entity.${association.getterName}().${idGetter}()`,
+      accessor,
     };
   });
 
@@ -289,14 +309,23 @@ function mentionsOwnEntity(entity: EntityIR): boolean {
   );
 }
 
-function toOneView(association: AssociationIR): ToOneView {
+function capitalize(name: string): string {
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+function toOneView(association: AssociationIR, targetIdJavaType: string): ToOneView {
+  const idFieldName = `${association.fieldName}Id`;
   return {
     fieldName: association.fieldName,
     setterName: association.setterName,
     targetClass: association.targetClass,
     targetVar: association.targetVar,
-    idComponentName: `${association.fieldName}Id`,
+    idComponentName: idFieldName,
     nullable: association.nullable,
+    idFieldName,
+    idJavaType: targetIdJavaType,
+    idGetterName: `get${capitalize(idFieldName)}`,
+    idSetterName: `set${capitalize(idFieldName)}`,
   };
 }
 
@@ -415,6 +444,17 @@ function raizDe(packageName: string): string {
 }
 
 export function generateProject(ir: GenerationIR): GeneratedFile[] {
+  switch (ir.project.databaseTarget) {
+    case 'mongodb':
+      return generateMongoProject(ir);
+    case 'cassandra':
+      return generateCassandraProject(ir);
+    default:
+      return generatePostgresProject(ir);
+  }
+}
+
+function generatePostgresProject(ir: GenerationIR): GeneratedFile[] {
   const files: GeneratedFile[] = [];
   const javaRoot = `src/main/java/${ir.project.basePackagePath}`;
   const context = {
@@ -563,6 +603,284 @@ export function generateProject(ir: GenerationIR): GeneratedFile[] {
 
   // Al final: necesita la vista de cada entidad concreta, que solo existe una
   // vez recorrido el bucle de arriba.
+  files.push({
+    path: 'postman_collection.json',
+    content: buildPostmanCollection(ir, entityViews),
+  });
+
+  assertSafePaths(files);
+  return files;
+}
+
+/**
+ * Variante MongoDB.
+ *
+ * Mismo árbol de capas 2/3/4 que la variante PostgreSQL —misma `EntityView`,
+ * mismos DTOs y controlador—, pero sin Flyway, sin JPA y sin datos iniciales:
+ * `ir.seed` llega en forma de literales SQL (ver `SeedInsertIR`) y no hay
+ * conversión a documentos Mongo todavía, así que un diagrama con filas de
+ * ejemplo genera igual pero sin sembrarlas. La herencia tampoco se modela con
+ * `extends`: cada entidad concreta lleva sus campos ya aplanados (ver
+ * `entity-mongo.java.hbs` y `allFields` en `buildEntityView`), así que las
+ * clases abstractas no generan documento propio.
+ */
+function generateMongoProject(ir: GenerationIR): GeneratedFile[] {
+  const files: GeneratedFile[] = [];
+  const javaRoot = `src/main/java/${ir.project.basePackagePath}`;
+  const context = { project: ir.project, entities: ir.entities };
+
+  files.push({ path: 'pom.xml', content: render('pom-mongo.xml.hbs', context) });
+  files.push({ path: 'run.bat', content: render('run.bat.hbs', context) });
+  files.push({ path: 'README.md', content: render('README.md.hbs', context) });
+  files.push({ path: '.gitignore', content: render('gitignore.hbs', context) });
+  files.push({
+    path: 'docker-compose.yml',
+    content: render('docker-compose-mongo.yml.hbs', context),
+  });
+  files.push({
+    path: 'src/main/resources/application.yml',
+    content: render('application-mongo.yml.hbs', context),
+  });
+
+  files.push({
+    path: 'src/main/resources/asistente/manifiesto.json',
+    content: renderManifiesto(ir),
+  });
+
+  files.push({
+    path: `${javaRoot}/Application.java`,
+    content: render('Application.java.hbs', context),
+  });
+
+  files.push({
+    path: `${javaRoot}/controller/ManifiestoController.java`,
+    content: render('ManifiestoController.java.hbs', context),
+  });
+
+  files.push({
+    path: `${javaRoot}/infraestructura/AlmacenIdempotencia.java`,
+    content: render('AlmacenIdempotencia-mongo.java.hbs', context),
+  });
+  files.push({
+    path: `${javaRoot}/infraestructura/FiltroIdempotencia.java`,
+    content: render('FiltroIdempotencia.java.hbs', context),
+  });
+
+  for (const name of ['ResourceNotFoundException', 'GlobalExceptionHandler', 'ErrorResponse']) {
+    files.push({
+      path: `${javaRoot}/exception/${name}.java`,
+      content: render(`${name}.java.hbs`, context),
+    });
+  }
+
+  for (const enumeration of ir.enums) {
+    files.push({
+      path: `${raizDe(enumeration.packageName)}/domain/${enumeration.className}.java`,
+      content: render('enum.java.hbs', {
+        project: ir.project,
+        enumeration,
+        pkg: enumeration.packageName,
+      }),
+    });
+  }
+
+  for (const contract of ir.interfaces) {
+    files.push({
+      path: `${raizDe(contract.packageName)}/domain/${contract.className}.java`,
+      content: render('interface.java.hbs', {
+        project: ir.project,
+        contract,
+        pkg: contract.packageName,
+      }),
+    });
+  }
+
+  const entityViews: EntityView[] = [];
+
+  for (const entity of ir.entities) {
+    // Una entidad abstracta no se instancia y aquí no hay `extends`: sus
+    // campos ya viven aplanados en cada subclase concreta (`allFields`), así
+    // que no le corresponde ni documento ni CRUD propio.
+    if (entity.isAbstract) continue;
+
+    const view = buildEntityView(ir, entity);
+    const name = entity.className;
+    const raiz = raizDe(entity.packageName);
+    entityViews.push(view);
+
+    files.push({
+      path: `${raiz}/domain/${name}.java`,
+      content: render('entity-mongo.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/repository/${name}Repository.java`,
+      content: render('repository-mongo.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/dto/${name}Request.java`,
+      content: render('dto-request.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/dto/${name}Response.java`,
+      content: render('dto-response.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/dto/mapper/${name}Mapper.java`,
+      content: render('mapper-mongo.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/service/${name}Service.java`,
+      content: render('service.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/service/impl/${name}ServiceImpl.java`,
+      content: render('service-impl-mongo.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/controller/${name}Controller.java`,
+      content: render('controller.java.hbs', view),
+    });
+  }
+
+  files.push({
+    path: 'postman_collection.json',
+    content: buildPostmanCollection(ir, entityViews),
+  });
+
+  assertSafePaths(files);
+  return files;
+}
+
+/**
+ * Variante Cassandra.
+ *
+ * Mismo árbol de capas 2/3/4 que la variante MongoDB —mismo esquema de
+ * asociación por id plano, misma ausencia de Flyway/JPA/datos iniciales—,
+ * pero con dos diferencias que no admiten reutilizar las plantillas de Mongo
+ * tal cual: `CassandraRepository` no extiende `PagingAndSortingRepository`
+ * (la paginación de `findAll` se hace a mano en `service-impl-cassandra`), y
+ * las consultas derivadas sobre un campo que no es la clave de partición
+ * necesitan un índice secundario explícito (`@Indexed` en
+ * `entity-cassandra.java.hbs`) para no caer en `ALLOW FILTERING`.
+ */
+function generateCassandraProject(ir: GenerationIR): GeneratedFile[] {
+  const files: GeneratedFile[] = [];
+  const javaRoot = `src/main/java/${ir.project.basePackagePath}`;
+  const context = { project: ir.project, entities: ir.entities };
+
+  files.push({ path: 'pom.xml', content: render('pom-cassandra.xml.hbs', context) });
+  files.push({ path: 'run.bat', content: render('run.bat.hbs', context) });
+  files.push({ path: 'README.md', content: render('README.md.hbs', context) });
+  files.push({ path: '.gitignore', content: render('gitignore.hbs', context) });
+  files.push({
+    path: 'docker-compose.yml',
+    content: render('docker-compose-cassandra.yml.hbs', context),
+  });
+  files.push({
+    path: 'src/main/resources/application.yml',
+    content: render('application-cassandra.yml.hbs', context),
+  });
+
+  files.push({
+    path: 'src/main/resources/asistente/manifiesto.json',
+    content: renderManifiesto(ir),
+  });
+
+  files.push({
+    path: `${javaRoot}/Application.java`,
+    content: render('Application.java.hbs', context),
+  });
+
+  files.push({
+    path: `${javaRoot}/controller/ManifiestoController.java`,
+    content: render('ManifiestoController.java.hbs', context),
+  });
+
+  files.push({
+    path: `${javaRoot}/infraestructura/AlmacenIdempotencia.java`,
+    content: render('AlmacenIdempotencia-cassandra.java.hbs', context),
+  });
+  files.push({
+    path: `${javaRoot}/infraestructura/FiltroIdempotencia.java`,
+    content: render('FiltroIdempotencia.java.hbs', context),
+  });
+
+  for (const name of ['ResourceNotFoundException', 'GlobalExceptionHandler', 'ErrorResponse']) {
+    files.push({
+      path: `${javaRoot}/exception/${name}.java`,
+      content: render(`${name}.java.hbs`, context),
+    });
+  }
+
+  for (const enumeration of ir.enums) {
+    files.push({
+      path: `${raizDe(enumeration.packageName)}/domain/${enumeration.className}.java`,
+      content: render('enum.java.hbs', {
+        project: ir.project,
+        enumeration,
+        pkg: enumeration.packageName,
+      }),
+    });
+  }
+
+  for (const contract of ir.interfaces) {
+    files.push({
+      path: `${raizDe(contract.packageName)}/domain/${contract.className}.java`,
+      content: render('interface.java.hbs', {
+        project: ir.project,
+        contract,
+        pkg: contract.packageName,
+      }),
+    });
+  }
+
+  const entityViews: EntityView[] = [];
+
+  for (const entity of ir.entities) {
+    // Igual que en Mongo: sin `extends`, cada entidad concreta ya lleva sus
+    // campos heredados aplanados, así que una superclase abstracta no tiene
+    // tabla ni CRUD propios.
+    if (entity.isAbstract) continue;
+
+    const view = buildEntityView(ir, entity);
+    const name = entity.className;
+    const raiz = raizDe(entity.packageName);
+    entityViews.push(view);
+
+    files.push({
+      path: `${raiz}/domain/${name}.java`,
+      content: render('entity-cassandra.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/repository/${name}Repository.java`,
+      content: render('repository-cassandra.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/dto/${name}Request.java`,
+      content: render('dto-request.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/dto/${name}Response.java`,
+      content: render('dto-response.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/dto/mapper/${name}Mapper.java`,
+      content: render('mapper-cassandra.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/service/${name}Service.java`,
+      content: render('service.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/service/impl/${name}ServiceImpl.java`,
+      content: render('service-impl-cassandra.java.hbs', view),
+    });
+    files.push({
+      path: `${raiz}/controller/${name}Controller.java`,
+      content: render('controller.java.hbs', view),
+    });
+  }
+
   files.push({
     path: 'postman_collection.json',
     content: buildPostmanCollection(ir, entityViews),

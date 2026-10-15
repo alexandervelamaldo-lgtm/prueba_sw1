@@ -6,9 +6,12 @@ import { LocalIdentityProvider, type IdentityProvider } from './auth/identity.js
 import { FileProjectStore, type ProjectStore } from './storage/store.js';
 import { FileDocumentStore } from './storage/documents.js';
 import { FileTablonStore, type TablonStore } from './storage/tablon.js';
+import { FileConversationStore, type ConversationStore } from './storage/conversaciones.js';
+import { FileVersionStore, type VersionStore } from './storage/versiones.js';
 import { RoomManager } from './collab/rooms.js';
 import { CollabServer } from './collab/server.js';
 import { createAssistant, type AssistantEngine } from './ai/assistant.js';
+import { VigilanteDiagrama } from './ai/vigilancia.js';
 import { createVisionEngine, type VisionEngine } from './ai/vision.js';
 import { GuiaDelManual } from './ai/guia.js';
 import { authRouter } from './api/auth.js';
@@ -20,6 +23,7 @@ import { generationRouter } from './api/generation.js';
 import { assistantRouter } from './api/assistant.js';
 import { importRouter } from './api/import.js';
 import { tablonRouter } from './api/tablon.js';
+import { versionesRouter } from './api/versiones.js';
 import { errorHandler, notFound, requireAuth } from './api/http.js';
 import { cabecerasDeSeguridad, limiteDeTasa } from './api/proteccion.js';
 
@@ -52,6 +56,10 @@ export interface AppDependencies {
   rooms: RoomManager;
   /** El tablón del proyecto: comunicación interna por texto y por voz. */
   tablon: TablonStore;
+  /** El historial del Modo IA: un hilo por proyecto, compartido por todos sus integrantes. */
+  conversations: ConversationStore;
+  /** Los puntos de control que alguien crea a propósito, para poder volver a ellos. */
+  versiones: VersionStore;
   assistant: AssistantEngine;
   /** Ausente si esta instalación no tiene modelo de visión configurado. */
   vision?: VisionEngine;
@@ -112,7 +120,10 @@ async function abrirGuia(config: Config): Promise<GuiaDelManual | undefined> {
   }
 }
 
-type Almacenes = Pick<AppDependencies, 'identity' | 'store' | 'rooms' | 'tablon'>;
+type Almacenes = Pick<
+  AppDependencies,
+  'identity' | 'store' | 'rooms' | 'tablon' | 'conversations' | 'versiones'
+>;
 
 async function almacenesDeFichero(config: Config): Promise<Almacenes> {
   return {
@@ -124,6 +135,8 @@ async function almacenesDeFichero(config: Config): Promise<Almacenes> {
     store: await FileProjectStore.open(config.dataDir),
     rooms: new RoomManager(new FileDocumentStore(config.dataDir), config.persistIntervalMs),
     tablon: new FileTablonStore(config.dataDir),
+    conversations: new FileConversationStore(config.dataDir),
+    versiones: new FileVersionStore(config.dataDir),
   };
 }
 
@@ -134,10 +147,12 @@ async function almacenesDeFichero(config: Config): Promise<Almacenes> {
 async function almacenesPostgres(config: Config, databaseUrl: string): Promise<Almacenes> {
   const { abrirPool, aplicarEsquema } = await import('./storage/postgres.js');
   const {
+    PostgresConversationStore,
     PostgresDocumentStore,
     PostgresIdentityProvider,
     PostgresProjectStore,
     PostgresTablonStore,
+    PostgresVersionStore,
   } = await import('./storage/postgres-stores.js');
 
   const pool = await abrirPool(databaseUrl);
@@ -152,11 +167,14 @@ async function almacenesPostgres(config: Config, databaseUrl: string): Promise<A
     // Comparte el pool y no lo cierra: un segundo dueño del mismo pool haría
     // que el primer apagado dejara al otro escribiendo contra un pool cerrado.
     tablon: new PostgresTablonStore(pool),
+    conversations: new PostgresConversationStore(pool),
+    versiones: new PostgresVersionStore(pool),
   };
 }
 
 export function createApp(deps: AppDependencies): BuiltApp {
-  const { config, identity, store, rooms, tablon, assistant, vision, guia } = deps;
+  const { config, identity, store, rooms, tablon, conversations, versiones, assistant, vision, guia } =
+    deps;
   const app = express();
 
   app.disable('x-powered-by');
@@ -180,7 +198,13 @@ export function createApp(deps: AppDependencies): BuiltApp {
   const limiteCuerpo = Math.ceil((config.maxImageBytes * 4) / 3) + 512 * 1024;
   app.use(express.json({ limit: limiteCuerpo }));
 
-  const collab = new CollabServer({ config, identity, store, rooms });
+  // El vigilante se construye aquí y no en `createDependencies`: no es un
+  // almacén que pueda sustituirse por PostgreSQL, es un comportamiento que
+  // combina dos dependencias que ya existen (el asistente y su historial), y
+  // a las pruebas que levantan la aplicación entera les basta con que exista,
+  // sin tener que saber nada de él.
+  const vigilante = new VigilanteDiagrama(assistant, conversations);
+  const collab = new CollabServer({ config, identity, store, rooms, vigilante });
 
   app.get('/salud', (_request, response) => {
     response.json({
@@ -221,14 +245,15 @@ export function createApp(deps: AppDependencies): BuiltApp {
   // gasto, y con contadores separados el máximo real sería el doble.
   protectedApi.use('/:proyectoId/importar-tabla', tasaDeImagen);
   protectedApi.use('/:proyectoId/importar-diagrama', tasaDeImagen);
-  protectedApi.use(projectsRouter({ store, identity, rooms, tablon }));
+  protectedApi.use(projectsRouter({ store, identity, rooms, tablon, conversations, versiones }));
   protectedApi.use(diagramsRouter({ store, rooms }));
+  protectedApi.use(versionesRouter({ store, rooms, versiones }));
   // El tablón no lleva límite de tasa montado aquí: su cuota se aplica ruta a
   // ruta dentro del router, porque el sondeo comparte camino con la publicación
   // y un límite común lo apagaría solo. Ver la cabecera de `api/tablon.ts`.
   protectedApi.use(tablonRouter({ store, identity, tablon }));
   protectedApi.use(generationRouter({ store, rooms }));
-  protectedApi.use(assistantRouter({ store, rooms, assistant }));
+  protectedApi.use(assistantRouter({ store, identity, rooms, assistant, conversations }));
   protectedApi.use(importRouter({ store, rooms, vision, maxImageBytes: config.maxImageBytes }));
   app.use('/api/proyectos', protectedApi);
 

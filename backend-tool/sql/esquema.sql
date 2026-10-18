@@ -161,10 +161,8 @@ create table if not exists tablon_contadores (
 -- `usuario_id` identifica quién escribió cada fila de rol `user` —igual que
 -- `autor_id` en `tablon_mensajes`, y sin clave foránea por la misma razón
 -- (decisión D8): la identidad definitiva la da un proveedor externo. Queda
--- `null` en las filas de rol `assistant`, que no tienen autor humano. Ya no
--- forma parte de cómo se filtra el hilo: toda consulta sobre esta tabla va
--- solo por `proyecto_id`, para que la IA vea lo que le dijo cualquier
--- integrante, no solo quien pregunta ahora.
+-- `null` en las filas de rol `assistant`, que no tienen autor humano. El hilo
+-- se filtra por `hilo_usuario_id` (más abajo), no por esta columna.
 
 create table if not exists conversaciones_ia (
   id          bigserial primary key,
@@ -181,12 +179,8 @@ create table if not exists conversaciones_ia (
 -- esta sentencia no encuentra la restricción y no hace nada.
 alter table conversaciones_ia alter column usuario_id drop not null;
 
--- Sustituye al índice anterior, que llevaba `usuario_id` porque las lecturas
--- filtraban por `(proyecto_id, usuario_id)`. Ahora toda lectura va solo por
--- proyecto.
+-- Índice de una versión anterior; lo sustituye `conversaciones_por_hilo`.
 drop index if exists conversaciones_por_usuario;
-create index if not exists conversaciones_por_proyecto
-  on conversaciones_ia (proyecto_id, id);
 
 -- `tipo` distingue una respuesta de las de siempre —alguien preguntó, la IA
 -- contestó— de un comentario que la IA soltó sola al vigilar el diagrama
@@ -196,6 +190,18 @@ create index if not exists conversaciones_por_proyecto
 -- y solo cuando nadie le escribió primero.
 alter table conversaciones_ia add column if not exists tipo
   text not null default 'respuesta';
+
+-- Un hilo por integrante. `hilo_usuario_id` es el dueño del hilo y va en
+-- todas las filas, también en las del asistente; `usuario_id` sigue siendo
+-- quién escribió la fila. Se añade como columna nueva y no se rellena a partir
+-- de `usuario_id`: las filas de la época del hilo compartido mezclaban a
+-- varios integrantes, sus respuestas no dicen a quién contestaban, y quedan
+-- con `null`, fuera de todo hilo. Ver `storage/conversaciones.ts`.
+alter table conversaciones_ia add column if not exists hilo_usuario_id text;
+
+drop index if exists conversaciones_por_proyecto;
+create index if not exists conversaciones_por_hilo
+  on conversaciones_ia (proyecto_id, hilo_usuario_id, id);
 
 -- Versiones del proyecto -----------------------------------------------------
 --

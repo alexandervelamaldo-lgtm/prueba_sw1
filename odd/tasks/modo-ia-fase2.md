@@ -15,8 +15,8 @@ Branch: `yimy`. Delivery: ask-on-risk. Test runner: Vitest (`npm test` at the ro
 
 | ID | Specs | Route | Status | Commit |
 |---|---|---|---|---|
-| T1 | S1, S2 | inline | done | (this commit) |
-| T2 | S3 | inline | pending | — |
+| T1 | S1, S2 | inline | done | 9b85523 |
+| T2 | S3 | inline | done | (this commit) |
 | T3 | S4 | inline | pending | — |
 | T4 | S5 (streaming) | inline | pending | — |
 | T5 | S5 (rest) | — | pending | — |
@@ -30,3 +30,8 @@ Branch: `yimy`. Delivery: ask-on-risk. Test runner: Vitest (`npm test` at the ro
 - **L5**: T1 RED: 8 new tests failed (4 in `backend-tool/src/ai/assistant.test.ts`, 4 in `frontend/src/components/asistente-voz.test.ts`). GREEN: 77/77 in both files; `npm run typecheck` exit 0; full suite 2043 passed, 1 failed in `backend-tool/src/storage/versiones.test.ts` ("listar devuelve los resúmenes en orden cronológico ascendente"), which also fails intermittently on the base without this change (2 of 3 runs), so it is pre-existing. ESLint cannot run: there is no `eslint.config.*` in the repo.
 - **L6**: Risk: item 6 (the rewritten system prompt changes the real model's behavior, which no test covers). Independent read-only review requested from Codex (Herdr pane `wA:p3`).
 - **L7**: Codex review: no blockers. Advisories: (a) the reduction to `operations` + `explanation` loses the interleaving of messages and operations; kept on purpose for T1, T3 must carry the ordered actions to the UI; (b) an empty action list still ends in "Orden no reconocida" (accepted fallback); (c) `max_tokens` raised from 2048 to 4096 because `think` and `message` actions add output.
+- **L8** (2026-10-17): "vamos con esa tarea". Open decision resolved with the recommendation already given to the user: a spontaneous comment goes to the thread of whoever made the last change of the burst, whether or not they have Modo IA open.
+- **L9**: T2 design: `ConversationStore` methods take `usuarioId`; the file store tags each message with `hiloDe`; Postgres adds `conversaciones_ia.hilo_usuario_id` (thread owner on every row) and index `conversaciones_por_hilo`. Legacy shared-thread rows keep a null owner and are never read. `vigilancia.ts` takes the author from the Yjs transaction origin (`connection.userId`, or `{ via: 'api', userId }` now set in `api/diagrams.ts`); no known author means no comment. The system prompt no longer describes a shared thread, and history turns are no longer prefixed with the author name.
+- **L10**: T2 RED: 9 store tests, 3 watcher tests and 2 API tests failed. GREEN: backend 384 passed, 1 failed (the pre-existing `versiones.test.ts` flake); full suite 2048 passed, same single flake; `npm run typecheck` exit 0. Postgres probe on a throwaway `postgres:17-alpine` container: old schema plus legacy rows, then the new schema applied twice → legacy hidden from Ana, Ana and Beto isolated, a comment only in Beto's thread, Ana pruned to 40 messages without touching Beto, 2 legacy rows kept, indexes `conversaciones_ia_pkey,conversaciones_por_hilo`. Container and probe script removed.
+- **L11**: Risk: item 1 (persisted format and schema change; legacy rows become hidden). Independent verification requested from Codex.
+- **L12**: Codex verification: 1 blocker, `vigilancia.ts` kept a stale author, so an unattributed last change (or a later burst) could be commented in the previous author's private thread. Fixed: an update without an author clears it, and `revisar` consumes it; 2 regression tests (RED, then GREEN). Recheck by Codex: "blocker fixed". Backend 387 passed; `npm run typecheck` exit 0. API routes, prompt history, per-user pruning, Postgres SQL and the migration found correctly scoped.

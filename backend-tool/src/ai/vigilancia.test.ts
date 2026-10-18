@@ -27,8 +27,19 @@ function crearSala(id = 'proyecto-1'): Room {
 }
 
 /** Conexión mínima, solo para que `room.connections.size` no sea cero. */
-function crearConexion() {
-  return { userId: 'alguien', canWrite: true, send: () => {}, close: () => {} };
+function crearConexion(userId = 'alguien') {
+  return { userId, canWrite: true, send: () => {}, close: () => {} };
+}
+
+/**
+ * Un cambio en el diagrama hecho por `autor`. El origen de la transacción es
+ * la conexión de quien editó, igual que en `CollabServer`, que es de donde el
+ * vigilante saca a quién dirigir el comentario.
+ */
+function cambiar(sala: Room, autor: unknown = crearConexion()): void {
+  sala.doc.transact(() => {
+    sala.doc.getMap('cambios').set('n', Math.random());
+  }, autor);
 }
 
 class AsistenteFalso implements AssistantEngine {
@@ -47,14 +58,14 @@ class AsistenteFalso implements AssistantEngine {
 }
 
 class ConversacionesFalsas implements ConversationStore {
-  comentarios: { proyectoId: string; texto: string }[] = [];
+  comentarios: { proyectoId: string; usuarioId: string; texto: string }[] = [];
 
   async getHistory(): Promise<ChatMessage[]> {
     return [];
   }
   async appendTurn(): Promise<void> {}
-  async appendComentario(proyectoId: string, texto: string): Promise<void> {
-    this.comentarios.push({ proyectoId, texto });
+  async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void> {
+    this.comentarios.push({ proyectoId, usuarioId, texto });
   }
   async borrarProyecto(): Promise<void> {}
 }
@@ -86,7 +97,7 @@ describe('debounce tras el último cambio', () => {
     sala.connections.add(crearConexion());
     vigilante.observar('proyecto-1', sala);
 
-    sala.doc.transact(() => { sala.doc.getMap('cambios').set('n', Math.random()); });
+    cambiar(sala);
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS / 2));
 
     expect(conversaciones.comentarios).toHaveLength(0);
@@ -99,7 +110,7 @@ describe('debounce tras el último cambio', () => {
     vigilante.observar('proyecto-1', sala);
 
     for (let i = 0; i < 5; i += 1) {
-      sala.doc.transact(() => { sala.doc.getMap('cambios').set('n', Math.random()); });
+      cambiar(sala);
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     // La última de la ráfaga reinicia la espera: hay que dejarla pasar entera
@@ -118,7 +129,7 @@ describe('sala sin nadie conectado', () => {
     // A propósito, sin añadir ninguna conexión.
     vigilante.observar('proyecto-1', sala);
 
-    sala.doc.transact(() => { sala.doc.getMap('cambios').set('n', Math.random()); });
+    cambiar(sala);
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
 
     expect(conversaciones.comentarios).toHaveLength(0);
@@ -134,7 +145,7 @@ describe('cuando el asistente no tiene nada que decir', () => {
     sala.connections.add(crearConexion());
     vigilante.observar('proyecto-1', sala);
 
-    sala.doc.transact(() => { sala.doc.getMap('cambios').set('n', Math.random()); });
+    cambiar(sala);
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
 
     expect(asistente.llamadas).toBe(1);
@@ -149,11 +160,11 @@ describe('enfriamiento entre comentarios espontáneos', () => {
     sala.connections.add(crearConexion());
     vigilante.observar('proyecto-1', sala);
 
-    sala.doc.transact(() => { sala.doc.getMap('cambios').set('n', Math.random()); });
+    cambiar(sala);
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
     expect(conversaciones.comentarios).toHaveLength(1);
 
-    sala.doc.transact(() => { sala.doc.getMap('cambios').set('n', Math.random()); });
+    cambiar(sala);
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
 
     // El asistente se consultó la segunda vez (la espera ya pasó), pero el
@@ -167,13 +178,13 @@ describe('enfriamiento entre comentarios espontáneos', () => {
     sala.connections.add(crearConexion());
     vigilante.observar('proyecto-1', sala);
 
-    sala.doc.transact(() => { sala.doc.getMap('cambios').set('n', Math.random()); });
+    cambiar(sala);
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
     expect(conversaciones.comentarios).toHaveLength(1);
 
     await new Promise((resolve) => setTimeout(resolve, ENFRIAMIENTO_MS));
 
-    sala.doc.transact(() => { sala.doc.getMap('cambios').set('n', Math.random()); });
+    cambiar(sala);
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
 
     expect(conversaciones.comentarios).toHaveLength(2);
@@ -191,7 +202,7 @@ describe('observar la misma sala dos veces', () => {
     vigilante.observar('proyecto-1', sala);
     vigilante.observar('proyecto-1', sala);
 
-    sala.doc.transact(() => { sala.doc.getMap('cambios').set('n', Math.random()); });
+    cambiar(sala);
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
 
     expect(conversaciones.comentarios).toHaveLength(1);
@@ -213,10 +224,82 @@ describe('dos salas distintas del mismo proyecto', () => {
     salaNueva.connections.add(crearConexion());
     vigilante.observar('proyecto-1', salaNueva);
 
-    salaNueva.doc.transact(() => { salaNueva.doc.getMap('cambios').set('n', Math.random()); });
+    cambiar(salaNueva);
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
 
     expect(conversaciones.comentarios).toHaveLength(1);
     expect(conversaciones.comentarios[0]?.proyectoId).toBe('proyecto-1');
+  });
+});
+
+describe('a quién va el comentario', () => {
+  it('va al hilo de quien hizo el último cambio', async () => {
+    const vigilante = crearVigilante();
+    const sala = crearSala();
+    sala.connections.add(crearConexion('ana'));
+    sala.connections.add(crearConexion('beto'));
+    vigilante.observar('proyecto-1', sala);
+
+    cambiar(sala, crearConexion('ana'));
+    cambiar(sala, crearConexion('beto'));
+    await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
+
+    expect(conversaciones.comentarios).toEqual([
+      { proyectoId: 'proyecto-1', usuarioId: 'beto', texto: 'Esta clase parece aislada.' },
+    ]);
+  });
+
+  it('también cuando el cambio entró por la API con el usuario como origen', async () => {
+    const vigilante = crearVigilante();
+    const sala = crearSala();
+    sala.connections.add(crearConexion('ana'));
+    vigilante.observar('proyecto-1', sala);
+
+    cambiar(sala, { userId: 'carla' });
+    await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
+
+    expect(conversaciones.comentarios.map((c) => c.usuarioId)).toEqual(['carla']);
+  });
+
+  it('si el último cambio de la ráfaga no tiene autor, no se le atribuye al anterior', async () => {
+    const vigilante = crearVigilante();
+    const sala = crearSala();
+    sala.connections.add(crearConexion('ana'));
+    vigilante.observar('proyecto-1', sala);
+
+    cambiar(sala, crearConexion('ana'));
+    cambiar(sala, 'restauracion');
+    await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
+
+    expect(conversaciones.comentarios).toHaveLength(0);
+  });
+
+  it('el autor de una ráfaga ya comentada no se arrastra a la siguiente', async () => {
+    const vigilante = crearVigilante();
+    const sala = crearSala();
+    sala.connections.add(crearConexion('ana'));
+    vigilante.observar('proyecto-1', sala);
+
+    cambiar(sala, crearConexion('ana'));
+    await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
+    // Pasado el enfriamiento, un cambio sin autor no debe ir al hilo de Ana.
+    await new Promise((resolve) => setTimeout(resolve, ENFRIAMIENTO_MS));
+    cambiar(sala, 'restauracion');
+    await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
+
+    expect(conversaciones.comentarios.map((c) => c.usuarioId)).toEqual(['ana']);
+  });
+
+  it('un cambio sin autor conocido no produce comentario: no hay hilo al que dirigirlo', async () => {
+    const vigilante = crearVigilante();
+    const sala = crearSala();
+    sala.connections.add(crearConexion('ana'));
+    vigilante.observar('proyecto-1', sala);
+
+    cambiar(sala, 'persistencia');
+    await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
+
+    expect(conversaciones.comentarios).toHaveLength(0);
+    expect(asistente.llamadas).toBe(0);
   });
 });

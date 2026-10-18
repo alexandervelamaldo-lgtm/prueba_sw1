@@ -28,7 +28,23 @@ import type { Room } from '../collab/rooms.js';
  * ya estaría marcado como "ya vigilado" de la sala anterior. Guardar la propia
  * instancia en un `WeakSet` vigila la sala concreta que existe ahora, y además
  * no hay que acordarse de limpiar nada cuando esa sala se destruye.
+ *
+ * ## A quién se le habla
+ *
+ * Cada integrante tiene su propio hilo con la IA (`storage/conversaciones.ts`),
+ * así que el comentario va al hilo de quien hizo el último cambio de la
+ * ráfaga, tenga o no el Modo IA abierto: lo verá al abrirlo. El autor sale del
+ * origen de la transacción, que es la conexión del editor (`CollabServer`) o
+ * `{ userId }` cuando el cambio entra por la API. Un cambio sin autor —por
+ * ejemplo, el documento cargado de disco— no deja a nadie a quien hablarle.
  */
+
+/** El usuario que originó una transacción, si el origen lo dice. */
+function autorDe(origin: unknown): string | null {
+  if (typeof origin !== 'object' || origin === null || !('userId' in origin)) return null;
+  const { userId } = origin as { userId: unknown };
+  return typeof userId === 'string' && userId !== '' ? userId : null;
+}
 
 /** Cuánto se espera, tras el último cambio, antes de mirar el diagrama. */
 const ESPERA_TRAS_CAMBIO_MS = 20_000;
@@ -46,6 +62,7 @@ const ENFRIAMIENTO_MS = 5 * 60_000;
 export class VigilanteDiagrama {
   private readonly observadas = new WeakSet<Room>();
   private readonly temporizadores = new WeakMap<Room, ReturnType<typeof setTimeout>>();
+  private readonly ultimoAutor = new WeakMap<Room, string>();
   private readonly ultimoComentario = new Map<string, number>();
 
   constructor(
@@ -66,7 +83,13 @@ export class VigilanteDiagrama {
     if (this.observadas.has(room)) return;
     this.observadas.add(room);
 
-    room.doc.on('update', () => {
+    room.doc.on('update', (_update: Uint8Array, origin: unknown) => {
+      // El autor es el del último cambio de la ráfaga: uno sin autor borra al
+      // anterior, para no dirigirle a esa persona un cambio que no hizo.
+      const autor = autorDe(origin);
+      if (autor) this.ultimoAutor.set(room, autor);
+      else this.ultimoAutor.delete(room);
+
       const anterior = this.temporizadores.get(room);
       if (anterior) clearTimeout(anterior);
 
@@ -81,10 +104,15 @@ export class VigilanteDiagrama {
   }
 
   private async revisar(proyectoId: string, room: Room): Promise<void> {
+    // Se consume aquí: la ráfaga siguiente tiene que traer su propio autor.
+    const autor = this.ultimoAutor.get(room);
+    this.ultimoAutor.delete(room);
+
     // Sin nadie conectado no hay a quién hablarle: el comentario se perdería
     // hasta que alguien volviera a abrir el proyecto, y para entonces puede
     // que ya no tenga sentido.
     if (room.connections.size === 0) return;
+    if (!autor) return;
 
     const ahora = Date.now();
     const anterior = this.ultimoComentario.get(proyectoId) ?? 0;
@@ -96,7 +124,7 @@ export class VigilanteDiagrama {
       if (!comentario) return;
 
       this.ultimoComentario.set(proyectoId, ahora);
-      await this.conversations.appendComentario(proyectoId, comentario);
+      await this.conversations.appendComentario(proyectoId, autor, comentario);
     } catch (error) {
       // Un comentario espontáneo que falla no es una avería del proyecto: es
       // la IA quedándose callada, que es justo lo que pasa cuando no tiene

@@ -18,12 +18,11 @@ import { textoDeRespuesta } from './asistente-voz';
  * el historial del proyecto en cada llamada, así que el modelo ve los turnos
  * anteriores sin que este componente tenga que reenviarlos.
  *
- * El hilo ya no es privado por persona: es del proyecto entero
- * (`storage/conversaciones.ts`, clave `proyectoId`), y cada turno de usuario
- * llega del servidor firmado con `autorId`/`autorNombre`. Por eso se sondea
- * igual que el tablón (`PanelTablon.tsx`): un compañero puede escribirle a la
- * IA mientras esta vista está abierta, y su turno tiene que aparecer sin
- * recargar.
+ * El hilo es privado de cada integrante (`storage/conversaciones.ts`, clave
+ * `(proyectoId, usuario)`): los demás colaboradores no lo ven. Aun así se
+ * sondea igual que el tablón (`PanelTablon.tsx`), porque la IA puede dejar un
+ * comentario espontáneo en este hilo (`ai/vigilancia.ts`) mientras la vista
+ * está abierta, y tiene que aparecer sin recargar.
  *
  * Los turnos cargados del historial no traen propuesta: lo único que se
  * guardó de ellos es el texto, no las operaciones. Quien vuelve a abrir esta
@@ -281,8 +280,8 @@ export function ModoIA({ proyecto, diagrama, aplicar, soloLectura, usuario }: Pr
         <span className="modo-ia__insignia" aria-hidden="true">
           IA
         </span>{' '}
-        Conversación compartida por todo el equipo sobre <code>{proyecto.name}</code>. Cada propuesta
-        sigue pidiendo su «Aplicar»: nada se escribe solo.
+        Su conversación privada con la IA sobre <code>{proyecto.name}</code>: el resto del equipo no
+        la ve. Cada propuesta sigue pidiendo su «Aplicar»: nada se escribe solo.
       </p>
 
       <div className="modo-ia__transcripcion" role="log">

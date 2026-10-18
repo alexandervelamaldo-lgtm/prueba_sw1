@@ -74,13 +74,12 @@ export function assistantRouter(deps: {
       const room = await rooms.open(proyectoId);
       const diagram = readDiagram(room.doc);
 
-      // El historial es el hilo entero del proyecto, no uno por usuario (ver
-      // `conversaciones.ts`): todos los integrantes leen y amplían la misma
-      // conversación con la IA. De los otros proyectos solo se piden nombre y
-      // rol —nunca se abre su sala (`rooms.open`)—, así que su diagrama no
-      // llega a este prompt.
+      // El historial es el hilo de quien pregunta (ver `conversaciones.ts`):
+      // cada integrante tiene el suyo y no ve el de los demás. De los otros
+      // proyectos solo se piden nombre y rol —nunca se abre su sala
+      // (`rooms.open`)—, así que su diagrama no llega a este prompt.
       const [turnos, misProyectos] = await Promise.all([
-        conversations.getHistory(proyectoId, MAXIMO_TURNOS * 2),
+        conversations.getHistory(proyectoId, request.user.id, MAXIMO_TURNOS * 2),
         store.listProjectsForUser(request.user.id),
       ]);
       const historial = await conAutores(turnos, identity);
@@ -112,7 +111,11 @@ export function assistantRouter(deps: {
     '/:proyectoId/asistente/historial',
     requireRole(store, 'editor'),
     handler(async (request, response) => {
-      const turnos = await conversations.getHistory(request.params.proyectoId ?? '', MAXIMO_TURNOS * 2);
+      const turnos = await conversations.getHistory(
+        request.params.proyectoId ?? '',
+        request.user.id,
+        MAXIMO_TURNOS * 2,
+      );
       response.json({ turnos: await conAutores(turnos, identity) });
     }),
   );

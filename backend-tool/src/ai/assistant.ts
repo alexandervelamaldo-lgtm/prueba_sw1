@@ -14,20 +14,16 @@ import { pedirAlModelo } from './transporte.js';
 /**
  * Un turno del historial ya con el nombre de quien lo escribió resuelto. El
  * propio `ChatMessage` solo guarda `autorId`; `api/assistant.ts` lo resuelve a
- * nombre (igual que `conNombres` en `api/tablon.ts`) antes de construir el
- * contexto, porque aquí, ya con varios integrantes compartiendo el mismo
- * hilo, la IA necesita saber quién dijo qué para no confundir "lo que pediste
- * antes" entre dos personas distintas.
+ * nombre (igual que `conNombres` en `api/tablon.ts`) para pintarlo en pantalla.
  */
 export interface TurnoConAutor extends ChatMessage {
   autorNombre: string | null;
 }
 
 /**
- * Lo que el Modo IA sabe además del diagrama: la propia conversación (para que
- * "ahora añádele X" se entienda sin repetir de qué clase se habla, y ahora
- * compartida entre todos los integrantes del proyecto, no solo quien
- * pregunta) y, solo como dato de contexto, el nombre de otros proyectos de
+ * Lo que el Modo IA sabe además del diagrama: la propia conversación de quien
+ * pregunta (para que "ahora añádele X" se entienda sin repetir de qué clase se
+ * habla) y, solo como dato de contexto, el nombre de otros proyectos de
  * este mismo usuario (nunca su contenido: ver `api/assistant.ts` y
  * `storage/conversaciones.ts` para la garantía de aislamiento por proyecto).
  */
@@ -43,7 +39,7 @@ export interface AssistantEngine {
   interpret(prompt: string, diagram: ClassDiagram, contexto?: AssistantContext): Promise<AssistantResponse>;
   /**
    * Mira el diagrama sin que nadie haya preguntado nada y decide si hay algo
-   * que merezca la pena decir en voz alta en el hilo compartido. Devuelve
+   * que merezca la pena decirle a quien lo acaba de cambiar. Devuelve
    * `null` cuando no hay nada que comentar, que es la respuesta correcta casi
    * siempre: hablar en cada cambio por hablar sería ruido, no ayuda.
    *
@@ -86,7 +82,7 @@ const SYSTEM_PROMPT = `Eres un asistente de modelado UML con el que el usuario c
 
 Cuando el mensaje incluya turnos anteriores de esta misma conversación, ya los has leído: no te vuelvas a presentar ni repitas lo ya dicho, y entiende referencias como "ahora", "esa clase" o "lo de antes" igual que lo haría alguien que lleva un rato colaborando en este proyecto contigo. Tus mensajes son tu voz: pueden saludar, reconocer lo que ya se habló, opinar sobre el diagrama o hacer una pregunta de aclaración en tono natural y breve, sin dejar de ser precisos sobre qué cambios haces y por qué. Esto no cambia ninguna regla de las operaciones.
 
-Este hilo es compartido: varios integrantes del mismo proyecto te hablan en la misma conversación, y los turnos de usuario anteriores vienen firmados como "Nombre: texto". Usa esa firma para no mezclar lo que pidió una persona con lo que pidió otra ("lo que dijiste antes" significa lo que dijo esa misma persona, no cualquiera del equipo), pero no la repitas tú mismo en tus mensajes: tu respuesta no lleva firma, solo la entiendes en los turnos ajenos.
+Esta conversación es solo entre tú y esta persona: otros integrantes del proyecto tienen su propio hilo contigo, y lo que hablaste con ellos no está aquí. El diagrama, en cambio, es compartido, y pueden haberlo cambiado otros.
 
 Respondes ÚNICAMENTE con un objeto JSON, sin texto alrededor y sin vallas de código, con esta forma:
 {"actions": [...], "confidence": 0.0-1.0}
@@ -229,18 +225,12 @@ export class LlmAssistant implements AssistantEngine {
     }
   }
 
-  private historialFirmado(contexto?: AssistantContext): { role: 'user' | 'assistant'; content: string }[] {
+  private historialComoMensajes(contexto?: AssistantContext): { role: 'user' | 'assistant'; content: string }[] {
     // Los turnos previos se mandan como mensajes reales de la conversación, no
     // como texto plano dentro del prompt: así el modelo conversa de verdad en
-    // vez de releer un resumen cada vez. Los de rol "user" llevan el nombre de
-    // quien los escribió por delante (ver la nota de SYSTEM_PROMPT sobre el
-    // hilo compartido): sin esa firma la IA no podría distinguir a un
-    // integrante de otro dentro de la misma conversación.
-    return (contexto?.historial ?? []).map((turno) => ({
-      role: turno.role,
-      content:
-        turno.role === 'user' && turno.autorNombre ? `${turno.autorNombre}: ${turno.texto}` : turno.texto,
-    }));
+    // vez de releer un resumen cada vez. Sin firma: el hilo es de una sola
+    // persona.
+    return (contexto?.historial ?? []).map((turno) => ({ role: turno.role, content: turno.texto }));
   }
 
   // FUNCIÓN PRIVADA DE COMUNICACIÓN CON LA IA:
@@ -262,7 +252,7 @@ export class LlmAssistant implements AssistantEngine {
     // Crea el mensaje combinando el diagrama actual y la petición del usuario.
     const user = `Diagrama actual:\n${summarize(diagram)}${lineaOtrosProyectos}\n\nPetición: ${prompt}`;
 
-    return this.enviarConversacion(system, user, this.historialFirmado(contexto), 4096, true);
+    return this.enviarConversacion(system, user, this.historialComoMensajes(contexto), 4096, true);
   }
 
   // PETICIÓN PRIVADA DE REVISIÓN ESPONTÁNEA:
@@ -283,7 +273,7 @@ export class LlmAssistant implements AssistantEngine {
         : '';
     const user = `Diagrama actual:\n${summarize(diagram)}${pistas}`;
 
-    return this.enviarConversacion(REVIEW_SYSTEM_PROMPT, user, this.historialFirmado(contexto), 300, false);
+    return this.enviarConversacion(REVIEW_SYSTEM_PROMPT, user, this.historialComoMensajes(contexto), 300, false);
   }
 
   /**

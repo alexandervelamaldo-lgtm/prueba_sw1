@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -8,11 +8,10 @@ import { FileConversationStore, MAXIMO_TURNOS } from './conversaciones.js';
  * Pruebas del almacén de conversaciones del Modo IA, contra el disco de
  * verdad.
  *
- * Lo que importa comprobar no es tanto "se guarda" sino que el hilo es
- * compartido dentro de un proyecto: es la condición que puso el encargo
- * ("contexto de todos los integrantes") y es justo lo que una prueba con un
- * doble en memoria no pondría en duda —un mapa compartido en memoria no
- * distingue una clave mal construida de una buena—.
+ * Lo que importa comprobar no es tanto "se guarda" sino que cada integrante
+ * tiene su propio hilo dentro de un proyecto, y que nadie ve el de otro: es
+ * justo lo que una prueba con un doble en memoria no pondría en duda —un mapa
+ * en memoria no distingue una clave mal construida de una buena—.
  */
 
 let dataDir: string;
@@ -35,12 +34,12 @@ afterEach(async () => {
 
 describe('getHistory', () => {
   it('un proyecto sin conversación devuelve una lista vacía', async () => {
-    expect(await almacen.getHistory(P, MAXIMO_TURNOS * 2)).toEqual([]);
+    expect(await almacen.getHistory(P, ANA, MAXIMO_TURNOS * 2)).toEqual([]);
   });
 
   it('cada turno queda como dos mensajes, el autor y luego el asistente', async () => {
     await almacen.appendTurn(P, ANA, 'crea la clase Pedido', 'Hecho: clase Pedido creada.');
-    const historial = await almacen.getHistory(P, 10);
+    const historial = await almacen.getHistory(P, ANA, 10);
     expect(historial).toHaveLength(2);
     expect(historial[0]).toMatchObject({ role: 'user', texto: 'crea la clase Pedido', autorId: ANA });
     expect(historial[1]).toMatchObject({
@@ -53,7 +52,7 @@ describe('getHistory', () => {
   it('devuelve los mensajes en orden cronológico', async () => {
     await almacen.appendTurn(P, ANA, 'uno', 'respuesta uno');
     await almacen.appendTurn(P, ANA, 'dos', 'respuesta dos');
-    const historial = await almacen.getHistory(P, 10);
+    const historial = await almacen.getHistory(P, ANA, 10);
     expect(historial.map((m) => m.texto)).toEqual(['uno', 'respuesta uno', 'dos', 'respuesta dos']);
   });
 
@@ -61,67 +60,91 @@ describe('getHistory', () => {
     for (let i = 1; i <= 5; i += 1) {
       await almacen.appendTurn(P, ANA, `orden ${i}`, `respuesta ${i}`);
     }
-    const historial = await almacen.getHistory(P, 2);
+    const historial = await almacen.getHistory(P, ANA, 2);
     expect(historial.map((m) => m.texto)).toEqual(['orden 5', 'respuesta 5']);
   });
 
   it('un límite de cero no descarga la conversación entera', async () => {
     // Mismo motivo que en `tablon.ts`: `slice(-0)` devuelve todo el arreglo.
     await almacen.appendTurn(P, ANA, 'uno', 'respuesta uno');
-    const historial = await almacen.getHistory(P, 0);
+    const historial = await almacen.getHistory(P, ANA, 0);
     expect(historial).toHaveLength(1);
   });
 });
 
-describe('hilo compartido del proyecto', () => {
-  it('dos integrantes del mismo proyecto comparten el mismo historial', async () => {
+describe('un hilo por integrante', () => {
+  it('dos integrantes del mismo proyecto no ven el hilo del otro', async () => {
     await almacen.appendTurn(P, ANA, 'orden de Ana', 'respuesta a Ana');
     await almacen.appendTurn(P, BETO, 'orden de Beto', 'respuesta a Beto');
 
-    // No hay "el historial de Ana" y "el de Beto": los dos ven las cuatro
-    // filas, en el orden en que se escribieron.
-    const historial = await almacen.getHistory(P, 10);
-    expect(historial.map((m) => m.texto)).toEqual([
+    expect((await almacen.getHistory(P, ANA, 10)).map((m) => m.texto)).toEqual([
       'orden de Ana',
       'respuesta a Ana',
+    ]);
+    expect((await almacen.getHistory(P, BETO, 10)).map((m) => m.texto)).toEqual([
       'orden de Beto',
       'respuesta a Beto',
     ]);
-  });
-
-  it('cada mensaje de usuario conserva quién lo escribió', async () => {
-    await almacen.appendTurn(P, ANA, 'orden de Ana', 'respuesta a Ana');
-    await almacen.appendTurn(P, BETO, 'orden de Beto', 'respuesta a Beto');
-
-    const historial = await almacen.getHistory(P, 10);
-    const autores = historial.filter((m) => m.role === 'user').map((m) => m.autorId);
-    expect(autores).toEqual([ANA, BETO]);
   });
 
   it('el mismo usuario en dos proyectos distintos no comparte historial', async () => {
     await almacen.appendTurn(P, ANA, 'orden en Tienda', 'respuesta en Tienda');
     await almacen.appendTurn(OTRO_PROYECTO, ANA, 'orden en Clínica', 'respuesta en Clínica');
 
-    const enTienda = await almacen.getHistory(P, 10);
-    const enClinica = await almacen.getHistory(OTRO_PROYECTO, 10);
+    const enTienda = await almacen.getHistory(P, ANA, 10);
+    const enClinica = await almacen.getHistory(OTRO_PROYECTO, ANA, 10);
 
     expect(enTienda.map((m) => m.texto)).toEqual(['orden en Tienda', 'respuesta en Tienda']);
     expect(enClinica.map((m) => m.texto)).toEqual(['orden en Clínica', 'respuesta en Clínica']);
   });
+
+  it('un comentario espontáneo solo aparece en el hilo de su destinatario', async () => {
+    await almacen.appendComentario(P, BETO, 'Cliente no tiene id.');
+
+    expect(await almacen.getHistory(P, ANA, 10)).toEqual([]);
+    expect((await almacen.getHistory(P, BETO, 10)).map((m) => m.texto)).toEqual(['Cliente no tiene id.']);
+  });
+
+  it('los mensajes del hilo compartido anterior no aparecen en ningún hilo', async () => {
+    await almacen.flush();
+    const ruta = join(dataDir, 'conversaciones', `${P}.json`);
+    await mkdir(join(dataDir, 'conversaciones'), { recursive: true });
+    await writeFile(
+      ruta,
+      JSON.stringify({
+        mensajes: [
+          { role: 'user', texto: 'orden vieja', autorId: ANA, creadoEn: '2026-01-01T00:00:00.000Z', tipo: 'respuesta' },
+          { role: 'assistant', texto: 'respuesta vieja', autorId: null, creadoEn: '2026-01-01T00:00:00.001Z', tipo: 'respuesta' },
+        ],
+      }),
+      'utf8',
+    );
+
+    const reabierto = new FileConversationStore(dataDir);
+    expect(await reabierto.getHistory(P, ANA, 10)).toEqual([]);
+  });
 });
 
 describe('ventana de turnos', () => {
-  it('no guarda más de MAXIMO_TURNOS turnos entre todos los integrantes: los más antiguos se descartan', async () => {
+  it('no guarda más de MAXIMO_TURNOS turnos por integrante: los más antiguos se descartan', async () => {
     for (let i = 1; i <= MAXIMO_TURNOS + 5; i += 1) {
-      await almacen.appendTurn(P, i % 2 === 0 ? ANA : BETO, `orden ${i}`, `respuesta ${i}`);
+      await almacen.appendTurn(P, ANA, `orden ${i}`, `respuesta ${i}`);
     }
-    const historial = await almacen.getHistory(P, MAXIMO_TURNOS * 2 + 100);
+    const historial = await almacen.getHistory(P, ANA, MAXIMO_TURNOS * 2 + 100);
     expect(historial).toHaveLength(MAXIMO_TURNOS * 2);
-    // El primero que sobrevive es el turno número 6: los cinco primeros se
-    // podaron para dejar sitio a los últimos veinte, sin importar quién los
-    // escribió.
     expect(historial[0]).toMatchObject({ texto: 'orden 6' });
     expect(historial.at(-1)).toMatchObject({ texto: `respuesta ${MAXIMO_TURNOS + 5}` });
+  });
+
+  it('el hilo de un integrante no le quita sitio al de otro', async () => {
+    await almacen.appendTurn(P, BETO, 'orden de Beto', 'respuesta a Beto');
+    for (let i = 1; i <= MAXIMO_TURNOS + 5; i += 1) {
+      await almacen.appendTurn(P, ANA, `orden ${i}`, `respuesta ${i}`);
+    }
+    expect((await almacen.getHistory(P, BETO, 10)).map((m) => m.texto)).toEqual([
+      'orden de Beto',
+      'respuesta a Beto',
+    ]);
   });
 });
 
@@ -131,7 +154,7 @@ describe('persistencia', () => {
     await almacen.flush();
 
     const reabierto = new FileConversationStore(dataDir);
-    const historial = await reabierto.getHistory(P, 10);
+    const historial = await reabierto.getHistory(P, ANA, 10);
     expect(historial.map((m) => m.texto)).toEqual(['persistente', 'sigue aquí']);
   });
 });
@@ -143,7 +166,8 @@ describe('borrarProyecto', () => {
 
     await almacen.borrarProyecto(P);
 
-    expect(await almacen.getHistory(P, 10)).toEqual([]);
+    expect(await almacen.getHistory(P, ANA, 10)).toEqual([]);
+    expect(await almacen.getHistory(P, BETO, 10)).toEqual([]);
   });
 
   it('no toca el historial de otro proyecto', async () => {
@@ -152,14 +176,14 @@ describe('borrarProyecto', () => {
 
     await almacen.borrarProyecto(P);
 
-    expect(await almacen.getHistory(OTRO_PROYECTO, 10)).toHaveLength(2);
+    expect(await almacen.getHistory(OTRO_PROYECTO, ANA, 10)).toHaveLength(2);
   });
 });
 
 describe('appendComentario', () => {
   it('añade un único mensaje de rol assistant, sin autor y marcado como observación', async () => {
-    await almacen.appendComentario(P, 'Esta relación parece de agregación, no de composición.');
-    const historial = await almacen.getHistory(P, 10);
+    await almacen.appendComentario(P, ANA, 'Esta relación parece de agregación, no de composición.');
+    const historial = await almacen.getHistory(P, ANA, 10);
     expect(historial).toHaveLength(1);
     expect(historial[0]).toMatchObject({
       role: 'assistant',
@@ -171,7 +195,7 @@ describe('appendComentario', () => {
 
   it('un turno normal se marca como respuesta, no como observación', async () => {
     await almacen.appendTurn(P, ANA, 'crea la clase Pedido', 'Hecho.');
-    const historial = await almacen.getHistory(P, 10);
+    const historial = await almacen.getHistory(P, ANA, 10);
     expect(historial.map((m) => m.tipo)).toEqual(['respuesta', 'respuesta']);
   });
 
@@ -179,9 +203,9 @@ describe('appendComentario', () => {
     for (let i = 1; i <= MAXIMO_TURNOS; i += 1) {
       await almacen.appendTurn(P, ANA, `orden ${i}`, `respuesta ${i}`);
     }
-    await almacen.appendComentario(P, 'comentario espontáneo');
+    await almacen.appendComentario(P, ANA, 'comentario espontáneo');
 
-    const historial = await almacen.getHistory(P, MAXIMO_TURNOS * 2 + 10);
+    const historial = await almacen.getHistory(P, ANA, MAXIMO_TURNOS * 2 + 10);
     expect(historial).toHaveLength(MAXIMO_TURNOS * 2);
     // El comentario es un solo mensaje, no un turno de dos: al sobrepasar la
     // ventana se descarta solo el mensaje más antiguo (la orden del primer
@@ -191,11 +215,11 @@ describe('appendComentario', () => {
   });
 
   it('lo guardado por appendComentario sobrevive a reabrir el almacén', async () => {
-    await almacen.appendComentario(P, 'persistente también');
+    await almacen.appendComentario(P, ANA, 'persistente también');
     await almacen.flush();
 
     const reabierto = new FileConversationStore(dataDir);
-    const historial = await reabierto.getHistory(P, 10);
+    const historial = await reabierto.getHistory(P, ANA, 10);
     expect(historial[0]).toMatchObject({ texto: 'persistente también', tipo: 'observacion' });
   });
 });
@@ -213,7 +237,7 @@ describe('tipo por defecto en mensajes antiguos', () => {
     await writeFile(ruta, JSON.stringify(crudo), 'utf8');
 
     const reabierto = new FileConversationStore(dataDir);
-    const historial = await reabierto.getHistory(P, 10);
+    const historial = await reabierto.getHistory(P, ANA, 10);
     expect(historial.map((m) => m.tipo)).toEqual(['respuesta', 'respuesta']);
   });
 });
@@ -228,7 +252,7 @@ describe('identificadores', () => {
     // (`<proyecto>/<usuario>.json`). Ahora es solo un dato dentro del fichero
     // del proyecto, así que un valor con barras se guarda tal cual.
     await expect(almacen.appendTurn(P, '../no-es-una-ruta', 'hola', 'hola')).resolves.toBeUndefined();
-    const historial = await almacen.getHistory(P, 10);
+    const historial = await almacen.getHistory(P, '../no-es-una-ruta', 10);
     expect(historial[0]).toMatchObject({ autorId: '../no-es-una-ruta' });
   });
 });

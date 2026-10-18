@@ -134,7 +134,11 @@ export function diagramsRouter(deps: { store: ProjectStore; rooms: RoomManager }
     handler(async (request, response) => {
       const body = parseBody(OperacionesSchema, request.body);
       const room = await rooms.open(request.params.proyectoId ?? '');
-      const result = applyOperations(room.doc, body.operaciones, { origin: 'api' });
+      const result = applyOperations(room.doc, body.operaciones, {
+        // Con el usuario en el origen, `ai/vigilancia.ts` sabe a qué hilo
+        // dirigir un comentario sobre este cambio.
+        origin: { via: 'api', userId: request.user.id },
+      });
 
       if (!result.ok) {
         response.status(422).json({

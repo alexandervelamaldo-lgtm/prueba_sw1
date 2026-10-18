@@ -761,11 +761,12 @@ function aChatMessage(fila: FilaMensajeIA): ChatMessage {
 }
 
 /**
- * El historial del Modo IA en PostgreSQL: un hilo por proyecto, no por
- * `(proyecto, usuario)`. Ver la cabecera de `storage/conversaciones.ts` para
- * el motivo. `usuario_id` solo se guarda en las filas de rol `user` —queda
- * `null` en las del asistente— porque ahí es quien escribió, no de quién es
- * el hilo.
+ * El historial del Modo IA en PostgreSQL: un hilo por `(proyecto, usuario)`.
+ * Ver la cabecera de `storage/conversaciones.ts` para el motivo.
+ * `hilo_usuario_id` es el dueño del hilo y va en todas las filas;
+ * `usuario_id` es quién escribió y queda `null` en las del asistente. Las
+ * filas del hilo compartido anterior tienen `hilo_usuario_id` a `null` y no se
+ * leen nunca.
  *
  * `id` es `bigserial` y no un contador por proyecto como en el tablón: aquí
  * no hace falta que el número tenga sentido de cara al cliente (no se manda
@@ -775,57 +776,58 @@ function aChatMessage(fila: FilaMensajeIA): ChatMessage {
 export class PostgresConversationStore implements ConversationStore {
   constructor(private readonly pool: PoolPostgres) {}
 
-  /** Recorta el hilo del proyecto al tope, entre todos sus integrantes. */
-  private async recortar(cliente: ClientePostgres, proyectoId: string): Promise<void> {
+  /** Recorta el hilo de `usuarioId` al tope; los demás hilos del proyecto no se tocan. */
+  private async recortar(cliente: ClientePostgres, proyectoId: string, usuarioId: string): Promise<void> {
     await cliente.query(
       `delete from conversaciones_ia
         where proyecto_id = $1
+          and hilo_usuario_id = $2
           and id <= coalesce((
             select id from conversaciones_ia
-             where proyecto_id = $1
+             where proyecto_id = $1 and hilo_usuario_id = $2
              order by id desc
-             offset $2 limit 1
+             offset $3 limit 1
           ), -1)`,
-      [proyectoId, MAXIMO_TURNOS * 2],
+      [proyectoId, usuarioId, MAXIMO_TURNOS * 2],
     );
   }
 
-  async getHistory(proyectoId: string, limite: number): Promise<ChatMessage[]> {
+  async getHistory(proyectoId: string, usuarioId: string, limite: number): Promise<ChatMessage[]> {
     const { rows } = await this.pool.query<FilaMensajeIA>(
       `select id, usuario_id, rol, contenido, creado_en, tipo from (
          select id, usuario_id, rol, contenido, creado_en, tipo from conversaciones_ia
-          where proyecto_id = $1
-          order by id desc limit $2
+          where proyecto_id = $1 and hilo_usuario_id = $2
+          order by id desc limit $3
        ) recientes order by id asc`,
-      [proyectoId, Math.max(1, Math.trunc(limite))],
+      [proyectoId, usuarioId, Math.max(1, Math.trunc(limite))],
     );
     return rows.map(aChatMessage);
   }
 
   async appendTurn(
     proyectoId: string,
-    autorId: string,
+    usuarioId: string,
     usuario: string,
     asistente: string,
   ): Promise<void> {
     await enTransaccion(this.pool, async (cliente) => {
       await cliente.query(
-        `insert into conversaciones_ia (proyecto_id, usuario_id, rol, contenido)
-         values ($1, $2, 'user', $3), ($1, null, 'assistant', $4)`,
-        [proyectoId, autorId, usuario, asistente],
+        `insert into conversaciones_ia (proyecto_id, hilo_usuario_id, usuario_id, rol, contenido)
+         values ($1, $2, $2, 'user', $3), ($1, $2, null, 'assistant', $4)`,
+        [proyectoId, usuarioId, usuario, asistente],
       );
-      await this.recortar(cliente, proyectoId);
+      await this.recortar(cliente, proyectoId, usuarioId);
     });
   }
 
-  async appendComentario(proyectoId: string, texto: string): Promise<void> {
+  async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void> {
     await enTransaccion(this.pool, async (cliente) => {
       await cliente.query(
-        `insert into conversaciones_ia (proyecto_id, usuario_id, rol, contenido, tipo)
-         values ($1, null, 'assistant', $2, 'observacion')`,
-        [proyectoId, texto],
+        `insert into conversaciones_ia (proyecto_id, hilo_usuario_id, usuario_id, rol, contenido, tipo)
+         values ($1, $2, null, 'assistant', $3, 'observacion')`,
+        [proyectoId, usuarioId, texto],
       );
-      await this.recortar(cliente, proyectoId);
+      await this.recortar(cliente, proyectoId, usuarioId);
     });
   }
 

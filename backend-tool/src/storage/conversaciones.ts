@@ -3,35 +3,32 @@ import { dirname, join, resolve } from 'node:path';
 import { esIdSeguroDeFichero } from './tablon.js';
 
 /**
- * Almacén de la conversación con el asistente de IA, por proyecto.
+ * Almacén de la conversación con el asistente de IA, por proyecto y usuario.
  *
  * Es el quinto almacén de la herramienta y copia la forma de los anteriores:
  * una interfaz, una implementación de fichero y otra contra PostgreSQL.
  *
- * ## Por qué la clave es el proyecto y no el proyecto más el usuario
+ * ## Por qué la clave es el proyecto más el usuario
  *
- * El "modo IA" es un hilo grupal, como el tablón: todos los integrantes del
- * proyecto hablan con la misma IA y la IA ve lo que cada uno le dijo, no solo
- * lo que le dijo quien pregunta ahora. Es la condición que puso el encargo
- * ("contexto de todos los integrantes"), y es lo contrario de lo que hacía
- * esta misma clase antes de esta versión: un hilo privado por `(proyecto,
- * usuario)` que ni la propia IA podía atravesar.
+ * Cada integrante del proyecto tiene su propio hilo con la IA, y los demás
+ * colaboradores no lo ven. El hilo compartido por proyecto de la versión
+ * anterior se descartó a pedido de quien usa la herramienta: las sesiones con
+ * la IA son de cada colaborador, no del equipo. Para pasarle algo al resto
+ * está el tablón.
  *
- * Quien escribió cada mensaje de usuario se guarda en `autorId` —igual que
- * `autorId` en `tablon_mensajes`— para poder firmarlo al pintarlo, pero ya no
- * forma parte de la clave de almacenamiento: dos integrantes del mismo
- * proyecto leen y amplían el mismo hilo. Los mensajes del propio asistente no
- * tienen autor humano y llevan `autorId: null`.
+ * `hiloDe` es el dueño del hilo y está en todos los mensajes, también en los
+ * del asistente. `autorId` sigue siendo quién escribió el mensaje (`null` en
+ * los del asistente). Los mensajes guardados en la época del hilo compartido
+ * no tienen `hiloDe` y no aparecen en ningún hilo: mezclaban a varios
+ * integrantes y no hay forma de saber de quién era cada respuesta.
  *
  * ## La ventana de 20 turnos
  *
  * Cada turno son dos mensajes (lo que pidió alguien, lo que respondió la IA).
  * Guardar la conversación entera haría crecer sin límite el prompt que se
  * manda al modelo cada vez —y su coste— por un proyecto que lleva meses
- * abierto. Veinte turnos bastan para que la IA entienda "ahora" y "eso que
- * dijiste antes" sin arrastrar una transcripción de semanas, y al ser un hilo
- * de todo el proyecto, esos veinte turnos son los veinte más recientes entre
- * todos sus integrantes, no veinte por cabeza.
+ * abierto. Veinte turnos por hilo bastan para que la IA entienda "ahora" y
+ * "eso que dijiste antes" sin arrastrar una transcripción de semanas.
  */
 
 export interface ChatMessage {
@@ -51,22 +48,23 @@ export interface ChatMessage {
 }
 
 export interface ConversationStore {
-  /** Los últimos `limite` mensajes del proyecto, en orden cronológico ascendente. */
-  getHistory(proyectoId: string, limite: number): Promise<ChatMessage[]>;
-  appendTurn(proyectoId: string, autorId: string, usuario: string, asistente: string): Promise<void>;
+  /** Los últimos `limite` mensajes del hilo de `usuarioId` en el proyecto, en orden cronológico ascendente. */
+  getHistory(proyectoId: string, usuarioId: string, limite: number): Promise<ChatMessage[]>;
+  /** Añade un turno al hilo de `usuarioId`, que es también quien escribió la orden. */
+  appendTurn(proyectoId: string, usuarioId: string, usuario: string, asistente: string): Promise<void>;
   /**
-   * Añade un comentario de la IA que nadie ha pedido: un único mensaje de rol
-   * `assistant`, sin el turno de usuario que `appendTurn` siempre añade junto
-   * a él. Lo usa `ai/vigilancia.ts` cuando decide que el diagrama merece un
-   * comentario espontáneo.
+   * Añade un comentario de la IA que nadie ha pedido al hilo de `usuarioId`:
+   * un único mensaje de rol `assistant`, sin el turno de usuario que
+   * `appendTurn` siempre añade junto a él. Lo usa `ai/vigilancia.ts` cuando
+   * decide que el diagrama merece un comentario espontáneo.
    */
-  appendComentario(proyectoId: string, texto: string): Promise<void>;
-  /** Se llama al borrar el proyecto: se lleva el hilo entero. */
+  appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void>;
+  /** Se llama al borrar el proyecto: se lleva los hilos de todos sus integrantes. */
   borrarProyecto(proyectoId: string): Promise<void>;
   close?(): Promise<void>;
 }
 
-/** Turnos que se conservan por proyecto. Ver la cabecera del fichero. */
+/** Turnos que se conservan por hilo. Ver la cabecera del fichero. */
 export const MAXIMO_TURNOS = 20;
 
 function exigirIdSeguro(valor: string, que: string): void {
@@ -85,7 +83,11 @@ function limiteSano(limite: number): number {
  * un fichero escrito antes de que existiera `tipo` no lo trae. `getHistory`
  * es quien rellena el valor de siempre al leer; el disco se queda tal cual.
  */
-type MensajeEnDisco = Omit<ChatMessage, 'tipo'> & { tipo?: ChatMessage['tipo'] };
+type MensajeEnDisco = Omit<ChatMessage, 'tipo'> & {
+  tipo?: ChatMessage['tipo'];
+  /** Dueño del hilo. Falta en los mensajes de la época del hilo compartido. */
+  hiloDe?: string;
+};
 
 interface ConversacionEnDisco {
   mensajes: MensajeEnDisco[];
@@ -98,9 +100,9 @@ function vacia(): ConversacionEnDisco {
 /**
  * Implementación en disco, la de desarrollo.
  *
- * Un fichero JSON por proyecto. Antes había un directorio por proyecto con un
- * fichero por usuario dentro —necesario cuando cada usuario tenía su propio
- * hilo—; ahora que el hilo es uno solo por proyecto, un fichero plano basta.
+ * Un fichero JSON por proyecto con los hilos de todos sus integrantes,
+ * separados por `hiloDe`. El usuario no forma parte de la ruta, así que su id
+ * no tiene que ser un nombre de fichero seguro.
  */
 export class FileConversationStore implements ConversationStore {
   private readonly directorio: string;
@@ -154,19 +156,41 @@ export class FileConversationStore implements ConversationStore {
     await this.colaDeEscritura;
   }
 
-  async getHistory(proyectoId: string, limite: number): Promise<ChatMessage[]> {
+  async getHistory(proyectoId: string, usuarioId: string, limite: number): Promise<ChatMessage[]> {
     const tope = limiteSano(limite);
     const conversacion = await this.cargar(proyectoId);
-    // Un mensaje guardado por una versión anterior a `tipo` no lo trae: cae en
-    // el valor de siempre.
-    return conversacion.mensajes.slice(-tope).map((mensaje) => ({ ...mensaje, tipo: mensaje.tipo ?? 'respuesta' }));
+    return conversacion.mensajes
+      .filter((mensaje) => mensaje.hiloDe === usuarioId)
+      .slice(-tope)
+      .map(({ hiloDe: _hilo, ...mensaje }) => ({
+        ...mensaje,
+        // Un mensaje guardado por una versión anterior a `tipo` no lo trae:
+        // cae en el valor de siempre.
+        tipo: mensaje.tipo ?? 'respuesta',
+      }));
   }
 
-  async appendTurn(proyectoId: string, autorId: string, usuario: string, asistente: string): Promise<void> {
+  /** Deja en el hilo de `usuarioId` solo sus últimos mensajes; los demás hilos no se tocan. */
+  private recortar(conversacion: ConversacionEnDisco, usuarioId: string): void {
+    const delHilo = conversacion.mensajes.filter((mensaje) => mensaje.hiloDe === usuarioId);
+    const sobrantes = new Set(delHilo.slice(0, Math.max(0, delHilo.length - MAXIMO_TURNOS * 2)));
+    if (sobrantes.size > 0) {
+      conversacion.mensajes = conversacion.mensajes.filter((mensaje) => !sobrantes.has(mensaje));
+    }
+  }
+
+  async appendTurn(proyectoId: string, usuarioId: string, usuario: string, asistente: string): Promise<void> {
     const conversacion = await this.cargar(proyectoId);
     const ahora = new Date();
     conversacion.mensajes.push(
-      { role: 'user', texto: usuario, autorId, creadoEn: ahora.toISOString(), tipo: 'respuesta' },
+      {
+        role: 'user',
+        texto: usuario,
+        autorId: usuarioId,
+        creadoEn: ahora.toISOString(),
+        tipo: 'respuesta',
+        hiloDe: usuarioId,
+      },
       // Un milisegundo después y no el mismo instante: así el orden de los dos
       // mensajes de un turno no depende de que `Array.push` los haya puesto en
       // ese orden, que es un detalle de esta implementación y no algo que el
@@ -177,16 +201,15 @@ export class FileConversationStore implements ConversationStore {
         autorId: null,
         creadoEn: new Date(ahora.getTime() + 1).toISOString(),
         tipo: 'respuesta',
+        hiloDe: usuarioId,
       },
     );
 
-    const sobrantes = conversacion.mensajes.length - MAXIMO_TURNOS * 2;
-    if (sobrantes > 0) conversacion.mensajes = conversacion.mensajes.slice(sobrantes);
-
+    this.recortar(conversacion, usuarioId);
     this.persistir(proyectoId, conversacion);
   }
 
-  async appendComentario(proyectoId: string, texto: string): Promise<void> {
+  async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void> {
     const conversacion = await this.cargar(proyectoId);
     conversacion.mensajes.push({
       role: 'assistant',
@@ -194,11 +217,10 @@ export class FileConversationStore implements ConversationStore {
       autorId: null,
       creadoEn: new Date().toISOString(),
       tipo: 'observacion',
+      hiloDe: usuarioId,
     });
 
-    const sobrantes = conversacion.mensajes.length - MAXIMO_TURNOS * 2;
-    if (sobrantes > 0) conversacion.mensajes = conversacion.mensajes.slice(sobrantes);
-
+    this.recortar(conversacion, usuarioId);
     this.persistir(proyectoId, conversacion);
   }
 

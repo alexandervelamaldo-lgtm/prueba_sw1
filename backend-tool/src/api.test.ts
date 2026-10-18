@@ -800,7 +800,7 @@ describe('asistente', () => {
     );
   });
 
-  it('el historial se comparte entre los integrantes del mismo proyecto, cada turno firmado por su autor', async () => {
+  it('cada integrante tiene su propio hilo: Beto no ve lo que Ana le pidió a la IA', async () => {
     const ana = await registrar('ana@ejemplo.com');
     const beto = await registrar('beto@ejemplo.com');
     const proyectoId = await crearProyecto(ana);
@@ -813,23 +813,27 @@ describe('asistente', () => {
       .post(`/api/proyectos/${proyectoId}/asistente`)
       .set('Authorization', `Bearer ${ana}`)
       .send({ texto: 'crea la clase Cliente' });
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/asistente`)
+      .set('Authorization', `Bearer ${beto}`)
+      .send({ texto: 'crea la clase Pedido' });
 
-    // Beto no escribió nada todavía y ya ve lo que pidió Ana: es un hilo de
-    // proyecto, no uno privado por integrante.
     const historialDeBeto = await request(app)
       .get(`/api/proyectos/${proyectoId}/asistente/historial`)
       .set('Authorization', `Bearer ${beto}`);
+    const historialDeAna = await request(app)
+      .get(`/api/proyectos/${proyectoId}/asistente/historial`)
+      .set('Authorization', `Bearer ${ana}`);
 
     expect(historialDeBeto.status).toBe(200);
-    const turnoDeAna = historialDeBeto.body.turnos.find(
-      (t: { texto: string }) => t.texto === 'crea la clase Cliente',
-    );
-    expect(turnoDeAna).toMatchObject({ role: 'user', autorNombre: 'ana' });
+    const textosDeBeto = historialDeBeto.body.turnos.map((t: { texto: string }) => t.texto);
+    expect(textosDeBeto).toContain('crea la clase Pedido');
+    expect(textosDeBeto).not.toContain('crea la clase Cliente');
+    expect(historialDeBeto.body.turnos).toHaveLength(2);
 
-    const turnoDelAsistente = historialDeBeto.body.turnos.find(
-      (t: { role: string }) => t.role === 'assistant',
-    );
-    expect(turnoDelAsistente).toMatchObject({ autorNombre: null });
+    const textosDeAna = historialDeAna.body.turnos.map((t: { texto: string }) => t.texto);
+    expect(textosDeAna).toContain('crea la clase Cliente');
+    expect(textosDeAna).not.toContain('crea la clase Pedido');
   });
 });
 

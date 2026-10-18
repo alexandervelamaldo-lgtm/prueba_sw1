@@ -24,6 +24,7 @@ export * from './crdt/historial.js';
 export * from './crdt/wire.js';
 export * from './crdt/provider.js';
 export * from './ai/grammar.js';
+export * from './ai/eventos-asistente.js';
 export * from './xmi/xml.js';
 export * from './xmi/export.js';
 export * from './xmi/import.js';

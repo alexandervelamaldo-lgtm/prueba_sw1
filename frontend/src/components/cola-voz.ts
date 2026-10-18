@@ -17,8 +17,20 @@ export function crearColaDeVoz(hablar: Hablar): {
   decir(texto: string): void;
   terminar(): void;
   vaciar(): void;
+  /**
+   * Avisa una vez cuando ya no queda nada por decir (enseguida, si no suena
+   * nada). Es lo que espera el modo conversación para volver a escuchar sin
+   * pisar a la IA.
+   */
+  cuandoTermine(aviso: () => void): void;
 } {
   const pendientes: string[] = [];
+  let avisos: (() => void)[] = [];
+  const avisarFin = (): void => {
+    const porAvisar = avisos;
+    avisos = [];
+    porAvisar.forEach((aviso) => aviso());
+  };
   let sonando = false;
   let sinAviso = false;
   let generacion = 0;
@@ -28,6 +40,7 @@ export function crearColaDeVoz(hablar: Hablar): {
     const texto = pendientes.shift();
     if (texto === undefined) {
       sonando = false;
+      avisarFin();
       return;
     }
     sonando = true;
@@ -39,6 +52,10 @@ export function crearColaDeVoz(hablar: Hablar): {
   };
 
   return {
+    cuandoTermine(aviso) {
+      if (!sonando && pendientes.length === 0) aviso();
+      else avisos.push(aviso);
+    },
     decir(texto) {
       const limpio = texto.trim();
       if (!limpio || cerrada) return;
@@ -46,15 +63,17 @@ export function crearColaDeVoz(hablar: Hablar): {
       if (!sonando) siguiente();
     },
     terminar() {
-      if (cerrada || !sinAviso || pendientes.length === 0) return;
-      const resto = pendientes.splice(0).join(' ');
-      hablar(resto);
+      if (cerrada || !sinAviso) return;
+      // El puente del móvil no dice cuándo termina: no hay a qué esperar.
+      if (pendientes.length > 0) hablar(pendientes.splice(0).join(' '));
+      avisarFin();
     },
     vaciar() {
       cerrada = true;
       generacion += 1;
       pendientes.length = 0;
       sonando = false;
+      avisarFin();
     },
   };
 }

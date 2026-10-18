@@ -55,6 +55,8 @@ const PRESETS: Record<ColorAvatarIA, Preset> = {
 interface Props {
   onClick: () => void;
   estado?: EstadoAvatarIA;
+  /** Modo conversación activo: el avatar lleva un anillo y pulsarlo lo apaga. */
+  activo?: boolean;
   color?: ColorAvatarIA;
   /** Texto accesible y del `title`. */
   etiqueta?: string;
@@ -63,8 +65,9 @@ interface Props {
 export function AvatarIA({
   onClick,
   estado = 'reposo',
+  activo = false,
   color = 'cyan',
-  etiqueta = 'Abrir el Modo IA',
+  etiqueta = activo ? 'Salir del modo conversación' : 'Abrir el Modo IA',
 }: Props): JSX.Element {
   const id = useId().replace(/\W/g, '');
   const preset = PRESETS[color];
@@ -72,8 +75,9 @@ export function AvatarIA({
   return (
     <motion.button
       type="button"
-      className={`avatar-ia avatar-ia--${estado}`}
+      className={`avatar-ia avatar-ia--${estado}${activo ? ' avatar-ia--activo' : ''}`}
       onClick={onClick}
+      aria-pressed={activo}
       aria-label={etiqueta}
       title={etiqueta}
       whileTap={{ scaleX: 1.15, scaleY: 1.3 }}

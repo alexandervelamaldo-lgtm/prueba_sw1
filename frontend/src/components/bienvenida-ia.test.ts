@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { debeEscucharTrasSaludo, textoDeBienvenida } from './bienvenida-ia';
+import { debeEscucharTrasSaludo, debeSeguirConversando, textoDeBienvenida } from './bienvenida-ia';
 
 /**
  * El saludo con el que la IA abre el Modo IA desde el avatar. Se arma en el
@@ -48,5 +48,35 @@ describe('debeEscucharTrasSaludo', () => {
     expect(debeEscucharTrasSaludo({ ...listo, hayTexto: true })).toBe(false);
     expect(debeEscucharTrasSaludo({ ...listo, ocupado: true })).toBe(false);
     expect(debeEscucharTrasSaludo({ ...listo, escuchando: true })).toBe(false);
+  });
+});
+
+describe('debeSeguirConversando', () => {
+  const listo = {
+    conversacion: true,
+    huboError: false,
+    montado: true,
+    soloLectura: false,
+    hayDictado: true,
+    ocupado: false,
+    escuchando: false,
+    hayTexto: false,
+  };
+
+  it('en modo conversación, vuelve a escuchar', () => {
+    expect(debeSeguirConversando(listo)).toBe(true);
+  });
+
+  it('fuera del modo conversación, no', () => {
+    expect(debeSeguirConversando({ ...listo, conversacion: false })).toBe(false);
+  });
+
+  it('tras un error del micrófono no insiste: sería un bucle', () => {
+    expect(debeSeguirConversando({ ...listo, huboError: true })).toBe(false);
+  });
+
+  it('respeta las mismas reglas que tras el saludo', () => {
+    expect(debeSeguirConversando({ ...listo, hayTexto: true })).toBe(false);
+    expect(debeSeguirConversando({ ...listo, ocupado: true })).toBe(false);
   });
 });

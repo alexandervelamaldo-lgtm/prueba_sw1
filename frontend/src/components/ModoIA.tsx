@@ -22,7 +22,7 @@ import {
   type MarcasDeBorrado,
 } from './ia-ejecucion';
 import { crearColaDeVoz } from './cola-voz';
-import { debeEscucharTrasSaludo, textoDeBienvenida } from './bienvenida-ia';
+import { debeEscucharTrasSaludo, debeSeguirConversando, textoDeBienvenida } from './bienvenida-ia';
 import { crearManejadorDeStream, debeRepasar, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
 import type { GrupoDeshacer } from '../hooks/deshacer-agrupado';
 
@@ -100,6 +100,11 @@ interface Props {
   onSaludado?: () => void;
   /** Si la IA está trabajando, para que el avatar «piense». */
   onEstado?: (estado: 'reposo' | 'pensando') => void;
+  /**
+   * Modo conversación (el avatar activo): tras cada respuesta, y tras cada
+   * silencio, el micrófono vuelve a encenderse solo. Se apaga desde el avatar.
+   */
+  conversacion?: boolean;
 }
 
 interface Turno {
@@ -162,6 +167,7 @@ export function ModoIA({
   saludoPendiente,
   onSaludado,
   onEstado,
+  conversacion = false,
 }: Props): JSX.Element {
   const [turnos, setTurnos] = useState<Turno[]>([]);
   const [autoAplicar, setAutoAplicar] = useState(leerAutoAplicar);
@@ -245,6 +251,49 @@ export function ModoIA({
   const textoRef = useRef(texto);
   textoRef.current = texto;
   const escucharRef = useRef<() => void>(() => {});
+  const conversacionRef = useRef(conversacion);
+  conversacionRef.current = conversacion;
+  // Un error del micrófono corta el modo conversación hasta que se vuelva a
+  // pulsar algo: reintentar solo sería un bucle de errores.
+  const huboErrorRef = useRef(false);
+
+  /** En el modo conversación, vuelve a encender el micrófono si toca. */
+  const seguirConversando = (): void => {
+    const puede = debeSeguirConversando({
+      conversacion: conversacionRef.current,
+      huboError: huboErrorRef.current,
+      montado: montadoRef.current,
+      soloLectura,
+      hayDictado: dictadoDisponible(),
+      ocupado: ordenEnCursoRef.current !== null,
+      escuchando: escuchandoRef.current,
+      hayTexto: textoRef.current.trim() !== '',
+    });
+    if (puede) escucharRef.current();
+  };
+  // Lo que se lee al cabo de una pausa, para que use el estado de entonces.
+  const seguirConversandoRef = useRef(seguirConversando);
+  seguirConversandoRef.current = seguirConversando;
+  /** Un respiro antes de volver a escuchar: deja que React pinte el estado nuevo. */
+  const seguirConversandoEnUnMomento = (): void => {
+    setTimeout(() => seguirConversandoRef.current(), 300);
+  };
+
+  // Al salir del modo conversación (desde el avatar), deja de escuchar y se calla.
+  const conversacionAnteriorRef = useRef(conversacion);
+  useEffect(() => {
+    const antes = conversacionAnteriorRef.current;
+    conversacionAnteriorRef.current = conversacion;
+    if (conversacion) {
+      huboErrorRef.current = false;
+      return;
+    }
+    if (!antes) return;
+    const dictado = dictadoRef.current;
+    if (dictado?.cancelar) dictado.cancelar();
+    else dictado?.detener();
+    callar();
+  }, [conversacion]);
   const [error, setError] = useState<string | null>(null);
   const dictadoRef = useRef<SesionDictado | null>(null);
   const hayDictado = dictadoDisponible();
@@ -409,6 +458,13 @@ export function ModoIA({
       await enCurso;
     } finally {
       if (ordenEnCursoRef.current === enCurso) ordenEnCursoRef.current = null;
+    }
+    // Modo conversación: cuando la IA termina de responder —y de hablar, si
+    // habló—, vuelve a escuchar.
+    if (conversacionRef.current) {
+      const cola = colaVozRef.current;
+      if (cola) cola.cuandoTermine(seguirConversandoEnUnMomento);
+      else seguirConversandoEnUnMomento();
     }
   };
 
@@ -643,23 +699,31 @@ export function ModoIA({
 
   /** Enciende el micrófono; lo dictado se envía como una orden por voz. */
   const empezarAEscuchar = (): void => {
+    let huboFinal = false;
+    huboErrorRef.current = false;
     setError(null);
     setEscuchando(true);
     dictadoRef.current = dictar({
       puntuar: puntuarPorVocabulario,
       onParcial: (parcial) => setTexto(parcial),
       onFinal: (final) => {
+        huboFinal = true;
         // Lo que llegue con el panel ya cerrado no se manda.
         if (!montadoRef.current) return;
         setTexto(final);
         void enviar(final, true);
       },
       onError: (motivo) => {
+        huboErrorRef.current = true;
         setError(motivo);
         setEscuchando(false);
       },
       onAviso: (aviso) => setError(aviso),
-      onFin: () => setEscuchando(false),
+      onFin: () => {
+        setEscuchando(false);
+        // Se apagó por silencio, sin orden: en modo conversación, a escuchar otra vez.
+        if (!huboFinal) seguirConversandoEnUnMomento();
+      },
     });
     if (!dictadoRef.current) setEscuchando(false);
   };

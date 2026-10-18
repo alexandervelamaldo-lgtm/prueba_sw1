@@ -38,3 +38,15 @@ export function debeEscucharTrasSaludo(estado: {
     !estado.hayTexto
   );
 }
+
+/**
+ * En el modo conversación (el avatar pulsado y activo), si el Modo IA vuelve
+ * a encender el micrófono: tras cada respuesta de la IA y tras un silencio
+ * que apagó el micrófono, hasta que se vuelva a pulsar el avatar. Tras un
+ * error del micrófono (sin permiso, sin micrófono) no insiste: sería un bucle.
+ */
+export function debeSeguirConversando(
+  estado: Parameters<typeof debeEscucharTrasSaludo>[0] & { conversacion: boolean; huboError: boolean },
+): boolean {
+  return estado.conversacion && !estado.huboError && debeEscucharTrasSaludo(estado);
+}

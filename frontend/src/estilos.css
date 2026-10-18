@@ -6837,7 +6837,8 @@ select:focus {
   cursor: pointer;
 }
 
-.avatar-ia:focus-visible {
+.avatar-ia:focus-visible,
+.avatar-ia--activo {
   outline: 2px solid var(--acento);
   outline-offset: 3px;
 }

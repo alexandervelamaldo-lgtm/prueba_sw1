@@ -81,3 +81,41 @@ describe('crearColaDeVoz tras una interrupción', () => {
     expect(voz.dichas).toEqual(['Uno.']);
   });
 });
+
+describe('crearColaDeVoz.cuandoTermine', () => {
+  it('avisa cuando terminó de decir todo lo pendiente', () => {
+    const voz = dobleDeVoz();
+    const cola = crearColaDeVoz(voz.hablar);
+    const avisos: string[] = [];
+
+    cola.decir('Uno.');
+    cola.decir('Dos.');
+    cola.cuandoTermine(() => avisos.push('terminó'));
+    voz.terminarFrase();
+    expect(avisos).toEqual([]);
+    voz.terminarFrase();
+
+    expect(avisos).toEqual(['terminó']);
+  });
+
+  it('si no hay nada sonando, avisa enseguida', () => {
+    const cola = crearColaDeVoz(dobleDeVoz().hablar);
+    const avisos: string[] = [];
+
+    cola.cuandoTermine(() => avisos.push('terminó'));
+
+    expect(avisos).toEqual(['terminó']);
+  });
+
+  it('interrumpida, también avisa: ya no queda nada por decir', () => {
+    const voz = dobleDeVoz();
+    const cola = crearColaDeVoz(voz.hablar);
+    const avisos: string[] = [];
+
+    cola.decir('Uno.');
+    cola.cuandoTermine(() => avisos.push('terminó'));
+    cola.vaciar();
+
+    expect(avisos).toEqual(['terminó']);
+  });
+});

@@ -143,6 +143,13 @@ export function EditorDiagrama({
   const estrecha = usePantallaEstrecha();
   const hayTeclado = useTecladoFisico();
   const paneles = usePaneles(proyecto.id);
+  // Modo conversación: entra con el avatar y solo sale con el avatar (o al
+  // cerrar el panel de la IA): mientras tanto, la IA vuelve a escuchar sola.
+  const [conversacion, setConversacion] = useState(false);
+  const panelIAAbierto = paneles.disposicion.abiertos.ia;
+  useEffect(() => {
+    if (!panelIAAbierto) setConversacion(false);
+  }, [panelIAAbierto]);
   const { tema, alternar: alternarTema } = useTema();
 
   const pedirZoom = useCallback((tipo: 'acercar' | 'alejar' | 'ajustar') => {
@@ -675,9 +682,15 @@ export function EditorDiagrama({
         {autor && (
           <AvatarIA
             estado={estadoIA}
+            activo={conversacion}
             onClick={() => {
+              if (conversacion) {
+                setConversacion(false);
+                return;
+              }
               paneles.abrir('ia');
               setSaludoPendiente(true);
+              setConversacion(true);
             }}
           />
         )}
@@ -943,6 +956,7 @@ export function EditorDiagrama({
                     saludoPendiente={saludoPendiente}
                     onSaludado={alSaludar}
                     onEstado={setEstadoIA}
+                    conversacion={conversacion}
                   />
                 ) : null,
             },

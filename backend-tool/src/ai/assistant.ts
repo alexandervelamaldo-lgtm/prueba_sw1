@@ -50,6 +50,8 @@ export interface AssistantContext {
   seleccion?: string;
   /** Lo hablado antes de la ventana de turnos, resumido (`resumirConversacion`). */
   resumen?: string;
+  /** Recibe los tokens que gastó la llamada al modelo (control de costos). */
+  registrarUso?: (tokens: number) => void;
 }
 
 // Define la "plantilla" o contrato que debe cumplir cualquier motor de asistente:
@@ -77,7 +79,11 @@ export interface AssistantEngine {
    * Junta el resumen anterior de un hilo con los mensajes que van a salir de
    * su ventana, en un resumen nuevo. Opcional: sin él se usa `resumenLocal`.
    */
-  resumirConversacion?(previo: string | null, mensajes: ChatMessage[]): Promise<string>;
+  resumirConversacion?(
+    previo: string | null,
+    mensajes: ChatMessage[],
+    registrarUso?: (tokens: number) => void,
+  ): Promise<string>;
 }
 
 /**
@@ -295,6 +301,21 @@ export class LlmAssistant implements AssistantEngine {
       yield evento;
     };
 
+    // Uso de esta respuesta: lo que informen los eventos del proveedor o, si
+    // no informan nada, una estimación. Se reporta una vez al terminar, también
+    // si falla a mitad: lo que el modelo ya escribió se pagó igual.
+    let usoInformado = 0;
+    let huboUso = false;
+    const enviado = system + user + historial.map((m) => m.content).join('');
+    const alUso = (tokens: number): void => {
+      usoInformado += tokens;
+      huboUso = true;
+    };
+    const reportarUso = (): void => {
+      if (texto === prefijo && !huboUso) return;
+      contexto?.registrarUso?.(huboUso ? usoInformado : estimarTokens(enviado + texto));
+    };
+
     try {
       for await (const fragmento of textoDelStream(
         leerStreamDelModelo({
@@ -306,6 +327,7 @@ export class LlmAssistant implements AssistantEngine {
           timeoutMs: this.options.timeoutMs ?? 20_000,
         }, signal),
         this.provider,
+        alUso,
       )) {
         texto += fragmento;
         // Lo que el modelo escriba antes del objeto (una valla ```json o una
@@ -360,6 +382,8 @@ export class LlmAssistant implements AssistantEngine {
       if (signal?.aborted) throw error;
       if (eventosEnviados > 0) throw error;
       yield* this.eventosDeFallback(prompt, diagram);
+    } finally {
+      reportarUso();
     }
   }
 
@@ -400,7 +424,7 @@ export class LlmAssistant implements AssistantEngine {
   // Se encarga de empaquetar la petición y enviarla por internet según el proveedor (Anthropic u OpenAI).
   private async ask(prompt: string, diagram: ClassDiagram, contexto?: AssistantContext): Promise<string> {
     const { system, user, historial } = this.prepararInterpretacion(prompt, diagram, contexto);
-    return this.enviarConversacion(system, user, historial, 4096, true);
+    return this.enviarConversacion(system, user, historial, 4096, true, contexto?.registrarUso);
   }
 
   private prepararInterpretacion(
@@ -431,13 +455,17 @@ export class LlmAssistant implements AssistantEngine {
   // MEMORIA RESUMIDA:
   // Mismo transporte, texto llano. Si el modelo falla, el resumen local: mejor
   // un resumen pobre que perder lo que sale de la ventana.
-  async resumirConversacion(previo: string | null, mensajes: ChatMessage[]): Promise<string> {
+  async resumirConversacion(
+    previo: string | null,
+    mensajes: ChatMessage[],
+    registrarUso?: (tokens: number) => void,
+  ): Promise<string> {
     const transcripcion = mensajes
       .map((m) => `${m.role === 'user' ? 'Persona' : 'IA'}: ${m.texto}`)
       .join('\n');
     const user = `${previo ? `Resumen hasta ahora: ${previo}\n\n` : ''}Mensajes que añadir al resumen:\n${transcripcion}`;
     try {
-      const resumen = (await this.enviarConversacion(PROMPT_RESUMEN, user, [], 400, false)).trim();
+      const resumen = (await this.enviarConversacion(PROMPT_RESUMEN, user, [], 400, false, registrarUso)).trim();
       if (resumen) return resumen.slice(0, MAXIMO_RESUMEN);
     } catch (error) {
       console.warn('El modelo no pudo resumir la conversación:', (error as Error).message);
@@ -455,7 +483,14 @@ export class LlmAssistant implements AssistantEngine {
   private async pedirRevision(diagram: ClassDiagram, contexto?: AssistantContext): Promise<string> {
     const user = `Diagrama actual:\n${summarize(diagram)}${pistasDelRevisor(diagram)}`;
 
-    return this.enviarConversacion(REVIEW_SYSTEM_PROMPT, user, this.historialComoMensajes(contexto), 300, false);
+    return this.enviarConversacion(
+      REVIEW_SYSTEM_PROMPT,
+      user,
+      this.historialComoMensajes(contexto),
+      300,
+      false,
+      contexto?.registrarUso,
+    );
   }
 
   /**
@@ -472,7 +507,15 @@ export class LlmAssistant implements AssistantEngine {
     historial: { role: 'user' | 'assistant'; content: string }[],
     maxTokens: number,
     forzarJsonInicial: boolean,
+    registrarUso?: (tokens: number) => void,
   ): Promise<string> {
+    // Lo que informa el proveedor; si no lo informa, una estimación por
+    // caracteres de lo enviado y lo recibido.
+    const contar = (payload: unknown, respuesta: string): void => {
+      if (!registrarUso) return;
+      const enviado = system + user + historial.map((m) => m.content).join('');
+      registrarUso(tokensDeUso(payload) ?? estimarTokens(enviado + respuesta));
+    };
     const defectos = DEFECTOS[this.provider];
     const baseUrl = (this.options.baseUrl ?? defectos.baseUrl).replace(/\/+$/, '');
     const model = this.options.model ?? defectos.model;
@@ -494,6 +537,7 @@ export class LlmAssistant implements AssistantEngine {
         timeoutMs: this.options.timeoutMs ?? 20_000,
       });
       const texto = payload.content?.find((block) => block.type === 'text')?.text ?? '';
+      contar(payload, texto);
       return forzarJsonInicial ? `{${texto}` : texto;
     }
 
@@ -510,7 +554,9 @@ export class LlmAssistant implements AssistantEngine {
       timeoutMs: this.options.timeoutMs ?? 20_000,
     });
 
-    return payload.choices?.[0]?.message?.content ?? '';
+    const texto = payload.choices?.[0]?.message?.content ?? '';
+    contar(payload, texto);
+    return texto;
   }
 }
 
@@ -526,6 +572,7 @@ function esObjeto(valor: unknown): valor is Record<string, unknown> {
 async function* textoDelStream(
   trozos: AsyncIterable<string>,
   proveedor: 'anthropic' | 'openai',
+  alUso?: (tokens: number) => void,
 ): AsyncGenerator<string> {
   let pendiente = '';
   for await (const trozo of trozos) {
@@ -545,6 +592,7 @@ async function* textoDelStream(
           throw new Error('el modelo envió un evento SSE no válido');
         }
         if (!esObjeto(contenido)) continue;
+        informarUso(contenido, alUso);
         if (proveedor === 'openai') {
           const choices = contenido.choices;
           const delta = Array.isArray(choices) && esObjeto(choices[0]) ? choices[0].delta : null;
@@ -569,6 +617,7 @@ async function* textoDelStream(
       const dato = linea.slice(5).trim();
       if (dato === '[DONE]') return;
       const contenido: unknown = JSON.parse(dato);
+      if (esObjeto(contenido)) informarUso(contenido, alUso);
       if (!esObjeto(contenido)) continue;
       if (proveedor === 'openai') {
         const choices = contenido.choices;
@@ -633,6 +682,39 @@ export function resumirCambiosRecientes(entradas: EntradaHistorial[], limite: nu
     const via = entrada.propuestoPor ? ` (propuesto por ${entrada.propuestoPor})` : '';
     return `${fecha} · ${entrada.autorNombre || 'alguien'} · ${entrada.resumen}${via}`;
   });
+}
+
+/**
+ * Los tokens que informa el proveedor en `usage`: OpenAI (`prompt_tokens` y
+ * `completion_tokens`, o `total_tokens`) y Anthropic (`input_tokens` y
+ * `output_tokens`). `null` si no informa nada: no se inventa un número.
+ */
+export function tokensDeUso(payload: unknown): number | null {
+  if (!esObjeto(payload) || !esObjeto(payload.usage)) return null;
+  const uso = payload.usage;
+  const numero = (valor: unknown): number => (typeof valor === 'number' && Number.isFinite(valor) ? valor : 0);
+  const partes =
+    numero(uso.prompt_tokens) + numero(uso.completion_tokens) + numero(uso.input_tokens) + numero(uso.output_tokens);
+  const total = partes > 0 ? partes : numero(uso.total_tokens);
+  return total > 0 ? total : null;
+}
+
+/** Estimación cuando el proveedor no informa: unos cuatro caracteres por token. */
+export function estimarTokens(texto: string): number {
+  return Math.ceil(texto.length / 4);
+}
+
+/**
+ * El uso que llega dentro de un stream: OpenAI lo manda en un trozo con
+ * `usage` (si el proveedor lo envía); Anthropic, en `message_start` (entrada)
+ * y en `message_delta` (salida).
+ */
+function informarUso(evento: Record<string, unknown>, alUso?: (tokens: number) => void): void {
+  if (!alUso) return;
+  const anidado = esObjeto(evento.message) ? tokensDeUso(evento.message) : null;
+  const directo = tokensDeUso(evento);
+  const tokens = (anidado ?? 0) + (directo ?? 0);
+  if (tokens > 0) alUso(tokens);
 }
 
 /**

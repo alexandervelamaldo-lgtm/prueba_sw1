@@ -2,7 +2,15 @@ import { createServer, type Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDiagram, createClass, createAttribute, type EventoAsistente } from '@app/shared';
-import { GrammarAssistant, LlmAssistant, createAssistant, extractJson, resumirCambiosRecientes } from './assistant.js';
+import {
+  GrammarAssistant,
+  LlmAssistant,
+  createAssistant,
+  estimarTokens,
+  extractJson,
+  resumirCambiosRecientes,
+  tokensDeUso,
+} from './assistant.js';
 import { OpenAiVisionEngine, createVisionEngine } from './vision.js';
 import { ErrorDeModelo } from './transporte.js';
 
@@ -370,6 +378,21 @@ describe('LlmAssistant contra un proveedor simulado', () => {
     expect(resumen).toContain('crea Pedido');
   });
 
+  it('cuenta los tokens que informa el proveedor', async () => {
+    responder = () => ({
+      status: 200,
+      payload: {
+        ...comoOpenAi(JSON.stringify({ actions: [{ _type: 'message', text: 'Hola.' }] })),
+        usage: { prompt_tokens: 300, completion_tokens: 20, total_tokens: 320 },
+      },
+    });
+    const usos: number[] = [];
+
+    await motor().interpret('hola', diagrama, { historial: [], otrosProyectos: [], registrarUso: (n) => usos.push(n) });
+
+    expect(usos).toEqual([320]);
+  });
+
   it('usa el protocolo de Anthropic cuando se le pide', async () => {
     responder = () => ({
       status: 200,
@@ -581,6 +604,43 @@ describe('LlmAssistant.interpretarEnStream contra un proveedor simulado', () => 
       { tipo: 'senalar', clases: ['Cliente'] },
       { tipo: 'mensaje', texto: 'A esta clase le falta un email.' },
     ]);
+  });
+
+  it('en streaming cuenta el usage del último trozo, o lo estima si el proveedor no lo manda', async () => {
+    const json = JSON.stringify({ actions: [{ _type: 'message', text: 'Hola' }] });
+    bloquesSse = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: json } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 500, completion_tokens: 12 } })}\n\n`,
+      'data: [DONE]\n\n',
+    ];
+    const conUsage: number[] = [];
+    for await (const _e of motor().interpretarEnStream('hola', diagrama, { historial: [], otrosProyectos: [], registrarUso: (n) => conUsage.push(n) })) {
+      // consumir
+    }
+
+    bloquesSse = [`data: ${JSON.stringify({ choices: [{ delta: { content: json } }] })}\n\n`, 'data: [DONE]\n\n'];
+    const estimados: number[] = [];
+    for await (const _e of motor().interpretarEnStream('hola', diagrama, { historial: [], otrosProyectos: [], registrarUso: (n) => estimados.push(n) })) {
+      // consumir
+    }
+
+    expect(conUsage).toEqual([512]);
+    expect(estimados).toHaveLength(1);
+    expect(estimados[0]).toBeGreaterThan(100);
+  });
+
+  it('cuenta el usage aunque llegue en el último evento sin línea en blanco al final', async () => {
+    const json = JSON.stringify({ actions: [{ _type: 'message', text: 'Hola' }] });
+    bloquesSse = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: json } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 90, completion_tokens: 10 } })}`,
+    ];
+    const usos: number[] = [];
+    for await (const _e of motor().interpretarEnStream('hola', diagrama, { historial: [], otrosProyectos: [], registrarUso: (n) => usos.push(n) })) {
+      // consumir
+    }
+
+    expect(usos).toEqual([100]);
   });
 
   it('propaga la cancelación externa en vez de degradar a la gramática', async () => {
@@ -1298,5 +1358,23 @@ describe('resumirCambiosRecientes', () => {
       '2026-10-17 21:02 UTC · Ana · Cambio 2',
       '2026-10-17 21:03 UTC · Ana · Cambio 3',
     ]);
+  });
+});
+
+describe('tokensDeUso y estimarTokens', () => {
+  it('lee el usage de OpenAI y de Anthropic', () => {
+    expect(tokensDeUso({ usage: { prompt_tokens: 10, completion_tokens: 5 } })).toBe(15);
+    expect(tokensDeUso({ usage: { total_tokens: 40 } })).toBe(40);
+    expect(tokensDeUso({ usage: { input_tokens: 8, output_tokens: 2 } })).toBe(10);
+  });
+
+  it('sin usage no inventa un número', () => {
+    expect(tokensDeUso({})).toBeNull();
+    expect(tokensDeUso(null)).toBeNull();
+  });
+
+  it('estima unos cuatro caracteres por token, redondeando hacia arriba', () => {
+    expect(estimarTokens('abcdefghi')).toBe(3);
+    expect(estimarTokens('')).toBe(0);
   });
 });

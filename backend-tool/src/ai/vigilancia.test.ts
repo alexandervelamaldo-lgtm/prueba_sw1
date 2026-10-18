@@ -51,8 +51,9 @@ class AsistenteFalso implements AssistantEngine {
     throw new Error('no usado en estas pruebas');
   }
 
-  async revisar(_diagram: ClassDiagram, _contexto?: AssistantContext): Promise<string | null> {
+  async revisar(_diagram: ClassDiagram, contexto?: AssistantContext): Promise<string | null> {
     this.llamadas += 1;
+    contexto?.registrarUso?.(40);
     return this.siguienteComentario;
   }
 }
@@ -307,5 +308,55 @@ describe('a quién va el comentario', () => {
 
     expect(conversaciones.comentarios).toHaveLength(0);
     expect(asistente.llamadas).toBe(0);
+  });
+});
+
+describe('cupo de la IA en los comentarios espontáneos', () => {
+  function cupoFalso(conCupo: boolean) {
+    const sumado: { usuarioId: string; tokens: number }[] = [];
+    return {
+      sumado,
+      cupo: {
+        reservar: async (usuarioId: string) => {
+          if (!conCupo) return null;
+          let total = 0;
+          return {
+            registrar: (tokens: number) => {
+              total += tokens;
+            },
+            cerrar: async () => {
+              sumado.push({ usuarioId, tokens: total });
+            },
+          };
+        },
+      },
+    };
+  }
+
+  it('lo que gasta el comentario cuenta para quien hizo el cambio', async () => {
+    const { cupo, sumado } = cupoFalso(true);
+    const vigilante = new VigilanteDiagrama(asistente, conversaciones, ESPERA_MS, ENFRIAMIENTO_MS, cupo);
+    const sala = crearSala();
+    sala.connections.add(crearConexion('ana'));
+    vigilante.observar('proyecto-1', sala);
+
+    cambiar(sala, crearConexion('ana'));
+    await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
+
+    expect(sumado).toEqual([{ usuarioId: 'ana', tokens: 40 }]);
+  });
+
+  it('sin cupo para el autor, la IA no comenta ni llama al modelo', async () => {
+    const { cupo } = cupoFalso(false);
+    const vigilante = new VigilanteDiagrama(asistente, conversaciones, ESPERA_MS, ENFRIAMIENTO_MS, cupo);
+    const sala = crearSala();
+    sala.connections.add(crearConexion('ana'));
+    vigilante.observar('proyecto-1', sala);
+
+    cambiar(sala, crearConexion('ana'));
+    await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
+
+    expect(asistente.llamadas).toBe(0);
+    expect(conversaciones.comentarios).toHaveLength(0);
   });
 });

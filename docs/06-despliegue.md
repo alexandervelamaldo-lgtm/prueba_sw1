@@ -321,6 +321,7 @@ proyecto: son la definición del despliegue, no notas de una sesión.
    | `FRONTEND_DIR` | `/app/frontend/dist` (ya viene en la imagen) |
    | `HOST` | `0.0.0.0` (ya viene en la imagen) |
    | `LLM_API_KEY`, `LLM_VISION_API_KEY` | Desde Secrets Manager |
+   | `LLM_LIMITE_DIARIO_TOKENS` | Opcional. Tokens de la IA que cada usuario puede gastar por día (UTC); al llegar, el asistente responde 429 hasta las 00:00 UTC. Sin ella no hay límite, solo se cuenta |
    | `DOCS_DIR` | No hace falta. La imagen trae `docs/` y el valor por defecto lo encuentra |
 
 App Runner admite WebSockets y termina TLS por su cuenta, así que `wss://`

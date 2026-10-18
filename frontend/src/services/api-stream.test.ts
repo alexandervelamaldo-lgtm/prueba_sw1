@@ -92,3 +92,14 @@ describe('api.interpretarEnStream', () => {
     expect((fallo as ApiError).esDeRed).toBe(true);
   });
 });
+
+describe('api.usoAsistente', () => {
+  it('pide el uso de hoy y el límite del Modo IA', async () => {
+    const fetchFalso = vi.fn(async () => new Response(JSON.stringify({ hoy: 1234, limite: 5000 }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchFalso);
+
+    expect(await api.usoAsistente('P1')).toEqual({ hoy: 1234, limite: 5000 });
+    const [url] = fetchFalso.mock.calls[0] as unknown as [string];
+    expect(url).toBe('/api/proyectos/P1/asistente/uso');
+  });
+});

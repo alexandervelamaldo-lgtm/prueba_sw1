@@ -996,6 +996,100 @@ describe('asistente', () => {
     await (deps.conversations as { flush?: () => Promise<void> }).flush?.();
   });
 
+  describe('control de costos', () => {
+    const leerSse = (req: request.Test) =>
+      req.buffer(true).parse((res, callback) => {
+        let cuerpo = '';
+        res.setEncoding('utf8');
+        res.on('data', (trozo) => (cuerpo += trozo));
+        res.on('end', () => callback(null, cuerpo));
+      });
+
+    async function preparar(limite: number | undefined) {
+      const token = await registrar('ana@ejemplo.com');
+      const proyectoId = await crearProyecto(token);
+      const yo = await request(app).get('/api/auth/yo').set('Authorization', `Bearer ${token}`);
+      const anaId = (yo.body.usuario?.id ?? yo.body.id) as string;
+      let llamadas = 0;
+      const fake: AssistantEngine = {
+        name: 'motor-prueba',
+        interpret: async (_p, _d, contexto) => {
+          llamadas += 1;
+          contexto?.registrarUso?.(70);
+          return { operations: [], confidence: 1, clarification: null, explanation: 'Hola.' };
+        },
+        revisar: async () => null,
+        async *interpretarEnStream(_p, _d, contexto): AsyncGenerator<EventoAsistente> {
+          llamadas += 1;
+          contexto?.registrarUso?.(100);
+          yield { tipo: 'mensaje', texto: 'Hola.' };
+          yield { tipo: 'fin', motor: 'motor-prueba', confianza: 1 };
+        },
+      };
+      app = createApp({ ...deps, config: { ...deps.config, llmLimiteDiarioTokens: limite }, assistant: fake }).app;
+      return { token, proyectoId, anaId, llamadas: () => llamadas };
+    }
+
+    const hoy = () => new Date().toISOString().slice(0, 10);
+
+    it('suma al día de quien pregunta lo que gastó cada petición', async () => {
+      const { token, proyectoId, anaId } = await preparar(undefined);
+
+      await leerSse(
+        request(app).post(`/api/proyectos/${proyectoId}/asistente/stream`).set('Authorization', `Bearer ${token}`).send({ texto: 'hola' }),
+      );
+      await request(app).post(`/api/proyectos/${proyectoId}/asistente`).set('Authorization', `Bearer ${token}`).send({ texto: 'hola' });
+
+      // El stream guarda su uso al cerrarse la respuesta, un instante después
+      // de que el cliente termine de leerla.
+      await vi.waitFor(async () => expect(await deps.usoIA.leer(anaId, hoy())).toBe(170));
+      await (deps.usoIA as { flush?: () => Promise<void> }).flush?.();
+    });
+
+    it('con el límite alcanzado, las dos rutas responden 429 sin llamar al modelo', async () => {
+      const { token, proyectoId, anaId, llamadas } = await preparar(150);
+      await deps.usoIA.sumar(anaId, hoy(), 150);
+
+      const enStream = await request(app)
+        .post(`/api/proyectos/${proyectoId}/asistente/stream`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ texto: 'hola' });
+      const normal = await request(app)
+        .post(`/api/proyectos/${proyectoId}/asistente`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ texto: 'hola' });
+
+      expect(enStream.status).toBe(429);
+      expect(normal.status).toBe(429);
+      expect(enStream.body.error).toContain('límite diario');
+      expect(llamadas()).toBe(0);
+    });
+
+    it('sin límite configurado no se bloquea nunca', async () => {
+      const { token, proyectoId, anaId } = await preparar(undefined);
+      await deps.usoIA.sumar(anaId, hoy(), 10_000_000);
+
+      const normal = await request(app)
+        .post(`/api/proyectos/${proyectoId}/asistente`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ texto: 'hola' });
+
+      expect(normal.status).toBe(200);
+    });
+
+    it('GET /asistente/uso dice lo gastado hoy y el límite', async () => {
+      const { token, proyectoId, anaId } = await preparar(5000);
+      await deps.usoIA.sumar(anaId, hoy(), 1234);
+
+      const uso = await request(app)
+        .get(`/api/proyectos/${proyectoId}/asistente/uso`)
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(uso.status).toBe(200);
+      expect(uso.body).toEqual({ hoy: 1234, limite: 5000 });
+    });
+  });
+
   it('envía mensajes, operaciones y el cierre en orden, calcula la descripción y guarda un único turno', async () => {
     const token = await registrar('ana@ejemplo.com');
     const proyectoId = await crearProyecto(token);
@@ -1132,6 +1226,56 @@ describe('asistente', () => {
       .get(`/api/proyectos/${proyectoId}/asistente/historial`)
       .set('Authorization', `Bearer ${token}`);
     expect(historial.body.turnos).toEqual([]);
+  });
+
+  it('si el cliente se desconecta, se cuenta igual lo que el motor reportó al cortarse', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+    const yo = await request(app).get('/api/auth/yo').set('Authorization', `Bearer ${token}`);
+    const anaId = (yo.body.usuario?.id ?? yo.body.id) as string;
+    const fake: AssistantEngine = {
+      name: 'motor-prueba',
+      interpret: async () => ({ operations: [], confidence: 1, clarification: null, explanation: '' }),
+      revisar: async () => null,
+      async *interpretarEnStream(_p, _d, contexto, signal): AsyncGenerator<EventoAsistente> {
+        try {
+          yield { tipo: 'mensaje', texto: 'Todavía escribo.' };
+          await new Promise<void>((resolve) => signal?.addEventListener('abort', () => resolve(), { once: true }));
+        } finally {
+          // Como el motor de verdad: el uso se informa al cerrarse el stream.
+          contexto?.registrarUso?.(50);
+        }
+      },
+    };
+    app = createApp({ ...deps, assistant: fake }).app;
+    const servidor = app.listen(0);
+    await new Promise<void>((resolve) => servidor.once('listening', resolve));
+    const direccion = servidor.address();
+    if (!direccion || typeof direccion === 'string') throw new Error('el servidor de prueba no abrió un puerto');
+
+    await new Promise<void>((resolve, reject) => {
+      const cliente = httpRequest(
+        {
+          hostname: '127.0.0.1',
+          port: direccion.port,
+          path: `/api/proyectos/${proyectoId}/asistente/stream`,
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        },
+        (respuesta) => {
+          respuesta.on('close', resolve);
+          respuesta.on('data', (trozo: Buffer) => {
+            if (trozo.toString().includes('Todavía escribo.')) cliente.destroy();
+          });
+        },
+      );
+      cliente.on('error', (error: NodeJS.ErrnoException) => (error.code === 'ECONNRESET' ? resolve() : reject(error)));
+      cliente.end(JSON.stringify({ texto: 'hola' }));
+    });
+
+    await vi.waitFor(async () => expect(await deps.usoIA.leer(anaId, new Date().toISOString().slice(0, 10))).toBe(50));
+    await new Promise<void>((resolve, reject) => servidor.close((error) => (error ? reject(error) : resolve())));
+    await (deps.usoIA as { flush?: () => Promise<void> }).flush?.();
   });
 
   it('sin clave de API devuelve eventos de la gramática local', async () => {

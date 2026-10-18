@@ -177,3 +177,18 @@ describe('cargarEnv', () => {
     }
   });
 });
+
+describe('LLM_LIMITE_DIARIO_TOKENS', () => {
+  const base = { SESSION_SECRET: 'secreto' };
+
+  it('un entero positivo es el límite diario', () => {
+    expect(loadConfig({ ...base, LLM_LIMITE_DIARIO_TOKENS: '200000' }).llmLimiteDiarioTokens).toBe(200_000);
+  });
+
+  it('sin variable, o con un valor que no es un entero positivo, no hay límite', () => {
+    expect(loadConfig(base).llmLimiteDiarioTokens).toBeUndefined();
+    expect(loadConfig({ ...base, LLM_LIMITE_DIARIO_TOKENS: '0' }).llmLimiteDiarioTokens).toBeUndefined();
+    expect(loadConfig({ ...base, LLM_LIMITE_DIARIO_TOKENS: 'mucho' }).llmLimiteDiarioTokens).toBeUndefined();
+    expect(loadConfig({ ...base, LLM_LIMITE_DIARIO_TOKENS: '1.5' }).llmLimiteDiarioTokens).toBeUndefined();
+  });
+});

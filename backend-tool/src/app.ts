@@ -7,6 +7,8 @@ import { FileProjectStore, type ProjectStore } from './storage/store.js';
 import { FileDocumentStore } from './storage/documents.js';
 import { FileTablonStore, type TablonStore } from './storage/tablon.js';
 import { FileConversationStore, type ConversationStore } from './storage/conversaciones.js';
+import { FileUsoIAStore, type UsoIAStore } from './storage/uso-ia.js';
+import { CupoIA } from './ai/cupo-ia.js';
 import { FileVersionStore, type VersionStore } from './storage/versiones.js';
 import { RoomManager } from './collab/rooms.js';
 import { CollabServer } from './collab/server.js';
@@ -58,6 +60,8 @@ export interface AppDependencies {
   tablon: TablonStore;
   /** El historial del Modo IA: un hilo por proyecto, compartido por todos sus integrantes. */
   conversations: ConversationStore;
+  /** Tokens de la IA por usuario y día, para el límite `LLM_LIMITE_DIARIO_TOKENS`. */
+  usoIA: UsoIAStore;
   /** Los puntos de control que alguien crea a propósito, para poder volver a ellos. */
   versiones: VersionStore;
   assistant: AssistantEngine;
@@ -122,7 +126,7 @@ async function abrirGuia(config: Config): Promise<GuiaDelManual | undefined> {
 
 type Almacenes = Pick<
   AppDependencies,
-  'identity' | 'store' | 'rooms' | 'tablon' | 'conversations' | 'versiones'
+  'identity' | 'store' | 'rooms' | 'tablon' | 'conversations' | 'versiones' | 'usoIA'
 >;
 
 async function almacenesDeFichero(config: Config): Promise<Almacenes> {
@@ -137,6 +141,7 @@ async function almacenesDeFichero(config: Config): Promise<Almacenes> {
     tablon: new FileTablonStore(config.dataDir),
     conversations: new FileConversationStore(config.dataDir),
     versiones: new FileVersionStore(config.dataDir),
+    usoIA: new FileUsoIAStore(config.dataDir),
   };
 }
 
@@ -148,6 +153,7 @@ async function almacenesPostgres(config: Config, databaseUrl: string): Promise<A
   const { abrirPool, aplicarEsquema } = await import('./storage/postgres.js');
   const {
     PostgresConversationStore,
+    PostgresUsoIAStore,
     PostgresDocumentStore,
     PostgresIdentityProvider,
     PostgresProjectStore,
@@ -169,6 +175,7 @@ async function almacenesPostgres(config: Config, databaseUrl: string): Promise<A
     tablon: new PostgresTablonStore(pool),
     conversations: new PostgresConversationStore(pool),
     versiones: new PostgresVersionStore(pool),
+    usoIA: new PostgresUsoIAStore(pool),
   };
 }
 
@@ -203,7 +210,9 @@ export function createApp(deps: AppDependencies): BuiltApp {
   // combina dos dependencias que ya existen (el asistente y su historial), y
   // a las pruebas que levantan la aplicación entera les basta con que exista,
   // sin tener que saber nada de él.
-  const vigilante = new VigilanteDiagrama(assistant, conversations);
+  // Uno para toda la app: las rutas y la vigilancia ven las mismas reservas.
+  const cupo = new CupoIA(deps.usoIA, config.llmLimiteDiarioTokens);
+  const vigilante = new VigilanteDiagrama(assistant, conversations, undefined, undefined, cupo);
   const collab = new CollabServer({ config, identity, store, rooms, vigilante });
 
   app.get('/salud', (_request, response) => {
@@ -253,7 +262,18 @@ export function createApp(deps: AppDependencies): BuiltApp {
   // y un límite común lo apagaría solo. Ver la cabecera de `api/tablon.ts`.
   protectedApi.use(tablonRouter({ store, identity, tablon }));
   protectedApi.use(generationRouter({ store, rooms }));
-  protectedApi.use(assistantRouter({ store, identity, rooms, assistant, conversations }));
+  protectedApi.use(
+    assistantRouter({
+      store,
+      identity,
+      rooms,
+      assistant,
+      conversations,
+      usoIA: deps.usoIA,
+      cupo,
+      limiteDiarioTokens: config.llmLimiteDiarioTokens,
+    }),
+  );
   protectedApi.use(importRouter({ store, rooms, vision, maxImageBytes: config.maxImageBytes }));
   app.use('/api/proyectos', protectedApi);
 

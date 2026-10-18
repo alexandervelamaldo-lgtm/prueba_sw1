@@ -12,7 +12,9 @@ import type { IdentityProvider } from '../auth/identity.js';
 import type { ProjectStore } from '../storage/store.js';
 import type { RoomManager } from '../collab/rooms.js';
 import { MAXIMO_TURNOS, type ChatMessage, type ConversationStore } from '../storage/conversaciones.js';
-import { handler, parseBody, requireRole } from './http.js';
+import { diaDeHoy, type UsoIAStore } from '../storage/uso-ia.js';
+import type { CupoDeIA, ReservaIA } from '../ai/cupo-ia.js';
+import { HttpError, handler, parseBody, requireRole } from './http.js';
 
 /**
  * Interpretación de órdenes del asistente (RF-IA-01, RF-IA-04).
@@ -72,9 +74,38 @@ export function assistantRouter(deps: {
   rooms: RoomManager;
   assistant: AssistantEngine;
   conversations: ConversationStore;
+  usoIA: UsoIAStore;
+  /** El mismo cupo que usa la vigilancia: las reservas en curso se comparten. */
+  cupo: CupoDeIA;
+  /** Tokens por usuario y día; sin valor no hay límite (`LLM_LIMITE_DIARIO_TOKENS`). */
+  limiteDiarioTokens?: number;
 }): Router {
   const { store, identity, rooms, assistant, conversations } = deps;
   const router = Router();
+  const { usoIA, cupo, limiteDiarioTokens } = deps;
+
+  /**
+   * Control de costos: todo pedido al modelo en nombre de alguien pasa por su
+   * cupo (`ai/cupo-ia.ts`). Sin cupo, un 429 normal con su mensaje, antes de
+   * abrir nada y, en el stream, antes de enviar cabeceras. La reserva se
+   * cierra en un `finally` pase lo que pase: una que quedara abierta dejaría a
+   * esa persona sin cupo hasta reiniciar el servidor.
+   */
+  const conReserva = async (usuarioId: string, trabajo: (reserva: ReservaIA) => Promise<void>): Promise<void> => {
+    const reserva = await cupo.reservar(usuarioId);
+    if (!reserva) {
+      throw new HttpError(
+        429,
+        `Llegaste al límite diario de uso de la IA (${limiteDiarioTokens ?? 0} tokens). Se renueva a las 00:00 UTC.`,
+        'limite_ia',
+      );
+    }
+    try {
+      await trabajo(reserva);
+    } finally {
+      await reserva.cerrar();
+    }
+  };
 
   /**
    * Resúmenes pendientes, uno detrás de otro por hilo `(proyecto, usuario)`:
@@ -105,9 +136,17 @@ export function assistantRouter(deps: {
     const siguiente = anterior.then(async () => {
       try {
         const previo = await conversations.getResumen(proyectoId, usuarioId);
-        const nuevo = assistant.resumirConversacion
-          ? await assistant.resumirConversacion(previo, salen)
-          : resumenLocal(previo, salen);
+        // Sin cupo no se llama al modelo: el resumen local no se pierde.
+        const reserva = assistant.resumirConversacion ? await cupo.reservar(usuarioId) : null;
+        let nuevo: string;
+        try {
+          nuevo =
+            reserva && assistant.resumirConversacion
+              ? await assistant.resumirConversacion(previo, salen, reserva.registrar)
+              : resumenLocal(previo, salen);
+        } finally {
+          await reserva?.cerrar();
+        }
         await conversations.setResumen(proyectoId, usuarioId, nuevo);
       } catch (error) {
         console.warn('No se pudo actualizar el resumen de la conversación:', (error as Error).message);
@@ -125,45 +164,48 @@ export function assistantRouter(deps: {
     handler(async (request, response) => {
       const body = parseBody(PeticionSchema, request.body);
       const proyectoId = request.params.proyectoId ?? '';
-      const room = await rooms.open(proyectoId);
-      const diagram = readDiagram(room.doc);
+      await conReserva(request.user.id, async (reserva) => {
+        const room = await rooms.open(proyectoId);
+        const diagram = readDiagram(room.doc);
 
-      // El historial es el hilo de quien pregunta (ver `conversaciones.ts`):
-      // cada integrante tiene el suyo y no ve el de los demás. De los otros
-      // proyectos solo se piden nombre y rol —nunca se abre su sala
-      // (`rooms.open`)—, así que su diagrama no llega a este prompt.
-      const [turnos, misProyectos, resumen] = await Promise.all([
-        conversations.getHistory(proyectoId, request.user.id, MAXIMO_TURNOS * 2),
-        store.listProjectsForUser(request.user.id),
-        conversations.getResumen(proyectoId, request.user.id),
-      ]);
-      const historial = await conAutores(turnos, identity);
-      const otrosProyectos = misProyectos
-        .filter((proyecto) => proyecto.id !== proyectoId)
-        .slice(0, MAXIMO_OTROS_PROYECTOS)
-        .map((proyecto) => `${proyecto.name} (${proyecto.role})`);
+        // El historial es el hilo de quien pregunta (ver `conversaciones.ts`):
+        // cada integrante tiene el suyo y no ve el de los demás. De los otros
+        // proyectos solo se piden nombre y rol —nunca se abre su sala
+        // (`rooms.open`)—, así que su diagrama no llega a este prompt.
+        const [turnos, misProyectos, resumen] = await Promise.all([
+          conversations.getHistory(proyectoId, request.user.id, MAXIMO_TURNOS * 2),
+          store.listProjectsForUser(request.user.id),
+          conversations.getResumen(proyectoId, request.user.id),
+        ]);
+        const historial = await conAutores(turnos, identity);
+        const otrosProyectos = misProyectos
+          .filter((proyecto) => proyecto.id !== proyectoId)
+          .slice(0, MAXIMO_OTROS_PROYECTOS)
+          .map((proyecto) => `${proyecto.name} (${proyecto.role})`);
 
-      const result = await assistant.interpret(body.texto, diagram, {
-        historial,
-        otrosProyectos,
-        cambiosRecientes: resumirCambiosRecientes(leerHistorial(room.doc), MAXIMO_CAMBIOS_RECIENTES),
-        quienPregunta: request.user.displayName,
-        ...(resumen ? { resumen } : {}),
-      });
-      await guardarTurno(proyectoId, request.user.id, body.texto, result.explanation);
+        const result = await assistant.interpret(body.texto, diagram, {
+          historial,
+          otrosProyectos,
+          cambiosRecientes: resumirCambiosRecientes(leerHistorial(room.doc), MAXIMO_CAMBIOS_RECIENTES),
+          quienPregunta: request.user.displayName,
+          ...(resumen ? { resumen } : {}),
+          registrarUso: reserva.registrar,
+        });
+        await guardarTurno(proyectoId, request.user.id, body.texto, result.explanation);
 
-      response.json({
-        motor: assistant.name,
-        confianza: result.confidence,
-        aclaracion: result.clarification,
-        explicacion: result.explanation,
-        // La descripción legible se calcula aquí y no la escribe el modelo: si
-        // la escribiera él, podría describir algo distinto de lo que la
-        // operación hace, y el usuario aprobaría lo que leyó, no lo que pasa.
-        propuesta: result.operations.map((operation) => ({
-          operacion: operation,
-          descripcion: describeOperation(operation),
-        })),
+        response.json({
+          motor: assistant.name,
+          confianza: result.confidence,
+          aclaracion: result.clarification,
+          explicacion: result.explanation,
+          // La descripción legible se calcula aquí y no la escribe el modelo: si
+          // la escribiera él, podría describir algo distinto de lo que la
+          // operación hace, y el usuario aprobaría lo que leyó, no lo que pasa.
+          propuesta: result.operations.map((operation) => ({
+            operacion: operation,
+            descripcion: describeOperation(operation),
+          })),
+        });
       });
     }),
   );
@@ -174,107 +216,112 @@ export function assistantRouter(deps: {
     handler(async (request, response) => {
       const body = parseBody(PeticionSchema, request.body);
       const proyectoId = request.params.proyectoId ?? '';
-      const room = await rooms.open(proyectoId);
-      const diagram = readDiagram(room.doc);
-      const peticion = body.revision ? peticionDeRevision(diagram) : body.texto;
-      const [turnos, misProyectos, resumen] = await Promise.all([
-        conversations.getHistory(proyectoId, request.user.id, MAXIMO_TURNOS * 2),
-        store.listProjectsForUser(request.user.id),
-        conversations.getResumen(proyectoId, request.user.id),
-      ]);
-      const historial = await conAutores(turnos, identity);
-      const otrosProyectos = misProyectos
-        .filter((proyecto) => proyecto.id !== proyectoId)
-        .slice(0, MAXIMO_OTROS_PROYECTOS)
-        .map((proyecto) => `${proyecto.name} (${proyecto.role})`);
-      const seleccionada = body.seleccion ? diagram.classes[body.seleccion]?.name : undefined;
-      const contexto = {
-        historial,
-        otrosProyectos,
-        cambiosRecientes: resumirCambiosRecientes(leerHistorial(room.doc), MAXIMO_CAMBIOS_RECIENTES),
-        quienPregunta: request.user.displayName,
-        ...(seleccionada ? { seleccion: seleccionada } : {}),
-        ...(resumen ? { resumen } : {}),
-      };
+      await conReserva(request.user.id, async (reserva) => {
+        const room = await rooms.open(proyectoId);
+        const diagram = readDiagram(room.doc);
+        const peticion = body.revision ? peticionDeRevision(diagram) : body.texto;
+        const [turnos, misProyectos, resumen] = await Promise.all([
+          conversations.getHistory(proyectoId, request.user.id, MAXIMO_TURNOS * 2),
+          store.listProjectsForUser(request.user.id),
+          conversations.getResumen(proyectoId, request.user.id),
+        ]);
+        const historial = await conAutores(turnos, identity);
+        const otrosProyectos = misProyectos
+          .filter((proyecto) => proyecto.id !== proyectoId)
+          .slice(0, MAXIMO_OTROS_PROYECTOS)
+          .map((proyecto) => `${proyecto.name} (${proyecto.role})`);
+        const seleccionada = body.seleccion ? diagram.classes[body.seleccion]?.name : undefined;
+        const contexto = {
+          historial,
+          otrosProyectos,
+          cambiosRecientes: resumirCambiosRecientes(leerHistorial(room.doc), MAXIMO_CAMBIOS_RECIENTES),
+          quienPregunta: request.user.displayName,
+          ...(seleccionada ? { seleccion: seleccionada } : {}),
+          ...(resumen ? { resumen } : {}),
+          // Se cierra en `conReserva`, cuando el stream terminó de informar su
+          // uso, también si el cliente se desconectó: lo escrito se pagó igual.
+          registrarUso: reserva.registrar,
+        };
 
-      const abortador = new AbortController();
-      let desconectado = false;
-      const cancelarSiCerro = (): void => {
-        if (!response.writableEnded) {
-          desconectado = true;
-          abortador.abort();
-        }
-      };
-      request.on('close', () => {
-        if (!request.complete) cancelarSiCerro();
-      });
-      response.on('close', cancelarSiCerro);
-
-      response.setHeader('content-type', 'text/event-stream; charset=utf-8');
-      response.setHeader('cache-control', 'no-cache');
-      response.flushHeaders();
-
-      const mensajes: string[] = [];
-      let eventosEmitidos = 0;
-      let fin: Extract<EventoAsistente, { tipo: 'fin' }> | null = null;
-      let fallo: string | null = null;
-      const enviarEvento = (evento: EventoAsistente): void => {
-        if (evento.tipo === 'mensaje') mensajes.push(evento.texto);
-        if (evento.tipo === 'operacion') {
-          evento = { ...evento, descripcion: describeOperation(evento.operacion) };
-        }
-        response.write(formatearEventoSse(evento));
-        eventosEmitidos += 1;
-      };
-
-      try {
-        const flujo = assistant.interpretarEnStream
-          ? assistant.interpretarEnStream(peticion, diagram, contexto, abortador.signal)
-          : eventosDeRespuesta(assistant, peticion, diagram, contexto);
-        for await (const evento of flujo) {
-          if (desconectado || abortador.signal.aborted) return;
-          if (evento.tipo === 'fin') {
-            fin = evento;
-            continue;
+        const abortador = new AbortController();
+        let desconectado = false;
+        const cancelarSiCerro = (): void => {
+          if (!response.writableEnded) {
+            desconectado = true;
+            abortador.abort();
           }
-          if (evento.tipo === 'error') {
-            fallo = evento.mensaje;
-            break;
+        };
+        request.on('close', () => {
+          if (!request.complete) cancelarSiCerro();
+        });
+        response.on('close', cancelarSiCerro);
+
+        response.setHeader('content-type', 'text/event-stream; charset=utf-8');
+        response.setHeader('cache-control', 'no-cache');
+        response.flushHeaders();
+
+        const mensajes: string[] = [];
+        let eventosEmitidos = 0;
+        let fin: Extract<EventoAsistente, { tipo: 'fin' }> | null = null;
+        let fallo: string | null = null;
+        const enviarEvento = (evento: EventoAsistente): void => {
+          if (evento.tipo === 'mensaje') mensajes.push(evento.texto);
+          if (evento.tipo === 'operacion') {
+            evento = { ...evento, descripcion: describeOperation(evento.operacion) };
           }
-          enviarEvento(evento);
-        }
-      } catch (error) {
-        if (desconectado || abortador.signal.aborted) return;
-        fallo = error instanceof Error ? error.message : 'No se pudo completar el stream del asistente';
-        // Un motor opcional que no encontró salida todavía puede degradar por
-        // la misma ruta compatible que usa la respuesta JSON de siempre.
-        if (eventosEmitidos === 0 && assistant.interpretarEnStream) {
-          try {
-            for await (const evento of eventosDeRespuesta(assistant, peticion, diagram, contexto)) {
-              if (evento.tipo === 'fin') fin = evento;
-              else enviarEvento(evento);
+          response.write(formatearEventoSse(evento));
+          eventosEmitidos += 1;
+        };
+
+        try {
+          const flujo = assistant.interpretarEnStream
+            ? assistant.interpretarEnStream(peticion, diagram, contexto, abortador.signal)
+            : eventosDeRespuesta(assistant, peticion, diagram, contexto);
+          for await (const evento of flujo) {
+            if (desconectado || abortador.signal.aborted) return;
+            if (evento.tipo === 'fin') {
+              fin = evento;
+              continue;
             }
-            fallo = null;
-          } catch {
-            // El fallo se comunica como evento SSE más abajo.
+            if (evento.tipo === 'error') {
+              fallo = evento.mensaje;
+              break;
+            }
+            enviarEvento(evento);
+          }
+        } catch (error) {
+          if (desconectado || abortador.signal.aborted) return;
+          fallo = error instanceof Error ? error.message : 'No se pudo completar el stream del asistente';
+          // Un motor opcional que no encontró salida todavía puede degradar por
+          // la misma ruta compatible que usa la respuesta JSON de siempre.
+          if (eventosEmitidos === 0 && assistant.interpretarEnStream) {
+            try {
+              for await (const evento of eventosDeRespuesta(assistant, peticion, diagram, contexto)) {
+                if (evento.tipo === 'fin') fin = evento;
+                else enviarEvento(evento);
+              }
+              fallo = null;
+            } catch {
+              // El fallo se comunica como evento SSE más abajo.
+            }
           }
         }
-      }
 
-      if (desconectado || abortador.signal.aborted) return;
-      try {
-        await guardarTurno(proyectoId, request.user.id, body.texto, mensajes.join(' '));
-      } catch (error) {
-        // Los encabezados SSE ya salieron: el fallo viaja como evento, no como
-        // la respuesta JSON de error de siempre.
-        fallo ??= `No se pudo guardar la conversación: ${(error as Error).message}`;
-      }
-      if (fallo) {
-        enviarEvento({ tipo: 'error', mensaje: fallo });
-      } else {
-        enviarEvento(fin ?? { tipo: 'fin', motor: assistant.name, confianza: 1 });
-      }
-      response.end();
+        if (desconectado || abortador.signal.aborted) return;
+        try {
+          await guardarTurno(proyectoId, request.user.id, body.texto, mensajes.join(' '));
+        } catch (error) {
+          // Los encabezados SSE ya salieron: el fallo viaja como evento, no como
+          // la respuesta JSON de error de siempre.
+          fallo ??= `No se pudo guardar la conversación: ${(error as Error).message}`;
+        }
+        if (fallo) {
+          enviarEvento({ tipo: 'error', mensaje: fallo });
+        } else {
+          enviarEvento(fin ?? { tipo: 'fin', motor: assistant.name, confianza: 1 });
+        }
+        response.end();
+      });
     }),
   );
 
@@ -288,6 +335,17 @@ export function assistantRouter(deps: {
         MAXIMO_TURNOS * 2,
       );
       response.json({ turnos: await conAutores(turnos, identity) });
+    }),
+  );
+
+  router.get(
+    '/:proyectoId/asistente/uso',
+    requireRole(store, 'editor'),
+    handler(async (request, response) => {
+      response.json({
+        hoy: await usoIA.leer(request.user.id, diaDeHoy()),
+        limite: limiteDiarioTokens ?? null,
+      });
     }),
   );
 

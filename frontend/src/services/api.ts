@@ -380,6 +380,9 @@ export const api = {
     lector.empujar(decodificador.decode());
   },
 
+  /** Tokens de la IA gastados hoy por quien pregunta, y el límite diario (`null` si no hay). */
+  usoAsistente: (id: string) => pedir<{ hoy: number; limite: number | null }>(`/proyectos/${id}/asistente/uso`),
+
   /** Lo ya hablado con el asistente en este proyecto: el hilo privado de quien pregunta (Modo IA). */
   obtenerHistorialAsistente: (id: string) =>
     pedir<{ turnos: TurnoAsistente[] }>(`/proyectos/${id}/asistente/historial`),

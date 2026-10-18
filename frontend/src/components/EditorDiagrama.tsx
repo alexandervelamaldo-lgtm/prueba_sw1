@@ -19,6 +19,7 @@ import { LienzoFlow } from './LienzoFlow';
 import { PanelPropiedades } from './PanelPropiedades';
 import { Asistente } from './Asistente';
 import { ModoIA } from './ModoIA';
+import type { MarcasDeBorrado } from './ia-ejecucion';
 import { ImportarDiagrama } from './ImportarDiagrama';
 import { ImportarXmi } from './ImportarXmi';
 import { PrevisualizarGeneracion } from './PrevisualizarGeneracion';
@@ -107,6 +108,8 @@ export function EditorDiagrama({
   const { participantes, anunciar } = usePresencia(estado.provider, autor);
 
   const [seleccion, setSeleccion] = useState<string | null>(null);
+  // Lo que marcaría el lienzo un borrado que el Modo IA propone (vista previa fantasma).
+  const [aBorrar, setABorrar] = useState<MarcasDeBorrado | null>(null);
   const [herramienta, setHerramienta] = useState<'seleccion' | 'relacion'>('seleccion');
   const [tipoRelacion, setTipoRelacion] = useState<RelationKind>('association');
   // Herramienta "asociación de clase": no es un séptimo `RelationKind`, es un
@@ -864,6 +867,7 @@ export function EditorDiagrama({
           onRelacionar={relacionar}
           orden={orden}
           onEscala={setEscala}
+          aBorrar={aBorrar}
         />
 
         <ColumnaAcoplada
@@ -920,6 +924,7 @@ export function EditorDiagrama({
                     centrar={centrar}
                     agruparDeshacer={estado.agruparDeshacer}
                     seleccion={seleccion}
+                    onVistaPrevia={setABorrar}
                   />
                 ) : null,
             },

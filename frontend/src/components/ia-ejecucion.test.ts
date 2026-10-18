@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createClass, createDiagram, withClass, type ClassDiagram, type Operation } from '@app/shared';
 import {
+  marcasDeBorrado,
   clasesPorNombre,
   crearEjecutorEnCola,
   ejecutarPropuesta,
@@ -310,5 +311,46 @@ describe('clasesPorNombre', () => {
 
   it('ignora los nombres que no están en el diagrama', () => {
     expect(clasesPorNombre(diagramaConCliente(), ['Inventada', 'Cliente'])).toEqual(['C1']);
+  });
+});
+
+describe('marcasDeBorrado (vista previa de lo que se perdería)', () => {
+  function conRelacion(): ClassDiagram {
+    const base = withClass(diagramaConCliente(), createClass({ id: 'C2', name: 'Pedido' }));
+    return {
+      ...base,
+      relations: {
+        R1: {
+          id: 'R1',
+          kind: 'association',
+          source: { classId: 'C1', multiplicity: '1' },
+          target: { classId: 'C2', multiplicity: '*' },
+        } as ClassDiagram['relations'][string],
+      },
+    };
+  }
+
+  it('borrar una clase marca la clase y las relaciones que la tocan', () => {
+    expect(marcasDeBorrado(conRelacion(), [{ op: 'removeClass', ref: { name: 'Cliente' } }])).toEqual({
+      clases: ['C1'],
+      relaciones: ['R1'],
+    });
+  });
+
+  it('borrar una relación marca solo la relación', () => {
+    expect(marcasDeBorrado(conRelacion(), [{ op: 'removeRelation', id: 'R1' }])).toEqual({
+      clases: [],
+      relaciones: ['R1'],
+    });
+  });
+
+  it('quitar un atributo marca la clase que lo pierde', () => {
+    expect(
+      marcasDeBorrado(conRelacion(), [{ op: 'removeAttribute', classRef: { id: 'C2' }, attributeName: 'total' }]),
+    ).toEqual({ clases: ['C2'], relaciones: [] });
+  });
+
+  it('lo que no borra nada no marca nada', () => {
+    expect(marcasDeBorrado(conRelacion(), [crearPedido, atributoEmail])).toEqual({ clases: [], relaciones: [] });
   });
 });

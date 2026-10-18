@@ -76,6 +76,8 @@ export interface LienzoProps {
   orden?: OrdenVista | null;
   /** Avisa del aumento actual para que la barra de estado lo muestre. */
   onEscala?: (escala: number) => void;
+  /** Lo que se perdería si se acepta un borrado propuesto (vista previa fantasma del Modo IA). */
+  aBorrar?: { clases: string[]; relaciones: string[] } | null;
 }
 
 export function Lienzo({

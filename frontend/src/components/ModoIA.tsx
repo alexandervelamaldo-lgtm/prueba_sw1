@@ -6,7 +6,7 @@ import { callar, dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDic
 import { Icono } from './iconos';
 import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
 import { crearCursorIA, nodoDeClase, prefiereMenosMovimiento, resaltarClase } from './cursor-ia';
-import { clasesPorNombre, crearEjecutorEnCola } from './ia-ejecucion';
+import { clasesPorNombre, crearEjecutorEnCola, marcasDeBorrado, type MarcasDeBorrado } from './ia-ejecucion';
 import { crearColaDeVoz } from './cola-voz';
 import { crearManejadorDeStream, debeRepasar, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
 import type { GrupoDeshacer } from '../hooks/deshacer-agrupado';
@@ -75,6 +75,8 @@ interface Props {
   agruparDeshacer?: () => GrupoDeshacer;
   /** La clase seleccionada en el lienzo: la IA entiende «esta clase». */
   seleccion?: string | null;
+  /** Lo que se perdería con los borrados propuestos aún sin aplicar, para marcarlo en el lienzo. */
+  onVistaPrevia?: (marcas: MarcasDeBorrado | null) => void;
 }
 
 interface Turno {
@@ -130,6 +132,7 @@ export function ModoIA({
   centrar,
   agruparDeshacer,
   seleccion,
+  onVistaPrevia,
 }: Props): JSX.Element {
   const [turnos, setTurnos] = useState<Turno[]>([]);
   const [autoAplicar, setAutoAplicar] = useState(leerAutoAplicar);
@@ -154,6 +157,23 @@ export function ModoIA({
   // render anterior, y tiene que llevar la selección de ahora.
   const seleccionRef = useRef(seleccion);
   seleccionRef.current = seleccion;
+
+  // Vista previa fantasma: mientras haya borrados propuestos sin aplicar, el
+  // lienzo marca lo que se perdería. Se recalcula con el diagrama, porque lo
+  // que se pierde depende de lo que haya ahora.
+  // Solo se avisa cuando las marcas cambian: el diagrama cambia a cada paso de
+  // un arrastre, y repintar el lienzo entero por eso no tiene sentido.
+  const marcasAvisadasRef = useRef('');
+  useEffect(() => {
+    const pendientes = turnos.flatMap((turno) => turno.propuesta.map((p) => p.operacion));
+    const marcas = marcasDeBorrado(diagrama, pendientes);
+    const hayAlgo = marcas.clases.length > 0 || marcas.relaciones.length > 0;
+    const clave = hayAlgo ? JSON.stringify(marcas) : '';
+    if (clave === marcasAvisadasRef.current) return;
+    marcasAvisadasRef.current = clave;
+    onVistaPrevia?.(hayAlgo ? marcas : null);
+  }, [turnos, diagrama, onVistaPrevia]);
+  useEffect(() => () => onVistaPrevia?.(null), [onVistaPrevia]);
 
   useEffect(() => {
     montadoRef.current = true;

@@ -533,8 +533,11 @@ function LienzoInterno({
   herramienta,
   orden,
   onEscala,
+  aBorrar,
 }: LienzoProps): JSX.Element {
   const flow = useReactFlow();
+  const clasesABorrar = useMemo(() => new Set(aBorrar?.clases ?? []), [aBorrar]);
+  const relacionesABorrar = useMemo(() => new Set(aBorrar?.relaciones ?? []), [aBorrar]);
   const clases = useMemo(() => listClasses(diagrama), [diagrama]);
   const relaciones = useMemo(() => listRelations(diagrama), [diagrama]);
   const medidas = useMemo(() => new Map(clases.map((c) => [c.id, medidasDe(c)])), [clases]);
@@ -612,6 +615,8 @@ function LienzoInterno({
             la probabilidad de mover algo, que es lo que lo dispara.
           */
           measured: { width: medida.ancho, height: medida.alto },
+          // Vista previa fantasma: se perdería si se acepta el borrado propuesto.
+          ...(clasesABorrar.has(cls.id) ? { className: 'nodo-ia-borrar' } : {}),
           selected: cls.id === seleccion,
           draggable: !soloLectura,
           // El envoltorio de React Flow es quien recibe el foco, así que es él
@@ -628,7 +633,7 @@ function LienzoInterno({
           },
         };
       }),
-    [clases, medidas, participantes, seleccion, soloLectura],
+    [clases, medidas, participantes, seleccion, soloLectura, clasesABorrar],
   );
 
   const aristas: AristaLienzo[] = useMemo(() => {
@@ -651,6 +656,7 @@ function LienzoInterno({
           source: relacion.source.classId,
           target: relacion.target.classId,
           type: 'relacionUml' as const,
+          ...(relacionesABorrar.has(relacion.id) ? { className: 'arista-ia-borrar' } : {}),
           data: { relacion, origen, destino, medidaOrigen, medidaDestino, desvio },
         },
       ];
@@ -691,7 +697,7 @@ function LienzoInterno({
 
       return resultado;
     });
-  }, [relaciones, diagrama.classes, medidas]);
+  }, [relaciones, diagrama.classes, medidas, relacionesABorrar]);
 
   /*
     Cada cambio de posición se escribe en el documento en el acto, también

@@ -6787,3 +6787,18 @@ select:focus {
   font-size: 12px;
   padding: 2px 8px;
 }
+
+/* Vista previa fantasma del Modo IA: lo que se perdería si se acepta un
+   borrado propuesto. Borde y trazo discontinuos, como algo que todavía está
+   pero puede dejar de estar. */
+.react-flow__node.nodo-ia-borrar {
+  outline: 2px dashed var(--error);
+  outline-offset: 3px;
+  border-radius: var(--radio-ajustado);
+  opacity: 0.6;
+}
+
+.react-flow__edge.arista-ia-borrar path {
+  stroke: var(--error);
+  stroke-dasharray: 6 4;
+}

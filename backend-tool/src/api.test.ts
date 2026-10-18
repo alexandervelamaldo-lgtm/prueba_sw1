@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
 import { crearLectorSse, describeOperation, type EventoAsistente } from '@app/shared';
@@ -890,6 +890,110 @@ describe('asistente', () => {
 
     expect(contextos[0]).toMatchObject({ seleccion: 'Factura', quienPregunta: 'ana' });
     expect((contextos[1] as { seleccion?: string }).seleccion).toBeUndefined();
+  });
+
+  it('lo que sale de la ventana de 20 turnos se resume y vuelve como contexto en la orden siguiente', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+    const yo = await request(app).get('/api/auth/yo').set('Authorization', `Bearer ${token}`);
+    const anaId = (yo.body.usuario?.id ?? yo.body.id) as string;
+    for (let i = 1; i <= 20; i += 1) {
+      await deps.conversations.appendTurn(proyectoId, anaId, `orden ${i}`, `respuesta ${i}`);
+    }
+    const resumidos: { previo: string | null; textos: string[] }[] = [];
+    const contextos: { resumen?: string }[] = [];
+    const fake: AssistantEngine = {
+      name: 'motor-prueba',
+      interpret: async () => ({ operations: [], confidence: 1, clarification: null, explanation: '' }),
+      revisar: async () => null,
+      resumirConversacion: async (previo, mensajes) => {
+        resumidos.push({ previo, textos: mensajes.map((m) => m.texto) });
+        return 'Ana empezó pidiendo la orden 1.';
+      },
+      async *interpretarEnStream(_prompt, _diagram, contexto): AsyncGenerator<EventoAsistente> {
+        contextos.push(contexto as { resumen?: string });
+        yield { tipo: 'mensaje', texto: 'Hecho.' };
+        yield { tipo: 'fin', motor: 'motor-prueba', confianza: 1 };
+      },
+    };
+    app = createApp({ ...deps, assistant: fake }).app;
+    const enviar = () =>
+      request(app)
+        .post(`/api/proyectos/${proyectoId}/asistente/stream`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ texto: 'orden 21' })
+        .buffer(true)
+        .parse((res, callback) => {
+          let texto = '';
+          res.setEncoding('utf8');
+          res.on('data', (trozo) => (texto += trozo));
+          res.on('end', () => callback(null, texto));
+        });
+
+    await enviar();
+    await vi.waitFor(async () => {
+      expect(await deps.conversations.getResumen(proyectoId, anaId)).toBe('Ana empezó pidiendo la orden 1.');
+    });
+    await enviar();
+
+    // La segunda orden también poda y resume en segundo plano: se espera a que
+    // termine para no borrar la carpeta de datos con una escritura en curso.
+    await vi.waitFor(() => expect(resumidos).toHaveLength(2));
+    await (deps.conversations as { flush?: () => Promise<void> }).flush?.();
+
+    expect(resumidos[0]).toEqual({ previo: null, textos: ['orden 1', 'respuesta 1'] });
+    expect(resumidos[1]).toEqual({ previo: 'Ana empezó pidiendo la orden 1.', textos: ['orden 2', 'respuesta 2'] });
+    expect(contextos[0]?.resumen).toBeUndefined();
+    expect(contextos[1]?.resumen).toBe('Ana empezó pidiendo la orden 1.');
+  });
+
+  it('dos órdenes casi a la vez resumen en fila: cada resumen parte del anterior y nada se resume dos veces', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+    const yo = await request(app).get('/api/auth/yo').set('Authorization', `Bearer ${token}`);
+    const anaId = (yo.body.usuario?.id ?? yo.body.id) as string;
+    for (let i = 1; i <= 20; i += 1) {
+      await deps.conversations.appendTurn(proyectoId, anaId, `orden ${i}`, `respuesta ${i}`);
+    }
+    const llamadas: { previo: string | null; textos: string[] }[] = [];
+    const fake: AssistantEngine = {
+      name: 'motor-prueba',
+      interpret: async () => ({ operations: [], confidence: 1, clarification: null, explanation: '' }),
+      revisar: async () => null,
+      resumirConversacion: async (previo, mensajes) => {
+        llamadas.push({ previo, textos: mensajes.map((m) => m.texto) });
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return [previo, mensajes.map((m) => m.texto).join(',')].filter(Boolean).join(' | ');
+      },
+      async *interpretarEnStream(): AsyncGenerator<EventoAsistente> {
+        yield { tipo: 'mensaje', texto: 'Hecho.' };
+        yield { tipo: 'fin', motor: 'motor-prueba', confianza: 1 };
+      },
+    };
+    app = createApp({ ...deps, assistant: fake }).app;
+    const enviar = (texto: string) =>
+      request(app)
+        .post(`/api/proyectos/${proyectoId}/asistente/stream`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ texto })
+        .buffer(true)
+        .parse((res, callback) => {
+          let cuerpo = '';
+          res.setEncoding('utf8');
+          res.on('data', (trozo) => (cuerpo += trozo));
+          res.on('end', () => callback(null, cuerpo));
+        });
+
+    await Promise.all([enviar('orden 21'), enviar('orden 22')]);
+    await vi.waitFor(async () => {
+      expect(llamadas).toHaveLength(2);
+      expect(await deps.conversations.getResumen(proyectoId, anaId)).toBe(
+        'orden 1,respuesta 1 | orden 2,respuesta 2',
+      );
+    });
+
+    expect(llamadas[1]?.previo).toBe('orden 1,respuesta 1');
+    await (deps.conversations as { flush?: () => Promise<void> }).flush?.();
   });
 
   it('envía mensajes, operaciones y el cierre en orden, calcula la descripción y guarda un único turno', async () => {

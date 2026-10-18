@@ -63,10 +63,16 @@ class ConversacionesFalsas implements ConversationStore {
   async getHistory(): Promise<ChatMessage[]> {
     return [];
   }
-  async appendTurn(): Promise<void> {}
+  async appendTurn(): Promise<ChatMessage[]> {
+    return [];
+  }
   async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void> {
     this.comentarios.push({ proyectoId, usuarioId, texto });
   }
+  async getResumen(): Promise<string | null> {
+    return null;
+  }
+  async setResumen(): Promise<void> {}
   async borrarProyecto(): Promise<void> {}
 }
 

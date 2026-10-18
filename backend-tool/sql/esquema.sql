@@ -203,6 +203,19 @@ drop index if exists conversaciones_por_proyecto;
 create index if not exists conversaciones_por_hilo
   on conversaciones_ia (proyecto_id, hilo_usuario_id, id);
 
+-- Memoria resumida del Modo IA: lo que salió de la ventana de 20 turnos de un
+-- hilo, resumido por la IA antes de podarlo. Una fila por hilo, que se
+-- sobrescribe; tabla aparte porque no es un mensaje más de la conversación.
+-- `usuario_id` sin clave foránea, por la misma razón que `conversaciones_ia`
+-- (decisión D8).
+create table if not exists resumenes_ia (
+  proyecto_id    uuid not null references proyectos(id) on delete cascade,
+  usuario_id     text not null,
+  resumen        text not null,
+  actualizado_en timestamptz not null default now(),
+  primary key (proyecto_id, usuario_id)
+);
+
 -- Versiones del proyecto -----------------------------------------------------
 --
 -- Puntos de control del documento: el estado Yjs entero (otra vez

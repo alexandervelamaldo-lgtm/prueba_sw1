@@ -29,6 +29,10 @@ import { esIdSeguroDeFichero } from './tablon.js';
  * manda al modelo cada vez —y su coste— por un proyecto que lleva meses
  * abierto. Veinte turnos por hilo bastan para que la IA entienda "ahora" y
  * "eso que dijiste antes" sin arrastrar una transcripción de semanas.
+ *
+ * Lo que sale de la ventana no se olvida del todo: antes de podarlo, la IA lo
+ * resume (`AssistantEngine.resumirConversacion`) y ese resumen se guarda aparte,
+ * uno por hilo, para mandarlo como contexto (`getResumen` / `setResumen`).
  */
 
 export interface ChatMessage {
@@ -50,8 +54,12 @@ export interface ChatMessage {
 export interface ConversationStore {
   /** Los últimos `limite` mensajes del hilo de `usuarioId` en el proyecto, en orden cronológico ascendente. */
   getHistory(proyectoId: string, usuarioId: string, limite: number): Promise<ChatMessage[]>;
-  /** Añade un turno al hilo de `usuarioId`, que es también quien escribió la orden. */
-  appendTurn(proyectoId: string, usuarioId: string, usuario: string, asistente: string): Promise<void>;
+  /**
+   * Añade un turno al hilo de `usuarioId`, que es también quien escribió la
+   * orden. Devuelve los mensajes de ese hilo que salieron de la ventana al
+   * guardarlo, del más antiguo al más reciente: son los que hay que resumir.
+   */
+  appendTurn(proyectoId: string, usuarioId: string, usuario: string, asistente: string): Promise<ChatMessage[]>;
   /**
    * Añade un comentario de la IA que nadie ha pedido al hilo de `usuarioId`:
    * un único mensaje de rol `assistant`, sin el turno de usuario que
@@ -59,6 +67,9 @@ export interface ConversationStore {
    * decide que el diagrama merece un comentario espontáneo.
    */
   appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void>;
+  /** El resumen de lo que ya salió de la ventana de este hilo, o `null`. */
+  getResumen(proyectoId: string, usuarioId: string): Promise<string | null>;
+  setResumen(proyectoId: string, usuarioId: string, resumen: string): Promise<void>;
   /** Se llama al borrar el proyecto: se lleva los hilos de todos sus integrantes. */
   borrarProyecto(proyectoId: string): Promise<void>;
   close?(): Promise<void>;
@@ -91,6 +102,8 @@ type MensajeEnDisco = Omit<ChatMessage, 'tipo'> & {
 
 interface ConversacionEnDisco {
   mensajes: MensajeEnDisco[];
+  /** Resumen por dueño del hilo. Falta en ficheros anteriores a la memoria resumida. */
+  resumenes?: Record<string, string>;
 }
 
 function vacia(): ConversacionEnDisco {
@@ -170,16 +183,20 @@ export class FileConversationStore implements ConversationStore {
       }));
   }
 
-  /** Deja en el hilo de `usuarioId` solo sus últimos mensajes; los demás hilos no se tocan. */
-  private recortar(conversacion: ConversacionEnDisco, usuarioId: string): void {
+  /**
+   * Deja en el hilo de `usuarioId` solo sus últimos mensajes; los demás hilos
+   * no se tocan. Devuelve los que quitó, en orden.
+   */
+  private recortar(conversacion: ConversacionEnDisco, usuarioId: string): ChatMessage[] {
     const delHilo = conversacion.mensajes.filter((mensaje) => mensaje.hiloDe === usuarioId);
-    const sobrantes = new Set(delHilo.slice(0, Math.max(0, delHilo.length - MAXIMO_TURNOS * 2)));
-    if (sobrantes.size > 0) {
-      conversacion.mensajes = conversacion.mensajes.filter((mensaje) => !sobrantes.has(mensaje));
-    }
+    const quitados = delHilo.slice(0, Math.max(0, delHilo.length - MAXIMO_TURNOS * 2));
+    if (quitados.length === 0) return [];
+    const sobrantes = new Set(quitados);
+    conversacion.mensajes = conversacion.mensajes.filter((mensaje) => !sobrantes.has(mensaje));
+    return quitados.map(({ hiloDe: _hilo, ...mensaje }) => ({ ...mensaje, tipo: mensaje.tipo ?? 'respuesta' }));
   }
 
-  async appendTurn(proyectoId: string, usuarioId: string, usuario: string, asistente: string): Promise<void> {
+  async appendTurn(proyectoId: string, usuarioId: string, usuario: string, asistente: string): Promise<ChatMessage[]> {
     const conversacion = await this.cargar(proyectoId);
     const ahora = new Date();
     conversacion.mensajes.push(
@@ -205,8 +222,9 @@ export class FileConversationStore implements ConversationStore {
       },
     );
 
-    this.recortar(conversacion, usuarioId);
+    const podados = this.recortar(conversacion, usuarioId);
     this.persistir(proyectoId, conversacion);
+    return podados;
   }
 
   async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void> {
@@ -224,9 +242,21 @@ export class FileConversationStore implements ConversationStore {
     this.persistir(proyectoId, conversacion);
   }
 
+  async getResumen(proyectoId: string, usuarioId: string): Promise<string | null> {
+    const conversacion = await this.cargar(proyectoId);
+    return conversacion.resumenes?.[usuarioId] ?? null;
+  }
+
+  async setResumen(proyectoId: string, usuarioId: string, resumen: string): Promise<void> {
+    const conversacion = await this.cargar(proyectoId);
+    conversacion.resumenes = { ...conversacion.resumenes, [usuarioId]: resumen };
+    this.persistir(proyectoId, conversacion);
+  }
+
   async borrarProyecto(proyectoId: string): Promise<void> {
     this.cache.delete(proyectoId);
     await this.flush();
     await rm(this.rutaConversacion(proyectoId), { force: true });
   }
 }
+

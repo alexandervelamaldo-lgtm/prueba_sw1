@@ -776,9 +776,12 @@ function aChatMessage(fila: FilaMensajeIA): ChatMessage {
 export class PostgresConversationStore implements ConversationStore {
   constructor(private readonly pool: PoolPostgres) {}
 
-  /** Recorta el hilo de `usuarioId` al tope; los demás hilos del proyecto no se tocan. */
-  private async recortar(cliente: ClientePostgres, proyectoId: string, usuarioId: string): Promise<void> {
-    await cliente.query(
+  /**
+   * Recorta el hilo de `usuarioId` al tope; los demás hilos del proyecto no se
+   * tocan. Devuelve las filas borradas, en orden.
+   */
+  private async recortar(cliente: ClientePostgres, proyectoId: string, usuarioId: string): Promise<ChatMessage[]> {
+    const { rows } = await cliente.query<FilaMensajeIA>(
       `delete from conversaciones_ia
         where proyecto_id = $1
           and hilo_usuario_id = $2
@@ -787,9 +790,12 @@ export class PostgresConversationStore implements ConversationStore {
              where proyecto_id = $1 and hilo_usuario_id = $2
              order by id desc
              offset $3 limit 1
-          ), -1)`,
+          ), -1)
+        returning id, usuario_id, rol, contenido, creado_en, tipo`,
       [proyectoId, usuarioId, MAXIMO_TURNOS * 2],
     );
+    // `returning` no garantiza orden.
+    return [...rows].sort((a, b) => Number(a.id) - Number(b.id)).map(aChatMessage);
   }
 
   async getHistory(proyectoId: string, usuarioId: string, limite: number): Promise<ChatMessage[]> {
@@ -809,14 +815,14 @@ export class PostgresConversationStore implements ConversationStore {
     usuarioId: string,
     usuario: string,
     asistente: string,
-  ): Promise<void> {
-    await enTransaccion(this.pool, async (cliente) => {
+  ): Promise<ChatMessage[]> {
+    return enTransaccion(this.pool, async (cliente) => {
       await cliente.query(
         `insert into conversaciones_ia (proyecto_id, hilo_usuario_id, usuario_id, rol, contenido)
          values ($1, $2, $2, 'user', $3), ($1, $2, null, 'assistant', $4)`,
         [proyectoId, usuarioId, usuario, asistente],
       );
-      await this.recortar(cliente, proyectoId, usuarioId);
+      return this.recortar(cliente, proyectoId, usuarioId);
     });
   }
 
@@ -831,10 +837,27 @@ export class PostgresConversationStore implements ConversationStore {
     });
   }
 
+  async getResumen(proyectoId: string, usuarioId: string): Promise<string | null> {
+    const { rows } = await this.pool.query<{ resumen: string }>(
+      'select resumen from resumenes_ia where proyecto_id = $1 and usuario_id = $2',
+      [proyectoId, usuarioId],
+    );
+    return rows[0]?.resumen ?? null;
+  }
+
+  async setResumen(proyectoId: string, usuarioId: string, resumen: string): Promise<void> {
+    await this.pool.query(
+      `insert into resumenes_ia (proyecto_id, usuario_id, resumen) values ($1, $2, $3)
+       on conflict (proyecto_id, usuario_id) do update set resumen = excluded.resumen, actualizado_en = now()`,
+      [proyectoId, usuarioId, resumen],
+    );
+  }
+
   async borrarProyecto(proyectoId: string): Promise<void> {
     // Cuelga de `proyectos` con `on delete cascade`; explícito por la misma
     // razón que `PostgresTablonStore.borrarProyecto`.
     await this.pool.query('delete from conversaciones_ia where proyecto_id = $1', [proyectoId]);
+    await this.pool.query('delete from resumenes_ia where proyecto_id = $1', [proyectoId]);
   }
 }
 

@@ -339,6 +339,37 @@ describe('LlmAssistant contra un proveedor simulado', () => {
     expect(mensajes.at(-1)?.content).toContain('Clase seleccionada ahora en el lienzo: Cliente');
   });
 
+  it('manda el resumen de lo hablado antes, para no olvidar lo que salió de la ventana', async () => {
+    await motor().interpret('sigue', diagrama, { historial: [], otrosProyectos: [], resumen: 'Se habló de una tienda.' });
+
+    const mensajes = recibidos[0]?.messages as { role: string; content: string }[];
+    expect(mensajes.at(-1)?.content).toContain('Resumen de lo hablado antes en esta conversación: Se habló de una tienda.');
+  });
+
+  it('resumirConversacion junta el resumen anterior con los mensajes que salen', async () => {
+    responder = () => ({ status: 200, payload: comoOpenAi('Ana creó Pedido y pidió atributos.') });
+
+    const resumen = await motor().resumirConversacion('Antes: una tienda.', [
+      { role: 'user', texto: 'crea Pedido', autorId: 'u', creadoEn: '', tipo: 'respuesta' },
+      { role: 'assistant', texto: 'Creado.', autorId: null, creadoEn: '', tipo: 'respuesta' },
+    ]);
+
+    expect(resumen).toBe('Ana creó Pedido y pidió atributos.');
+    const enviado = JSON.stringify(recibidos[0]?.messages);
+    expect(enviado).toContain('Antes: una tienda.');
+    expect(enviado).toContain('crea Pedido');
+  });
+
+  it('si el modelo no puede resumir, guarda un resumen local en vez de perderlo', async () => {
+    responder = () => ({ status: 500, payload: { error: 'caído' } });
+
+    const resumen = await motor().resumirConversacion(null, [
+      { role: 'user', texto: 'crea Pedido', autorId: 'u', creadoEn: '', tipo: 'respuesta' },
+    ]);
+
+    expect(resumen).toContain('crea Pedido');
+  });
+
   it('usa el protocolo de Anthropic cuando se le pide', async () => {
     responder = () => ({
       status: 200,

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { describeOperation, formatearEventoSse, leerHistorial, readDiagram, type EventoAsistente } from '@app/shared';
 import {
   peticionDeRevision,
+  resumenLocal,
   resumirCambiosRecientes,
   type AssistantEngine,
   type TurnoConAutor,
@@ -75,6 +76,49 @@ export function assistantRouter(deps: {
   const { store, identity, rooms, assistant, conversations } = deps;
   const router = Router();
 
+  /**
+   * Resúmenes pendientes, uno detrás de otro por hilo `(proyecto, usuario)`:
+   * cada uno lee el resumen que dejó el anterior. Sin la fila, dos órdenes casi
+   * a la vez del mismo usuario (dos pestañas) partirían del mismo resumen y el
+   * segundo en terminar borraría lo que añadió el primero. La fila vive en este
+   * proceso, que es el único que sirve la API.
+   */
+  const colaDeResumenes = new Map<string, Promise<void>>();
+
+  /**
+   * Guarda un turno y, si eso empuja mensajes fuera de la ventana, los resume
+   * antes de perderlos (memoria resumida). Se resumen exactamente los que podó
+   * el almacén. El resumen se hace en segundo plano: quien preguntó no tiene
+   * por qué esperar una llamada más al modelo para ver su respuesta, y si falla
+   * solo se pierde el resumen de esos mensajes.
+   */
+  const guardarTurno = async (
+    proyectoId: string,
+    usuarioId: string,
+    texto: string,
+    respuesta: string,
+  ): Promise<void> => {
+    const salen = await conversations.appendTurn(proyectoId, usuarioId, texto, respuesta);
+    if (salen.length === 0) return;
+    const clave = `${proyectoId}\u0000${usuarioId}`;
+    const anterior = colaDeResumenes.get(clave) ?? Promise.resolve();
+    const siguiente = anterior.then(async () => {
+      try {
+        const previo = await conversations.getResumen(proyectoId, usuarioId);
+        const nuevo = assistant.resumirConversacion
+          ? await assistant.resumirConversacion(previo, salen)
+          : resumenLocal(previo, salen);
+        await conversations.setResumen(proyectoId, usuarioId, nuevo);
+      } catch (error) {
+        console.warn('No se pudo actualizar el resumen de la conversación:', (error as Error).message);
+      }
+    });
+    colaDeResumenes.set(clave, siguiente);
+    void siguiente.then(() => {
+      if (colaDeResumenes.get(clave) === siguiente) colaDeResumenes.delete(clave);
+    });
+  };
+
   router.post(
     '/:proyectoId/asistente',
     requireRole(store, 'editor'),
@@ -88,9 +132,10 @@ export function assistantRouter(deps: {
       // cada integrante tiene el suyo y no ve el de los demás. De los otros
       // proyectos solo se piden nombre y rol —nunca se abre su sala
       // (`rooms.open`)—, así que su diagrama no llega a este prompt.
-      const [turnos, misProyectos] = await Promise.all([
+      const [turnos, misProyectos, resumen] = await Promise.all([
         conversations.getHistory(proyectoId, request.user.id, MAXIMO_TURNOS * 2),
         store.listProjectsForUser(request.user.id),
+        conversations.getResumen(proyectoId, request.user.id),
       ]);
       const historial = await conAutores(turnos, identity);
       const otrosProyectos = misProyectos
@@ -103,8 +148,9 @@ export function assistantRouter(deps: {
         otrosProyectos,
         cambiosRecientes: resumirCambiosRecientes(leerHistorial(room.doc), MAXIMO_CAMBIOS_RECIENTES),
         quienPregunta: request.user.displayName,
+        ...(resumen ? { resumen } : {}),
       });
-      await conversations.appendTurn(proyectoId, request.user.id, body.texto, result.explanation);
+      await guardarTurno(proyectoId, request.user.id, body.texto, result.explanation);
 
       response.json({
         motor: assistant.name,
@@ -131,9 +177,10 @@ export function assistantRouter(deps: {
       const room = await rooms.open(proyectoId);
       const diagram = readDiagram(room.doc);
       const peticion = body.revision ? peticionDeRevision(diagram) : body.texto;
-      const [turnos, misProyectos] = await Promise.all([
+      const [turnos, misProyectos, resumen] = await Promise.all([
         conversations.getHistory(proyectoId, request.user.id, MAXIMO_TURNOS * 2),
         store.listProjectsForUser(request.user.id),
+        conversations.getResumen(proyectoId, request.user.id),
       ]);
       const historial = await conAutores(turnos, identity);
       const otrosProyectos = misProyectos
@@ -147,6 +194,7 @@ export function assistantRouter(deps: {
         cambiosRecientes: resumirCambiosRecientes(leerHistorial(room.doc), MAXIMO_CAMBIOS_RECIENTES),
         quienPregunta: request.user.displayName,
         ...(seleccionada ? { seleccion: seleccionada } : {}),
+        ...(resumen ? { resumen } : {}),
       };
 
       const abortador = new AbortController();
@@ -215,7 +263,7 @@ export function assistantRouter(deps: {
 
       if (desconectado || abortador.signal.aborted) return;
       try {
-        await conversations.appendTurn(proyectoId, request.user.id, body.texto, mensajes.join(' '));
+        await guardarTurno(proyectoId, request.user.id, body.texto, mensajes.join(' '));
       } catch (error) {
         // Los encabezados SSE ya salieron: el fallo viaja como evento, no como
         // la respuesta JSON de error de siempre.

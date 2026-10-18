@@ -48,6 +48,8 @@ export interface AssistantContext {
   quienPregunta?: string;
   /** El nombre de la clase seleccionada en el lienzo, para entender «esta clase». */
   seleccion?: string;
+  /** Lo hablado antes de la ventana de turnos, resumido (`resumirConversacion`). */
+  resumen?: string;
 }
 
 // Define la "plantilla" o contrato que debe cumplir cualquier motor de asistente:
@@ -71,6 +73,11 @@ export interface AssistantEngine {
    * mismo tipo de voz que `explanation` en `interpret`.
    */
   revisar(diagram: ClassDiagram, contexto?: AssistantContext): Promise<string | null>;
+  /**
+   * Junta el resumen anterior de un hilo con los mensajes que van a salir de
+   * su ventana, en un resumen nuevo. Opcional: sin él se usa `resumenLocal`.
+   */
+  resumirConversacion?(previo: string | null, mensajes: ChatMessage[]): Promise<string>;
 }
 
 /**
@@ -414,8 +421,28 @@ export class LlmAssistant implements AssistantEngine {
     const lineaSeleccion = contexto?.seleccion
       ? `\nClase seleccionada ahora en el lienzo: ${contexto.seleccion} («esta clase» o «la seleccionada» se refieren a ella).`
       : '';
-    const user = `Diagrama actual:\n${summarize(diagram)}${lineaOtrosProyectos}${bloqueCambios}${lineaQuien}${lineaSeleccion}\n\nPetición: ${prompt}`;
+    const lineaResumen = contexto?.resumen
+      ? `\n\nResumen de lo hablado antes en esta conversación: ${contexto.resumen}`
+      : '';
+    const user = `Diagrama actual:\n${summarize(diagram)}${lineaOtrosProyectos}${bloqueCambios}${lineaQuien}${lineaSeleccion}${lineaResumen}\n\nPetición: ${prompt}`;
     return { system, user, historial: this.historialComoMensajes(contexto) };
+  }
+
+  // MEMORIA RESUMIDA:
+  // Mismo transporte, texto llano. Si el modelo falla, el resumen local: mejor
+  // un resumen pobre que perder lo que sale de la ventana.
+  async resumirConversacion(previo: string | null, mensajes: ChatMessage[]): Promise<string> {
+    const transcripcion = mensajes
+      .map((m) => `${m.role === 'user' ? 'Persona' : 'IA'}: ${m.texto}`)
+      .join('\n');
+    const user = `${previo ? `Resumen hasta ahora: ${previo}\n\n` : ''}Mensajes que añadir al resumen:\n${transcripcion}`;
+    try {
+      const resumen = (await this.enviarConversacion(PROMPT_RESUMEN, user, [], 400, false)).trim();
+      if (resumen) return resumen.slice(0, MAXIMO_RESUMEN);
+    } catch (error) {
+      console.warn('El modelo no pudo resumir la conversación:', (error as Error).message);
+    }
+    return resumenLocal(previo, mensajes);
   }
 
   // PETICIÓN PRIVADA DE REVISIÓN ESPONTÁNEA:
@@ -552,6 +579,22 @@ async function* textoDelStream(
       }
     }
   }
+}
+
+const PROMPT_RESUMEN = `Resumes una conversación entre una persona y un asistente de modelado UML, para que el asistente la recuerde más adelante. Escribe en castellano, en tercera persona y en un solo párrafo de como mucho seis frases: qué se pidió, qué se decidió y qué quedó pendiente. Junta el resumen anterior (si lo hay) con los mensajes nuevos. Responde solo con el resumen, sin introducción.`;
+
+/** Tope del resumen guardado: va en cada petición, así que no puede crecer sin límite. */
+const MAXIMO_RESUMEN = 1500;
+
+/**
+ * Resumen sin modelo: el anterior más lo que pidió la persona en los mensajes
+ * que salen, recortado. Pobre, pero no se pierde de qué se habló.
+ */
+export function resumenLocal(previo: string | null, mensajes: ChatMessage[]): string {
+  const pedidos = mensajes.filter((m) => m.role === 'user').map((m) => m.texto);
+  const nuevo = pedidos.length > 0 ? `Se pidió: ${pedidos.join('; ')}.` : '';
+  const texto = [previo, nuevo].filter(Boolean).join(' ');
+  return texto.length <= MAXIMO_RESUMEN ? texto : `…${texto.slice(texto.length - MAXIMO_RESUMEN + 1)}`;
 }
 
 /**

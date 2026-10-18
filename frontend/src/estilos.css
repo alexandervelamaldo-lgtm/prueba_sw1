@@ -6811,3 +6811,10 @@ select:focus {
   color: var(--texto);
   font-size: 12px;
 }
+
+.modo-ia__uso {
+  margin: 0;
+  color: var(--texto-2);
+  font-size: 11px;
+  flex-shrink: 0;
+}

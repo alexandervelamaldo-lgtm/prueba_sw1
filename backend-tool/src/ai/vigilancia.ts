@@ -2,6 +2,7 @@ import { readDiagram } from '@app/shared';
 import type { AssistantEngine } from './assistant.js';
 import type { ConversationStore } from '../storage/conversaciones.js';
 import type { Room } from '../collab/rooms.js';
+import type { CupoDeIA } from './cupo-ia.js';
 
 /**
  * Hace que el Modo IA hable sin que nadie le haya preguntado nada.
@@ -70,6 +71,8 @@ export class VigilanteDiagrama {
     private readonly conversations: ConversationStore,
     private readonly esperaMs: number = ESPERA_TRAS_CAMBIO_MS,
     private readonly enfriamientoMs: number = ENFRIAMIENTO_MS,
+    /** El cupo diario de la IA: el comentario cuenta para quien hizo el cambio. */
+    private readonly cupo?: CupoDeIA,
   ) {}
 
   /**
@@ -118,9 +121,18 @@ export class VigilanteDiagrama {
     const anterior = this.ultimoComentario.get(proyectoId) ?? 0;
     if (ahora - anterior < this.enfriamientoMs) return;
 
+    // Sin cupo, la IA se queda callada: el comentario lo pagaría quien hizo
+    // el cambio, y ya no tiene con qué.
+    const reserva = this.cupo ? await this.cupo.reservar(autor) : null;
+    if (this.cupo && !reserva) return;
+
     try {
       const diagram = readDiagram(room.doc);
-      const comentario = await this.assistant.revisar(diagram);
+      const comentario = await this.assistant.revisar(diagram, {
+        historial: [],
+        otrosProyectos: [],
+        ...(reserva ? { registrarUso: reserva.registrar } : {}),
+      });
       if (!comentario) return;
 
       this.ultimoComentario.set(proyectoId, ahora);
@@ -130,6 +142,8 @@ export class VigilanteDiagrama {
       // la IA quedándose callada, que es justo lo que pasa cuando no tiene
       // nada que decir.
       console.warn('El vigilante no pudo comentar el diagrama:', (error as Error).message);
+    } finally {
+      await reserva?.cerrar();
     }
   }
 }

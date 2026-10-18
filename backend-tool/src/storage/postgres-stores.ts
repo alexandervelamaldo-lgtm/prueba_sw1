@@ -30,6 +30,7 @@ import type {
   TablonStore,
 } from './tablon.js';
 import { MAXIMO_TURNOS, type ChatMessage, type ConversationStore } from './conversaciones.js';
+import type { UsoIAStore } from './uso-ia.js';
 import type { CrearVersion, Version, VersionResumen, VersionStore } from './versiones.js';
 import {
   aIso,
@@ -858,6 +859,33 @@ export class PostgresConversationStore implements ConversationStore {
     // razón que `PostgresTablonStore.borrarProyecto`.
     await this.pool.query('delete from conversaciones_ia where proyecto_id = $1', [proyectoId]);
     await this.pool.query('delete from resumenes_ia where proyecto_id = $1', [proyectoId]);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Uso de la IA
+
+/** Ver `storage/uso-ia.ts`. Un `upsert` por petición; la suma la hace la base de datos. */
+export class PostgresUsoIAStore implements UsoIAStore {
+  constructor(private readonly pool: PoolPostgres) {}
+
+  async sumar(usuarioId: string, dia: string, tokens: number): Promise<number> {
+    const cantidad = Number.isFinite(tokens) && tokens > 0 ? Math.round(tokens) : 0;
+    const { rows } = await this.pool.query<{ tokens: string | number }>(
+      `insert into uso_ia (usuario_id, dia, tokens) values ($1, $2, $3)
+       on conflict (usuario_id, dia) do update set tokens = uso_ia.tokens + excluded.tokens
+       returning tokens`,
+      [usuarioId, dia, cantidad],
+    );
+    return Number(rows[0]?.tokens ?? 0);
+  }
+
+  async leer(usuarioId: string, dia: string): Promise<number> {
+    const { rows } = await this.pool.query<{ tokens: string | number }>(
+      'select tokens from uso_ia where usuario_id = $1 and dia = $2',
+      [usuarioId, dia],
+    );
+    return Number(rows[0]?.tokens ?? 0);
   }
 }
 

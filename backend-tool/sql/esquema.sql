@@ -208,6 +208,15 @@ create index if not exists conversaciones_por_hilo
 -- sobrescribe; tabla aparte porque no es un mensaje más de la conversación.
 -- `usuario_id` sin clave foránea, por la misma razón que `conversaciones_ia`
 -- (decisión D8).
+-- Control de costos: tokens de la IA que gastó cada usuario cada día (UTC).
+-- Ver `storage/uso-ia.ts`. Sin clave foránea a usuarios (decisión D8).
+create table if not exists uso_ia (
+  usuario_id text not null,
+  dia        date not null,
+  tokens     bigint not null default 0,
+  primary key (usuario_id, dia)
+);
+
 create table if not exists resumenes_ia (
   proyecto_id    uuid not null references proyectos(id) on delete cascade,
   usuario_id     text not null,

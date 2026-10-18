@@ -148,6 +148,8 @@ export function ModoIA({
   const [turnos, setTurnos] = useState<Turno[]>([]);
   const [autoAplicar, setAutoAplicar] = useState(leerAutoAplicar);
   const [ejecutando, setEjecutando] = useState(false);
+  // Control de costos: solo se muestra si el servidor tiene un límite diario.
+  const [uso, setUso] = useState<{ hoy: number; limite: number | null } | null>(null);
   // Una orden a la vez, desde que sale hasta que la IA termina de aplicarla: la
   // siguiente espera a que esta termine (o se interrumpa). El estado llegaría
   // tarde para una orden que entra en el mismo instante (por voz); la
@@ -202,6 +204,25 @@ export function ModoIA({
   const [error, setError] = useState<string | null>(null);
   const dictadoRef = useRef<SesionDictado | null>(null);
   const hayDictado = dictadoDisponible();
+
+  // El uso se vuelve a pedir al terminar cada orden (cuando `enviando` vuelve a
+  // `false`): es lo que acaba de cambiarlo.
+  useEffect(() => {
+    if (enviando) return;
+    let vigente = true;
+    api
+      .usoAsistente(proyecto.id)
+      .then((datos) => {
+        if (vigente) setUso(datos);
+      })
+      .catch(() => {
+        // Sin el dato no se muestra la línea; no es un error que contar.
+      });
+    return () => {
+      vigente = false;
+    };
+  }, [proyecto.id, enviando]);
+
   // Qué `creadoEn` ya se pintó, para que el sondeo no duplique un turno que
   // ya llegó por la carga inicial o por una vuelta de sondeo anterior.
   const vistosRef = useRef<Set<string>>(new Set());
@@ -567,6 +588,11 @@ export function ModoIA({
         La IA aplica sola los cambios. Lo que borra algo sigue pidiendo «Aplicar», y cada respuesta se
         deshace de una vez.
       </label>
+      {uso?.limite ? (
+        <p className="modo-ia__uso">
+          Uso de la IA hoy: {uso.hoy.toLocaleString('es')} de {uso.limite.toLocaleString('es')} tokens.
+        </p>
+      ) : null}
       <button
         type="button"
         className="modo-ia__revisar"

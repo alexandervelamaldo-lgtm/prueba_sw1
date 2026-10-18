@@ -93,6 +93,11 @@ export interface Config {
   llmVisionApiKey?: string;
   llmVisionBaseUrl?: string;
   /**
+   * Tokens de la IA que cada usuario puede gastar por día (UTC). Sin variable,
+   * o con un valor que no sea un entero positivo, no hay límite: solo se cuenta.
+   */
+  llmLimiteDiarioTokens?: number;
+  /**
    * Techo de la respuesta del modelo de visión, en tokens.
    *
    * Se saca a variable porque el valor bueno depende del modelo y del diagrama,
@@ -206,6 +211,13 @@ export function cargarEnv(ruta?: string): void {
   }
 }
 
+/** Un entero positivo, o `undefined` si falta o no lo es. */
+function enteroPositivo(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const valor = Number(raw.trim());
+  return Number.isInteger(valor) && valor > 0 ? valor : undefined;
+}
+
 function intFromEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -272,6 +284,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     llmVisionModel: env.LLM_VISION_MODEL,
     llmVisionApiKey: env.LLM_VISION_API_KEY,
     llmVisionBaseUrl: env.LLM_VISION_BASE_URL,
+    llmLimiteDiarioTokens: enteroPositivo(env.LLM_LIMITE_DIARIO_TOKENS),
     // Sin variable se deja `undefined` en vez de poner aquí un número: así el
     // valor por defecto vive en un solo sitio, junto a la explicación de por qué
     // es ese, y no repetido en dos ficheros que se separarán con el tiempo.

@@ -393,6 +393,15 @@ describe('LlmAssistant contra un proveedor simulado', () => {
     expect(usos).toEqual([320]);
   });
 
+  it('el resumen y el comentario espontáneo piden margen de salida: con modelos que razonan, 300 o 400 tokens los cortaban a mitad de frase', async () => {
+    responder = () => ({ status: 200, payload: comoOpenAi('Un texto.') });
+
+    await motor().resumirConversacion(null, [{ role: 'user', texto: 'hola', autorId: 'u', creadoEn: '', tipo: 'respuesta' }]);
+    await motor().revisar(diagrama);
+
+    expect(recibidos.map((cuerpo) => cuerpo.max_tokens)).toEqual([1024, 1024]);
+  });
+
   it('usa el protocolo de Anthropic cuando se le pide', async () => {
     responder = () => ({
       status: 200,

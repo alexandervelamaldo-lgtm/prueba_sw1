@@ -40,7 +40,7 @@ export interface EstadoRespuesta {
 }
 
 interface Ejecutor {
-  encolar(operacion: Operation): void;
+  encolar(operacion: Operation, propuestoPor?: string): void;
   terminar(): Promise<{ aplicadas: number; error: string | null }>;
 }
 
@@ -129,7 +129,7 @@ export function crearManejadorDeStream(opciones: {
           propuesta.push({ operacion: evento.operacion, descripcion: evento.descripcion });
         } else {
           encoladas += 1;
-          ejecutor.encolar(evento.operacion);
+          ejecutor.encolar(evento.operacion, evento.motor);
         }
         break;
       case 'senalar':

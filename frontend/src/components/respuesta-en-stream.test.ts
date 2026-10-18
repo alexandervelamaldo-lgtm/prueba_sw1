@@ -17,6 +17,7 @@ function preparar(
   opciones: { autoAplicar?: boolean; soloLectura?: boolean; conVoz?: boolean; aplicarAMano?: boolean } = {},
 ) {
   const encoladas: Operation[] = [];
+  const motores: (string | undefined)[] = [];
   const porAplicar: Operation[] = [];
   const dichas: string[] = [];
   const estados: EstadoRespuesta[] = [];
@@ -29,8 +30,9 @@ function preparar(
     crearEjecutor: (avisos) => {
       alAplicar = avisos.alAplicar;
       return {
-        encolar: (operacion) => {
+        encolar: (operacion, motor) => {
           encoladas.push(operacion);
+          motores.push(motor);
           if (opciones.aplicarAMano) porAplicar.push(operacion);
           else alAplicar?.(operacion, ['C1']);
         },
@@ -52,7 +54,7 @@ function preparar(
     const operacion = porAplicar.shift();
     if (operacion) alAplicar?.(operacion, ['C1']);
   };
-  return { manejador, enviar, encoladas, dichas, ultimo, aplicarSiguiente, senaladas };
+  return { manejador, enviar, encoladas, dichas, ultimo, aplicarSiguiente, senaladas, motores };
 }
 
 const op = (operacion: Operation): EventoAsistente => ({ tipo: 'operacion', operacion, descripcion: `desc ${operacion.op}` });
@@ -286,5 +288,15 @@ describe('crearManejadorDeStream, conflictos', () => {
     enviar(op(crearPedido), op(crearLinea));
 
     expect(ultimo().conflictos).toEqual(['Ojo: Beto está editando «Cliente».']);
+  });
+});
+
+describe('crearManejadorDeStream, motor de cada operación', () => {
+  it('pasa al ejecutor el motor que propuso cada operación', () => {
+    const { enviar, motores } = preparar();
+
+    enviar({ tipo: 'operacion', operacion: crearPedido, descripcion: 'd', motor: 'modelo-remoto (gemini)' });
+
+    expect(motores).toEqual(['modelo-remoto (gemini)']);
   });
 });

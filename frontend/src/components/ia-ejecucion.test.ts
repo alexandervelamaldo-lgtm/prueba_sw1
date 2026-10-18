@@ -383,3 +383,24 @@ describe('crearEjecutorEnCola avisa de las clases que tocó cada paso', () => {
     expect(vistas).toEqual([['clase-1']]);
   });
 });
+
+describe('crearEjecutorEnCola atribuye cada paso a su motor', () => {
+  it('el motor de la operación va al historial como proponente', async () => {
+    const { deps } = dobles({ conCursor: false });
+    const contextos: unknown[] = [];
+    deps.aplicar = (_operaciones, contexto) => {
+      contextos.push(contexto);
+      return { ok: true, clases: [] };
+    };
+    const ejecutor = crearEjecutorEnCola(deps);
+
+    ejecutor.encolar(crearPedido, 'modelo-remoto (gemini)');
+    ejecutor.encolar(atributoEmail);
+    await ejecutor.terminar();
+
+    expect(contextos).toEqual([
+      { origen: 'asistente', propuestoPor: 'modelo-remoto (gemini)' },
+      { origen: 'asistente', propuestoPor: 'modelo' },
+    ]);
+  });
+});

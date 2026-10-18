@@ -362,7 +362,7 @@ async function* eventosDeRespuesta(
   const mensaje = respuesta.clarification || respuesta.explanation;
   if (mensaje) yield { tipo: 'mensaje', texto: mensaje };
   for (const operacion of respuesta.operations) {
-    yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion) };
+    yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion), motor: assistant.name };
   }
   yield { tipo: 'fin', motor: assistant.name, confianza: respuesta.confidence };
 }

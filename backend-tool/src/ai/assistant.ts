@@ -104,7 +104,7 @@ export class GrammarAssistant implements AssistantEngine {
     const mensaje = respuesta.clarification || respuesta.explanation;
     if (mensaje) yield { tipo: 'mensaje', texto: mensaje };
     for (const operacion of respuesta.operations) {
-      yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion) };
+      yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion), motor: this.name };
     }
     yield { tipo: 'fin', motor: this.name, confianza: respuesta.confidence };
   }
@@ -292,7 +292,12 @@ export class LlmAssistant implements AssistantEngine {
       if (accion._type === 'message') return { tipo: 'mensaje', texto: accion.text };
       if (accion._type === 'point') return { tipo: 'senalar', clases: accion.classes };
       if (accion._type === 'review') return { tipo: 'repasar' };
-      return { tipo: 'operacion', operacion: accion.operation, descripcion: describeOperation(accion.operation) };
+      return {
+        tipo: 'operacion',
+        operacion: accion.operation,
+        descripcion: describeOperation(accion.operation),
+        motor: this.name,
+      };
     };
 
     const registrar = async function* (evento: EventoAsistente | null): AsyncGenerator<EventoAsistente> {
@@ -392,7 +397,7 @@ export class LlmAssistant implements AssistantEngine {
     const mensaje = respuesta.clarification || respuesta.explanation;
     if (mensaje) yield { tipo: 'mensaje', texto: mensaje };
     for (const operacion of respuesta.operations) {
-      yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion) };
+      yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion), motor: this.fallback.name };
     }
     yield { tipo: 'fin', motor: this.fallback.name, confianza: respuesta.confidence };
   }

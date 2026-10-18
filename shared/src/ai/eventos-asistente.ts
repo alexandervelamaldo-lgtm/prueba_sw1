@@ -13,7 +13,8 @@ import type { Operation } from '../ops/operations.js';
  *   el texto mientras se escribe.
  * - `mensaje`: un mensaje ya completo. Es lo que se habla.
  * - `operacion`: una operación completa y validada, con su descripción legible
- *   calculada en el servidor (nunca la escribe el modelo).
+ *   calculada en el servidor (nunca la escribe el modelo) y el `motor` que la
+ *   propuso, para el historial: puede ser la gramática de respaldo.
  * - `senalar`: la IA señala esas clases del lienzo, por nombre, sin cambiarlas.
  * - `repasar`: la IA pide repasar lo que hizo, con el diagrama ya actualizado,
  *   cuando termine de aplicarse esta respuesta.
@@ -25,7 +26,7 @@ import type { Operation } from '../ops/operations.js';
 export type EventoAsistente =
   | { tipo: 'mensaje-parcial'; texto: string }
   | { tipo: 'mensaje'; texto: string }
-  | { tipo: 'operacion'; operacion: Operation; descripcion: string }
+  | { tipo: 'operacion'; operacion: Operation; descripcion: string; motor?: string }
   | { tipo: 'senalar'; clases: string[] }
   | { tipo: 'repasar' }
   | { tipo: 'fin'; motor: string; confianza: number }

@@ -67,3 +67,17 @@ describe('crearColaDeVoz', () => {
     expect(voz.dichas).toEqual(['Uno.']);
   });
 });
+
+describe('crearColaDeVoz tras una interrupción', () => {
+  it('después de vaciar, lo que llegue ya no se dice: la IA fue interrumpida', () => {
+    const voz = dobleDeVoz();
+    const cola = crearColaDeVoz(voz.hablar);
+
+    cola.decir('Uno.');
+    cola.vaciar();
+    cola.decir('Dos.');
+    cola.terminar();
+
+    expect(voz.dichas).toEqual(['Uno.']);
+  });
+});

@@ -18,9 +18,9 @@ Branch: `yimy`. Delivery: ask-on-risk. Test runner: Vitest (`npm test` at the ro
 | T1 | S1, S2 | inline | done | 9b85523 |
 | T2 | S3 | inline | done | 283e2e5 |
 | T3 | S4 | inline | done | 60be829 |
-| T4a | S5 (streaming, backend: `POST /:proyectoId/asistente/stream`) | delegated to Codex (writer trigger: parallel units with disjoint surfaces) | done | (first T4 commit) |
-| T4b | S5 (streaming, frontend: SSE client, incremental Modo IA, sentence-by-sentence voice) | inline | done | (second T4 commit) |
-| T5 | S5 (rest) | — | pending | — |
+| T4a | S5 (streaming, backend: `POST /:proyectoId/asistente/stream`) | delegated to Codex (writer trigger: parallel units with disjoint surfaces) | done | 02e75f7 |
+| T4b | S5 (streaming, frontend: SSE client, incremental Modo IA, sentence-by-sentence voice) | inline | done | 5c3341a |
+| T5 | S5 (rest) | inline | done | e27bffa, 4d1f40f, 393019c, 5f2efc0, 5a5f994, (closing commit) |
 
 ## Log
 
@@ -53,3 +53,5 @@ Branch: `yimy`. Delivery: ask-on-risk. Test runner: Vitest (`npm test` at the ro
 - **L27**: T5.4b "Compartir un turno": each finished AI reply in Modo IA has a "Compartir en el tablón" button that posts `textoParaCompartir` (the question, the reply and what it applied, capped at the board's 10 000 characters) through the existing `api.publicarEnTablon`. RED then GREEN (3 tests). Browser check: after "crea la clase Pedido", sharing turned the button into "Compartido en el tablón" and the board API returned the message with the question, the reply and "Aplicó: Crear clase «Pedido»".
 - **L28** (2026-10-17): Owner approval decision. Options given: keep as is / notify the owner on the board / mandatory approval (server-side pending deletions). User: "dejarlo como esta". No owner approval is implemented; collaborators keep confirming destructive AI proposals with "Aplicar", recoverable with undo and project versions.
 - **L29**: T5.5 multi-step work: new model action `{"_type":"review"}` → SSE event `repasar` → when the reply ends, `debeRepasar` (the AI asked, it applied something, no error, and the reply is not itself a review) triggers one more turn, after 1.2 s so the server has the applied diagram; the user bubble reads "Repasando lo que acabo de hacer…" labelled "Repaso automático". RED then GREEN (9 tests). Live: curl showed the model emitting `repasar`; the first browser run showed the frontend losing it, because the input re-enabled during the 1.2 s wait (a message typed then would also have been dropped silently) → the panel now stays busy during the wait. Re-check: 24 operations applied, the review turn ran and the AI confirmed the model was complete, and the second stream carried no `repasar` (no chaining).
+- **L30** (2026-10-17): VAD decision. Measured: the browser would download about 13.5 MB (ONNX Runtime WASM 11.2 MB, Silero model 2.3 MB), or 21.9 MB for the WebGPU WASM, and node_modules would grow about 150 MB. User: "con el boton de microfono mejor". Implemented without new dependencies: pressing the microphone while the AI responds or speaks stops the voice (`callar` plus a closed voice queue), aborts the stream, stops the executor before its next step (no review afterwards) and starts listening. Orders now queue (the next one waits for the current one to finish or be interrupted) instead of being dropped. RED then GREEN (voice queue). Browser check with a fake SpeechRecognition: mic enabled during the reply, applied operations frozen at 3, no cursor, no stuck "…", no error shown, the next order answered, one Deshacer → 0 classes.
+- **L31**: T5 closed (zoom, pointing, review button, recent changes, share to board, one-step review, interruption). Owner approval left out by decision (L28). Full suite: see the closing commit.

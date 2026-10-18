@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { describeOperation, interpretCommand, type Aplicar, type ClassDiagram } from '@app/shared';
 import { ApiError, api, type Proyecto, type TurnoAsistente } from '../services/api';
 import { puntuarPorVocabulario } from '../services/dictado';
-import { dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDictado } from '../services/voz';
+import { callar, dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDictado } from '../services/voz';
 import { Icono } from './iconos';
 import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
 import { crearCursorIA, nodoDeClase, prefiereMenosMovimiento, resaltarClase } from './cursor-ia';
@@ -131,10 +131,14 @@ export function ModoIA({
   const [turnos, setTurnos] = useState<Turno[]>([]);
   const [autoAplicar, setAutoAplicar] = useState(leerAutoAplicar);
   const [ejecutando, setEjecutando] = useState(false);
-  // Una orden a la vez, desde que sale hasta que la IA termina de aplicarla. El
-  // estado llega tarde para una segunda orden que entra en el mismo instante
-  // (por ejemplo, por voz); la referencia no.
-  const ocupadoRef = useRef(false);
+  // Una orden a la vez, desde que sale hasta que la IA termina de aplicarla: la
+  // siguiente espera a que esta termine (o se interrumpa). El estado llegaría
+  // tarde para una orden que entra en el mismo instante (por voz); la
+  // referencia no.
+  const ordenEnCursoRef = useRef<Promise<void> | null>(null);
+  // El micrófono pulsado mientras la IA responde: calla, corta y deja de aplicar.
+  const interrumpidoRef = useRef(false);
+  const colaVozRef = useRef<ReturnType<typeof crearColaDeVoz> | null>(null);
   // Al cerrar el panel, la IA deja de aplicar en el paso siguiente.
   const montadoRef = useRef(true);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -249,13 +253,27 @@ export function ModoIA({
   }, [proyecto.id, fusionar]);
 
   const enviar = async (orden: string, porVoz = false, revision = false): Promise<void> => {
-    if (ocupadoRef.current) return;
-    ocupadoRef.current = true;
+    while (ordenEnCursoRef.current) await ordenEnCursoRef.current;
+    const enCurso = enviarUnaOrden(orden, porVoz, revision);
+    ordenEnCursoRef.current = enCurso;
     try {
-      await enviarUnaOrden(orden, porVoz, revision);
+      await enCurso;
     } finally {
-      ocupadoRef.current = false;
+      if (ordenEnCursoRef.current === enCurso) ordenEnCursoRef.current = null;
     }
+  };
+
+  /**
+   * Corta la respuesta en curso: la voz se calla al momento, lo que quedaba
+   * por decir se descarta, el stream se cierra y el ejecutor no aplica el paso
+   * siguiente. Lo ya aplicado se queda (se deshace de una vez, como siempre).
+   */
+  const interrumpir = (): void => {
+    if (!ordenEnCursoRef.current) return;
+    interrumpidoRef.current = true;
+    colaVozRef.current?.vaciar();
+    callar();
+    abortarRef.current?.abort();
   };
 
   /**
@@ -272,6 +290,7 @@ export function ModoIA({
     const limpia = orden.trim();
     if (!limpia) return;
 
+    interrumpidoRef.current = false;
     setError(null);
     setTexto('');
     const idRespuesta = idTurno();
@@ -329,11 +348,11 @@ export function ModoIA({
             pausaMs: PAUSA_ENTRE_PASOS_MS,
             esperar: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
             ...(agruparDeshacer ? { agrupar: agruparDeshacer } : {}),
-            cancelado: () => !montadoRef.current,
+            cancelado: () => !montadoRef.current || interrumpidoRef.current,
           },
           avisos,
         ),
-      voz: porVoz ? crearColaDeVoz(hablar) : null,
+      voz: (colaVozRef.current = porVoz ? crearColaDeVoz(hablar) : null),
       senalar: (nombres) => {
         const ids = clasesPorNombre(diagramaRef.current, nombres);
         if (ids.length === 0) return;
@@ -369,7 +388,9 @@ export function ModoIA({
       }
     } catch (fallo) {
       if (controlador.signal.aborted) {
-        // Se cerró el panel: no hay a quién contarle nada.
+        // Se cerró el panel o se interrumpió con el micrófono. Al interrumpir,
+        // la respuesta se da por terminada con lo que llegó hasta ahí.
+        if (interrumpidoRef.current) manejador.alEvento({ tipo: 'error', mensaje: 'Interrumpida.' });
       } else if (ultimo === null && fallo instanceof ApiError && (fallo.esDeRed || fallo.status >= 500)) {
         // Mismo criterio que la burbuja flotante: sin servidor se usa la
         // gramática local, y se dice de dónde viene la respuesta. Este turno no
@@ -409,6 +430,7 @@ export function ModoIA({
     }
     if (!montadoRef.current) return;
     const final = ultimo as EstadoRespuesta | null;
+    if (interrumpidoRef.current) return;
     if (final?.error) setError(final.error);
     else if (resultado.error) setError(`La IA se detuvo tras ${resultado.aplicadas} cambio(s): ${resultado.error}`);
 
@@ -418,8 +440,11 @@ export function ModoIA({
       // que nadie escriba algo que `enviar` descartaría por estar ocupado.
       setEjecutando(true);
       await new Promise((resolve) => setTimeout(resolve, ESPERA_ANTES_DE_REPASAR_MS));
-      if (montadoRef.current) await enviarUnaOrden(PETICION_DE_REPASO, porVoz, false, true);
-      else setEjecutando(false);
+      if (montadoRef.current && !interrumpidoRef.current) {
+        await enviarUnaOrden(PETICION_DE_REPASO, porVoz, false, true);
+      } else {
+        setEjecutando(false);
+      }
     }
   };
 
@@ -456,6 +481,9 @@ export function ModoIA({
       dictadoRef.current?.detener();
       return;
     }
+    // Pulsarlo mientras la IA responde o habla la interrumpe, y se escucha la
+    // orden nueva, que espera a que la anterior termine de cerrarse.
+    interrumpir();
     setError(null);
     setEscuchando(true);
     dictadoRef.current = dictar({
@@ -601,8 +629,14 @@ export function ModoIA({
         <button
           type="button"
           className={`boton-microfono${escuchando ? ' boton-microfono--activo' : ''}`}
-          disabled={soloLectura || !hayDictado || ejecutando}
-          title={hayDictado ? 'Dictar un mensaje' : motivoSinVoz()}
+          disabled={soloLectura || !hayDictado}
+          title={
+            !hayDictado
+              ? motivoSinVoz()
+              : ejecutando
+                ? 'Interrumpir a la IA y dictar otra orden'
+                : 'Dictar un mensaje'
+          }
           aria-label={escuchando ? 'Detener el dictado' : 'Dictar un mensaje'}
           aria-pressed={escuchando}
           onClick={alternarMicrofono}

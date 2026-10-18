@@ -6654,3 +6654,122 @@ select:focus {
   color: var(--texto-2);
   font-variant-numeric: tabular-nums;
 }
+
+/* Cursor fantasma del Modo IA (`components/cursor-ia.ts`). La punta de la
+   flecha está en la esquina superior izquierda del elemento, que es el punto
+   que se coloca sobre el centro del botón o de la clase. */
+.cursor-ia {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    transform 450ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 150ms ease-out;
+}
+
+.cursor-ia--visible {
+  opacity: 1;
+}
+
+.cursor-ia::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--acento);
+  clip-path: polygon(0 0, 0 78%, 24% 60%, 42% 100%, 56% 94%, 38% 55%, 70% 55%);
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.45));
+}
+
+.cursor-ia::after {
+  content: 'IA';
+  position: absolute;
+  top: 18px;
+  left: 14px;
+  padding: 1px 5px;
+  border-radius: var(--radio-ajustado);
+  background: var(--acento);
+  color: var(--fondo);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.cursor-ia--clic::before {
+  animation: cursor-ia-clic 220ms ease-out;
+}
+
+@keyframes cursor-ia-clic {
+  50% {
+    transform: scale(0.8);
+  }
+}
+
+/* La clase que la IA acaba de tocar, un momento. Contorno y no sombra: no es
+   una superficie en otra capa, es una marca sobre la propia clase. */
+.react-flow__node.nodo-ia {
+  outline: 3px solid transparent;
+  outline-offset: 3px;
+  border-radius: var(--radio-ajustado);
+  animation: nodo-ia-destello 1600ms ease-out;
+}
+
+@keyframes nodo-ia-destello {
+  0%,
+  60% {
+    outline-color: var(--acento);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor-ia {
+    transition: none;
+  }
+
+  .cursor-ia--clic::before,
+  .react-flow__node.nodo-ia {
+    animation: none;
+  }
+}
+
+.modo-ia__auto {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  color: var(--texto-2);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+/* Mismo arreglo que `.codigo-recuperacion__casilla input`: la regla general de
+   `input` le pone relleno y borde, y la casilla se queda en un punto. */
+.modo-ia__auto input {
+  width: auto;
+  flex: none;
+  margin-top: 2px;
+  padding: 0;
+  accent-color: var(--acento);
+  cursor: pointer;
+}
+
+.modo-ia__aplicadas {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  color: var(--texto-2);
+  font-size: 12px;
+}
+
+.modo-ia__aplicadas li {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}

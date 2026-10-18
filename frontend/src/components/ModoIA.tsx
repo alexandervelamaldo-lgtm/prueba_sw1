@@ -22,7 +22,7 @@ import {
   type MarcasDeBorrado,
 } from './ia-ejecucion';
 import { crearColaDeVoz } from './cola-voz';
-import { textoDeBienvenida } from './bienvenida-ia';
+import { debeEscucharTrasSaludo, textoDeBienvenida } from './bienvenida-ia';
 import { crearManejadorDeStream, debeRepasar, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
 import type { GrupoDeshacer } from '../hooks/deshacer-agrupado';
 
@@ -230,6 +230,12 @@ export function ModoIA({
   const [texto, setTexto] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [escuchando, setEscuchando] = useState(false);
+  // Lo que se lee cuando termina la bienvenida, segundos después de pedirla.
+  const escuchandoRef = useRef(escuchando);
+  escuchandoRef.current = escuchando;
+  const textoRef = useRef(texto);
+  textoRef.current = texto;
+  const escucharRef = useRef<() => void>(() => {});
   const [error, setError] = useState<string | null>(null);
   const dictadoRef = useRef<SesionDictado | null>(null);
   const hayDictado = dictadoDisponible();
@@ -275,8 +281,23 @@ export function ModoIA({
         tipo: 'respuesta',
       },
     ]);
-    hablar(texto);
+    // Al terminar de decirlo, el micrófono se enciende solo para escuchar la
+    // respuesta, como en una conversación (salvo que ya se haya tomado la
+    // palabra; ver `debeEscucharTrasSaludo`). Sin voz, se escucha enseguida.
+    const escucharTrasSaludo = (): void => {
+      const puede = debeEscucharTrasSaludo({
+        montado: montadoRef.current,
+        soloLectura,
+        hayDictado,
+        ocupado: ordenEnCursoRef.current !== null,
+        escuchando: escuchandoRef.current,
+        hayTexto: textoRef.current.trim() !== '',
+      });
+      if (puede) escucharRef.current();
+    };
+    if (!hablar(texto, escucharTrasSaludo)) escucharTrasSaludo();
     onSaludado?.();
+    // `hayDictado` y `soloLectura` no cambian mientras el panel está abierto.
   }, [saludoPendiente, cargando, usuario.nombre, onSaludado]);
 
   useEffect(() => {
@@ -608,6 +629,11 @@ export function ModoIA({
     // Pulsarlo mientras la IA responde o habla la interrumpe, y se escucha la
     // orden nueva, que espera a que la anterior termine de cerrarse.
     interrumpir();
+    empezarAEscuchar();
+  };
+
+  /** Enciende el micrófono; lo dictado se envía como una orden por voz. */
+  const empezarAEscuchar = (): void => {
     setError(null);
     setEscuchando(true);
     dictadoRef.current = dictar({
@@ -626,6 +652,7 @@ export function ModoIA({
     });
     if (!dictadoRef.current) setEscuchando(false);
   };
+  escucharRef.current = empezarAEscuchar;
 
   return (
     <div className="modo-ia" ref={panelRef}>

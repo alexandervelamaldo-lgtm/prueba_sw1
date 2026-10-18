@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { textoDeBienvenida } from './bienvenida-ia';
+import { debeEscucharTrasSaludo, textoDeBienvenida } from './bienvenida-ia';
 
 /**
  * El saludo con el que la IA abre el Modo IA desde el avatar. Se arma en el
@@ -28,5 +28,25 @@ describe('textoDeBienvenida', () => {
 
   it('termina invitando a pedir algo', () => {
     expect(textoDeBienvenida({ nombre: 'Ana', ahora: a(10) })).toMatch(/\?$/);
+  });
+});
+
+describe('debeEscucharTrasSaludo', () => {
+  const listo = { montado: true, soloLectura: false, hayDictado: true, ocupado: false, escuchando: false, hayTexto: false };
+
+  it('tras el saludo, se pone a escuchar', () => {
+    expect(debeEscucharTrasSaludo(listo)).toBe(true);
+  });
+
+  it('no escucha si ya no hace falta o no se puede', () => {
+    expect(debeEscucharTrasSaludo({ ...listo, montado: false })).toBe(false);
+    expect(debeEscucharTrasSaludo({ ...listo, soloLectura: true })).toBe(false);
+    expect(debeEscucharTrasSaludo({ ...listo, hayDictado: false })).toBe(false);
+  });
+
+  it('no le quita la palabra a quien ya empezó: escribiendo, enviando o escuchando', () => {
+    expect(debeEscucharTrasSaludo({ ...listo, hayTexto: true })).toBe(false);
+    expect(debeEscucharTrasSaludo({ ...listo, ocupado: true })).toBe(false);
+    expect(debeEscucharTrasSaludo({ ...listo, escuchando: true })).toBe(false);
   });
 });

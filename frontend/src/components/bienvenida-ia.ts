@@ -13,3 +13,28 @@ export function textoDeBienvenida(datos: { nombre: string; ahora?: Date }): stri
   // alargaba lo primero que se oye, que es justo lo que menos debe tardar.
   return `¡${saludo}${nombre ? `, ${nombre}` : ''}! ¿En qué te puedo ayudar hoy?`;
 }
+
+/**
+ * Si, al terminar de decir la bienvenida, el Modo IA enciende el micrófono
+ * para escuchar la respuesta, como en una conversación. No lo hace si la
+ * persona ya tomó la palabra (escribiendo, enviando algo o escuchando), si
+ * cerró el panel, si solo puede mirar el proyecto o si el navegador no
+ * reconoce voz: entonces se responde escribiendo, como siempre.
+ */
+export function debeEscucharTrasSaludo(estado: {
+  montado: boolean;
+  soloLectura: boolean;
+  hayDictado: boolean;
+  ocupado: boolean;
+  escuchando: boolean;
+  hayTexto: boolean;
+}): boolean {
+  return (
+    estado.montado &&
+    !estado.soloLectura &&
+    estado.hayDictado &&
+    !estado.ocupado &&
+    !estado.escuchando &&
+    !estado.hayTexto
+  );
+}

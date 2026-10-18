@@ -105,6 +105,12 @@ export interface Config {
   elevenLabsVoiceId?: string;
   elevenLabsModelo?: string;
   /**
+   * Transcripción de voz con Groq (Whisper) para los navegadores sin
+   * reconocimiento de voz propio, como Firefox (`ai/transcripcion-groq.ts`).
+   */
+  groqApiKey?: string;
+  groqModeloTranscripcion?: string;
+  /**
    * Techo de la respuesta del modelo de visión, en tokens.
    *
    * Se saca a variable porque el valor bueno depende del modelo y del diagrama,
@@ -295,6 +301,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     elevenLabsApiKey: env.ELEVENLABS_API_KEY?.trim() || undefined,
     elevenLabsVoiceId: env.ELEVENLABS_VOICE_ID?.trim() || undefined,
     elevenLabsModelo: env.ELEVENLABS_MODEL?.trim() || undefined,
+    groqApiKey: env.GROQ_API_KEY?.trim() || undefined,
+    groqModeloTranscripcion: env.GROQ_TRANSCRIPTION_MODEL?.trim() || undefined,
     // Sin variable se deja `undefined` en vez de poner aquí un número: así el
     // valor por defecto vive en un solo sitio, junto a la explicación de por qué
     // es ese, y no repetido en dos ficheros que se separarán con el tiempo.

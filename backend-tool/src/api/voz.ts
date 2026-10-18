@@ -1,13 +1,15 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { z } from 'zod';
 import type { SintetizadorDeVoz } from '../ai/voz-elevenlabs.js';
+import type { TranscriptorDeVoz } from '../ai/transcripcion-groq.js';
 import { diaDeHoy } from '../storage/uso-ia.js';
 import { HttpError, handler, parseBody } from './http.js';
 
 /**
- * La voz del servidor (ElevenLabs) para el Modo IA. `app.ts` la monta con
- * sesión obligatoria y límite de tasa, porque cada audio gasta créditos de la
- * cuenta configurada.
+ * La voz del servidor para el Modo IA: hablar con ElevenLabs y escuchar con
+ * Groq (para los navegadores sin reconocimiento de voz propio, como Firefox).
+ * `app.ts` la monta con sesión obligatoria y límite de tasa, porque cada
+ * pedido gasta de las cuentas configuradas.
  *
  * Cualquier fallo —sin voz configurada, sin créditos, clave inválida, sin
  * red— es un 503 con `code: 'voz_no_disponible'`: el navegador lo entiende
@@ -27,18 +29,38 @@ const MAXIMO_CARACTERES = 1000;
  */
 export const MAXIMO_CARACTERES_DIARIOS = 3000;
 
+/**
+ * Transcripciones por usuario y día. Cada orden hablada es una; 200 alcanzan
+ * de sobra para un día de trabajo y acotan el gasto si algo queda grabando en
+ * bucle.
+ */
+export const MAXIMO_TRANSCRIPCIONES_DIARIAS = 200;
+
+/** Una orden hablada dura segundos; 5 MB es mucho más que eso en webm/ogg. */
+const MAXIMO_BYTES_AUDIO = 5 * 1024 * 1024;
+
 const PeticionSchema = z.object({
   texto: z.string().trim().min(1).max(MAXIMO_CARACTERES),
 });
 
-export function vozRouter(voz: SintetizadorDeVoz | null, maximoDiario = MAXIMO_CARACTERES_DIARIOS): Router {
+export function vozRouter(opciones: {
+  voz: SintetizadorDeVoz | null;
+  transcriptor?: TranscriptorDeVoz | null;
+  maximoCaracteresDiarios?: number;
+  maximoTranscripcionesDiarias?: number;
+}): Router {
+  const { voz } = opciones;
+  const transcriptor = opciones.transcriptor ?? null;
+  const maximoDiario = opciones.maximoCaracteresDiarios ?? MAXIMO_CARACTERES_DIARIOS;
+  const maximoTranscripciones = opciones.maximoTranscripcionesDiarias ?? MAXIMO_TRANSCRIPCIONES_DIARIAS;
   const router = Router();
   const gastado = new Map<string, number>();
+  const transcritas = new Map<string, number>();
 
   router.get(
     '/estado',
     handler(async (_request, response) => {
-      response.json({ elevenlabs: voz !== null });
+      response.json({ elevenlabs: voz !== null, transcripcion: transcriptor !== null });
     }),
   );
 
@@ -67,6 +89,32 @@ export function vozRouter(voz: SintetizadorDeVoz | null, maximoDiario = MAXIMO_C
       response.setHeader('content-type', audio.tipo);
       response.setHeader('cache-control', 'no-store');
       response.end(Buffer.from(audio.datos));
+    }),
+  );
+
+  router.post(
+    '/transcribir',
+    express.raw({ type: 'audio/*', limit: MAXIMO_BYTES_AUDIO }),
+    handler(async (request, response) => {
+      const audio = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
+      if (audio.length === 0) throw new HttpError(400, 'No llegó audio para transcribir.', 'audio_vacio');
+      if (!transcriptor) {
+        throw new HttpError(503, 'No hay transcripción de voz configurada.', 'transcripcion_no_disponible');
+      }
+      const clave = `${request.user.id}\u0000${diaDeHoy()}`;
+      const hoy = transcritas.get(clave) ?? 0;
+      if (hoy >= maximoTranscripciones) {
+        throw new HttpError(503, 'Por hoy se acabó la transcripción de voz.', 'transcripcion_no_disponible');
+      }
+      for (const otra of transcritas.keys()) if (!otra.endsWith(diaDeHoy())) transcritas.delete(otra);
+      transcritas.set(clave, hoy + 1);
+      try {
+        const texto = await transcriptor.transcribir(audio, request.headers['content-type'] ?? 'audio/webm');
+        response.json({ texto });
+      } catch (error) {
+        console.warn('La transcripción de voz falló:', (error as { status?: number }).status ?? 'sin respuesta');
+        throw new HttpError(503, 'La transcripción de voz no está disponible ahora.', 'transcripcion_no_disponible');
+      }
     }),
   );
 

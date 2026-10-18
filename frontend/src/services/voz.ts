@@ -27,6 +27,7 @@
 
 import { getToken } from './api';
 import { crearVozDelServidor, type ReproductorAudio, type VozDelServidor } from './voz-servidor';
+import { dictarGrabando, grabacionDisponible } from './grabacion-servidor';
 import {
   ALTERNATIVAS_PEDIDAS,
   MS_MAXIMO_ESCUCHANDO,
@@ -143,7 +144,7 @@ function sintesisDelNavegador(): boolean {
 
 /** Si se puede dictar: por el puente nativo o por el navegador. */
 export function dictadoDisponible(): boolean {
-  return puente() !== null || constructorDisponible() !== null;
+  return puente() !== null || constructorDisponible() !== null || (transcripcionDelServidor && grabacionDisponible());
 }
 
 /** Si se puede leer una respuesta en voz alta. */
@@ -174,6 +175,8 @@ export function motivoSinVoz(): string {
 
 export interface SesionDictado {
   detener: () => void;
+  /** Corta sin entregar nada (al cerrar el panel). Solo la tiene la grabación del servidor. */
+  cancelar?: () => void;
 }
 
 interface OyentesDictado {
@@ -326,6 +329,8 @@ export function dictar(opciones: OyentesDictado): SesionDictado | null {
 
   const Constructor = constructorDisponible();
   if (!Constructor) {
+    // Sin reconocimiento propio (Firefox): se graba y transcribe el servidor.
+    if (transcripcionDelServidor && grabacionDisponible()) return dictarGrabando(opciones, transcribirEnElServidor);
     opciones.onError(motivoSinVoz());
     return null;
   }
@@ -599,20 +604,36 @@ export function callar(): void {
 /* -------------------------------------------------------------------------- */
 
 let vozDelServidor: VozDelServidor | null = null;
-let preparando: Promise<boolean> | null = null;
+let transcripcionDelServidor = false;
+let preparando: Promise<EstadoVozDelServidor> | null = null;
+
+export interface EstadoVozDelServidor {
+  /** `hablar` usa la voz de ElevenLabs. */
+  voz: boolean;
+  /** El servidor transcribe la voz (Groq) para los navegadores sin reconocimiento propio. */
+  transcripcion: boolean;
+}
+
+const SIN_VOZ_DEL_SERVIDOR: EstadoVozDelServidor = { voz: false, transcripcion: false };
 
 /**
- * Pregunta una vez al servidor si tiene voz de ElevenLabs y, si la tiene,
- * `hablar` pasa a usarla. Sin sesión, sin red o sin voz configurada, no cambia
- * nada. En el móvil no se usa: allí habla el puente nativo.
+ * Pregunta una vez al servidor qué tiene: voz de ElevenLabs, para que `hablar`
+ * la use, y transcripción, para que `dictar` funcione en Firefox. Sin sesión,
+ * sin red o sin nada configurado, no cambia nada. En el móvil no se usa: allí
+ * habla y escucha el puente nativo.
  */
-export function prepararVozDelServidor(): Promise<boolean> {
-  if (puente() !== null || typeof Audio === 'undefined') return Promise.resolve(false);
+export function prepararVozDelServidor(): Promise<EstadoVozDelServidor> {
+  if (puente() !== null || typeof Audio === 'undefined') return Promise.resolve(SIN_VOZ_DEL_SERVIDOR);
+  let consultado = false;
   preparando ??= (async () => {
     try {
       const respuesta = await fetch('/api/voz/estado', { headers: cabecerasConSesion() });
-      const estado = respuesta.ok ? ((await respuesta.json()) as { elevenlabs?: boolean }) : null;
-      if (!estado?.elevenlabs) return false;
+      const estado = respuesta.ok
+        ? ((await respuesta.json()) as { elevenlabs?: boolean; transcripcion?: boolean })
+        : null;
+      consultado = estado !== null;
+      transcripcionDelServidor = estado?.transcripcion === true;
+      if (!estado?.elevenlabs) return { voz: false, transcripcion: transcripcionDelServidor };
       vozDelServidor = crearVozDelServidor({
         pedirAudio: async (texto, senal) => {
           const audio = await fetch('/api/voz/sintetizar', {
@@ -628,15 +649,27 @@ export function prepararVozDelServidor(): Promise<boolean> {
         crearUrl: (audio) => URL.createObjectURL(audio),
         liberarUrl: (url) => URL.revokeObjectURL(url),
       });
-      return true;
+      return { voz: true, transcripcion: transcripcionDelServidor };
     } catch {
-      return false;
+      return SIN_VOZ_DEL_SERVIDOR;
     } finally {
-      // Si no se pudo (por ejemplo, sin sesión todavía), se puede volver a probar.
-      if (!vozDelServidor) preparando = null;
+      // Si no se pudo preguntar (por ejemplo, sin sesión todavía), se puede volver a probar.
+      if (!consultado) preparando = null;
     }
   })();
   return preparando;
+}
+
+/** Manda la grabación a `POST /api/voz/transcribir` y devuelve el texto. */
+async function transcribirEnElServidor(audio: Blob): Promise<string> {
+  const respuesta = await fetch('/api/voz/transcribir', {
+    method: 'POST',
+    headers: { ...cabecerasConSesion(), 'Content-Type': audio.type || 'audio/webm' },
+    body: audio,
+  });
+  if (!respuesta.ok) throw new Error('No se pudo transcribir la voz. Puedes escribir la orden.');
+  const datos = (await respuesta.json()) as { texto?: unknown };
+  return typeof datos.texto === 'string' ? datos.texto : '';
 }
 
 /** Si `hablar` está usando la voz de ElevenLabs (para mencionarla, como pide su plan gratuito). */

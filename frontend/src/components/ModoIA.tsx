@@ -170,10 +170,15 @@ export function ModoIA({
   const [uso, setUso] = useState<{ hoy: number; limite: number | null } | null>(null);
   // Si habla con la voz de ElevenLabs: su plan gratuito pide mencionarla.
   const [vozElevenLabs, setVozElevenLabs] = useState(false);
+  const [, setTranscripcionDelServidor] = useState(false);
   useEffect(() => {
     let vigente = true;
-    void prepararVozDelServidor().then((activa) => {
-      if (vigente) setVozElevenLabs(activa);
+    void prepararVozDelServidor().then((estado) => {
+      if (!vigente) return;
+      setVozElevenLabs(estado.voz);
+      // Con transcripción del servidor, Firefox gana micrófono: hay que volver
+      // a pintar para que el botón deje de estar deshabilitado.
+      setTranscripcionDelServidor(estado.transcripcion);
     });
     return () => {
       vigente = false;
@@ -224,6 +229,10 @@ export function ModoIA({
     return () => {
       montadoRef.current = false;
       abortarRef.current?.abort();
+      // El micrófono no sigue abierto con el panel cerrado.
+      const dictado = dictadoRef.current;
+      if (dictado?.cancelar) dictado.cancelar();
+      else dictado?.detener();
     };
   }, []);
   const [cargando, setCargando] = useState(true);
@@ -640,6 +649,8 @@ export function ModoIA({
       puntuar: puntuarPorVocabulario,
       onParcial: (parcial) => setTexto(parcial),
       onFinal: (final) => {
+        // Lo que llegue con el panel ya cerrado no se manda.
+        if (!montadoRef.current) return;
         setTexto(final);
         void enviar(final, true);
       },

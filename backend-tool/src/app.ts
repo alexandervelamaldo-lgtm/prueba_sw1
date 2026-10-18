@@ -10,6 +10,7 @@ import { FileConversationStore, type ConversationStore } from './storage/convers
 import { FileUsoIAStore, type UsoIAStore } from './storage/uso-ia.js';
 import { CupoIA } from './ai/cupo-ia.js';
 import { crearVozElevenLabs } from './ai/voz-elevenlabs.js';
+import { crearTranscriptorGroq } from './ai/transcripcion-groq.js';
 import { vozRouter } from './api/voz.js';
 import { crearResumidor } from './ai/memoria-resumida.js';
 import { FileVersionStore, type VersionStore } from './storage/versiones.js';
@@ -243,7 +244,13 @@ export function createApp(deps: AppDependencies): BuiltApp {
         ...(config.elevenLabsModelo ? { modelo: config.elevenLabsModelo } : {}),
       })
     : null;
-  app.use('/api/voz', requireAuth(identity), limiteDeTasa(LIMITE_VOZ), vozRouter(voz));
+  const transcriptor = config.groqApiKey
+    ? crearTranscriptorGroq({
+        apiKey: config.groqApiKey,
+        ...(config.groqModeloTranscripcion ? { modelo: config.groqModeloTranscripcion } : {}),
+      })
+    : null;
+  app.use('/api/voz', requireAuth(identity), limiteDeTasa(LIMITE_VOZ), vozRouter({ voz, transcriptor }));
 
   // La guía no cuelga de ningún proyecto porque no habla de ninguno: habla de
   // la herramienta, y la pregunta «¿por dónde empiezo?» se hace justamente antes

@@ -2,6 +2,7 @@ import express from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { ErrorDeVoz, type SintetizadorDeVoz } from '../ai/voz-elevenlabs.js';
+import type { TranscriptorDeVoz } from '../ai/transcripcion-groq.js';
 import { errorHandler } from './http.js';
 import { vozRouter } from './voz.js';
 
@@ -10,7 +11,12 @@ import { vozRouter } from './voz.js';
  * `app.ts` al montarlas; aquí se prueba lo que deciden ellas: si hay voz, qué
  * texto aceptan y cómo avisan al navegador de que use su propia voz.
  */
-function app(voz: SintetizadorDeVoz | null, maximoDiario?: number) {
+function app(
+  voz: SintetizadorDeVoz | null,
+  maximoDiario?: number,
+  transcriptor: TranscriptorDeVoz | null = null,
+  maximoTranscripciones?: number,
+) {
   const aplicacion = express();
   aplicacion.use(express.json());
   // Lo que pone `requireAuth`: el tope diario es por usuario.
@@ -18,7 +24,15 @@ function app(voz: SintetizadorDeVoz | null, maximoDiario?: number) {
     (request as unknown as { user: { id: string } }).user = { id: String(request.headers['x-usuario'] ?? 'ana') };
     next();
   });
-  aplicacion.use('/api/voz', vozRouter(voz, maximoDiario));
+  aplicacion.use(
+    '/api/voz',
+    vozRouter({
+      voz,
+      transcriptor,
+      ...(maximoDiario !== undefined ? { maximoCaracteresDiarios: maximoDiario } : {}),
+      ...(maximoTranscripciones !== undefined ? { maximoTranscripcionesDiarias: maximoTranscripciones } : {}),
+    }),
+  );
   aplicacion.use(errorHandler);
   return aplicacion;
 }
@@ -29,9 +43,11 @@ const vozFalsa = (resultado: () => Promise<{ datos: ArrayBuffer; tipo: string }>
 
 describe('vozRouter', () => {
   it('estado dice si hay voz de ElevenLabs', async () => {
-    expect((await request(app(null)).get('/api/voz/estado')).body).toEqual({ elevenlabs: false });
+    expect((await request(app(null)).get('/api/voz/estado')).body).toEqual({ elevenlabs: false, transcripcion: false });
     const conVoz = app(vozFalsa(async () => ({ datos: new ArrayBuffer(1), tipo: 'audio/mpeg' })));
-    expect((await request(conVoz).get('/api/voz/estado')).body).toEqual({ elevenlabs: true });
+    expect((await request(conVoz).get('/api/voz/estado')).body).toEqual({ elevenlabs: true, transcripcion: false });
+    const conTranscripcion = app(null, undefined, { transcribir: async () => 'hola' });
+    expect((await request(conTranscripcion).get('/api/voz/estado')).body).toEqual({ elevenlabs: false, transcripcion: true });
   });
 
   it('sintetizar devuelve el audio tal cual', async () => {
@@ -87,5 +103,53 @@ describe('tope diario de caracteres por usuario', () => {
     expect([primera.status, segunda.status, deBeto.status]).toEqual([200, 503, 200]);
     expect(segunda.body).toMatchObject({ code: 'voz_no_disponible' });
     expect(llamadas).toBe(2);
+  });
+});
+
+describe('transcribir', () => {
+  const enviarAudio = (aplicacion: express.Express, usuario = 'ana', bytes = Buffer.from('audio')) =>
+    request(aplicacion).post('/api/voz/transcribir').set('x-usuario', usuario).set('content-type', 'audio/webm').send(bytes);
+
+  it('recibe el audio crudo y devuelve el texto', async () => {
+    const recibidos: { tamano: number; tipo: string }[] = [];
+    const aplicacion = app(null, undefined, {
+      transcribir: async (audio, tipo) => {
+        recibidos.push({ tamano: audio.length, tipo });
+        return 'crea la clase Producto';
+      },
+    });
+
+    const respuesta = await enviarAudio(aplicacion);
+
+    expect(respuesta.status).toBe(200);
+    expect(respuesta.body).toEqual({ texto: 'crea la clase Producto' });
+    expect(recibidos).toEqual([{ tamano: 5, tipo: 'audio/webm' }]);
+  });
+
+  it('sin transcripción configurada, sin audio, o si el proveedor falla, avisa con su código', async () => {
+    const sinServicio = await enviarAudio(app(null));
+    const sinAudio = await request(app(null, undefined, { transcribir: async () => 'x' }))
+      .post('/api/voz/transcribir')
+      .set('content-type', 'audio/webm')
+      .send(Buffer.alloc(0));
+    const falla = await enviarAudio(app(null, undefined, { transcribir: async () => { throw new ErrorDeVoz('caído', 500); } }));
+
+    expect(sinServicio.status).toBe(503);
+    expect(sinAudio.status).toBe(400);
+    expect(falla.status).toBe(503);
+    expect(falla.body).toMatchObject({ code: 'transcripcion_no_disponible' });
+  });
+
+  it('tope diario de transcripciones por usuario', async () => {
+    const aplicacion = app(null, undefined, { transcribir: async () => 'hola' }, 2);
+
+    const estados = [
+      (await enviarAudio(aplicacion)).status,
+      (await enviarAudio(aplicacion)).status,
+      (await enviarAudio(aplicacion)).status,
+      (await enviarAudio(aplicacion, 'beto')).status,
+    ];
+
+    expect(estados).toEqual([200, 200, 503, 200]);
   });
 });

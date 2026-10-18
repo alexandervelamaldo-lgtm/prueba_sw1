@@ -206,3 +206,13 @@ describe('ELEVENLABS_*', () => {
     expect([config.elevenLabsApiKey, config.elevenLabsVoiceId, config.elevenLabsModelo]).toEqual(['k', 'v', 'm']);
   });
 });
+
+describe('GROQ_*', () => {
+  const base = { SESSION_SECRET: 'secreto' };
+
+  it('sin clave no hay transcripción del servidor; con ella, lee la clave y el modelo', () => {
+    expect(loadConfig(base).groqApiKey).toBeUndefined();
+    const config = loadConfig({ ...base, GROQ_API_KEY: ' g ', GROQ_TRANSCRIPTION_MODEL: 'whisper-large-v3' });
+    expect([config.groqApiKey, config.groqModeloTranscripcion]).toEqual(['g', 'whisper-large-v3']);
+  });
+});

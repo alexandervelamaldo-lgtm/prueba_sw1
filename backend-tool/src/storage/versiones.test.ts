@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FileVersionStore } from './versiones.js';
 
 /**
@@ -59,6 +59,23 @@ describe('crear y listar', () => {
 
     const listado = await almacen.listar(P);
     expect(listado.map((v) => v.mensaje)).toEqual(['uno', 'dos', 'tres']);
+  });
+});
+
+describe('versiones creadas en el mismo instante', () => {
+  it('salen en el orden en que se crearon, no al azar', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-18T12:00:00.000Z'));
+    try {
+      for (const mensaje of ['uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis']) {
+        await almacen.crear({ proyectoId: P, estado: estadoDePrueba(mensaje), mensaje, autorId: U });
+      }
+
+      const listado = await almacen.listar(P);
+      expect(listado.map((v) => v.mensaje)).toEqual(['uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

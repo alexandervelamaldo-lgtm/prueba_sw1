@@ -64,9 +64,10 @@ export interface ConversationStore {
    * Añade un comentario de la IA que nadie ha pedido al hilo de `usuarioId`:
    * un único mensaje de rol `assistant`, sin el turno de usuario que
    * `appendTurn` siempre añade junto a él. Lo usa `ai/vigilancia.ts` cuando
-   * decide que el diagrama merece un comentario espontáneo.
+   * decide que el diagrama merece un comentario espontáneo. Devuelve, como
+   * `appendTurn`, los mensajes del hilo que salieron de la ventana.
    */
-  appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void>;
+  appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<ChatMessage[]>;
   /** El resumen de lo que ya salió de la ventana de este hilo, o `null`. */
   getResumen(proyectoId: string, usuarioId: string): Promise<string | null>;
   setResumen(proyectoId: string, usuarioId: string, resumen: string): Promise<void>;
@@ -234,7 +235,7 @@ export class FileConversationStore implements ConversationStore {
     return podados;
   }
 
-  async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void> {
+  async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<ChatMessage[]> {
     const conversacion = await this.cargar(proyectoId);
     conversacion.mensajes.push({
       role: 'assistant',
@@ -245,8 +246,9 @@ export class FileConversationStore implements ConversationStore {
       hiloDe: usuarioId,
     });
 
-    this.recortar(conversacion, usuarioId);
+    const podados = this.recortar(conversacion, usuarioId);
     this.persistir(proyectoId, conversacion);
+    return podados;
   }
 
   async getResumen(proyectoId: string, usuarioId: string): Promise<string | null> {

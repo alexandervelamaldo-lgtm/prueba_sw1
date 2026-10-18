@@ -3,6 +3,7 @@ import type { AssistantEngine } from './assistant.js';
 import type { ConversationStore } from '../storage/conversaciones.js';
 import type { Room } from '../collab/rooms.js';
 import type { CupoDeIA } from './cupo-ia.js';
+import type { Resumidor } from './memoria-resumida.js';
 
 /**
  * Hace que el Modo IA hable sin que nadie le haya preguntado nada.
@@ -73,6 +74,8 @@ export class VigilanteDiagrama {
     private readonly enfriamientoMs: number = ENFRIAMIENTO_MS,
     /** El cupo diario de la IA: el comentario cuenta para quien hizo el cambio. */
     private readonly cupo?: CupoDeIA,
+    /** Resume lo que el comentario empuje fuera de la ventana del hilo. */
+    private readonly resumidor?: Resumidor,
   ) {}
 
   /**
@@ -136,7 +139,8 @@ export class VigilanteDiagrama {
       if (!comentario) return;
 
       this.ultimoComentario.set(proyectoId, ahora);
-      await this.conversations.appendComentario(proyectoId, autor, comentario);
+      const salen = await this.conversations.appendComentario(proyectoId, autor, comentario);
+      this.resumidor?.resumir(proyectoId, autor, salen);
     } catch (error) {
       // Un comentario espontáneo que falla no es una avería del proyecto: es
       // la IA quedándose callada, que es justo lo que pasa cuando no tiene

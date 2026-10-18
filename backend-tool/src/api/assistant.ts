@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { describeOperation, formatearEventoSse, leerHistorial, readDiagram, type EventoAsistente } from '@app/shared';
 import {
   peticionDeRevision,
-  resumenLocal,
   resumirCambiosRecientes,
   type AssistantEngine,
   type TurnoConAutor,
@@ -14,6 +13,7 @@ import type { RoomManager } from '../collab/rooms.js';
 import { MAXIMO_TURNOS, type ChatMessage, type ConversationStore } from '../storage/conversaciones.js';
 import { diaDeHoy, type UsoIAStore } from '../storage/uso-ia.js';
 import type { CupoDeIA, ReservaIA } from '../ai/cupo-ia.js';
+import type { Resumidor } from '../ai/memoria-resumida.js';
 import { HttpError, handler, parseBody, requireRole } from './http.js';
 
 /**
@@ -77,12 +77,14 @@ export function assistantRouter(deps: {
   usoIA: UsoIAStore;
   /** El mismo cupo que usa la vigilancia: las reservas en curso se comparten. */
   cupo: CupoDeIA;
+  /** El mismo resumidor que usa la vigilancia: la fila por hilo se comparte. */
+  resumidor: Resumidor;
   /** Tokens por usuario y día; sin valor no hay límite (`LLM_LIMITE_DIARIO_TOKENS`). */
   limiteDiarioTokens?: number;
 }): Router {
   const { store, identity, rooms, assistant, conversations } = deps;
   const router = Router();
-  const { usoIA, cupo, limiteDiarioTokens } = deps;
+  const { usoIA, cupo, resumidor, limiteDiarioTokens } = deps;
 
   /**
    * Control de costos: todo pedido al modelo en nombre de alguien pasa por su
@@ -108,20 +110,9 @@ export function assistantRouter(deps: {
   };
 
   /**
-   * Resúmenes pendientes, uno detrás de otro por hilo `(proyecto, usuario)`:
-   * cada uno lee el resumen que dejó el anterior. Sin la fila, dos órdenes casi
-   * a la vez del mismo usuario (dos pestañas) partirían del mismo resumen y el
-   * segundo en terminar borraría lo que añadió el primero. La fila vive en este
-   * proceso, que es el único que sirve la API.
-   */
-  const colaDeResumenes = new Map<string, Promise<void>>();
-
-  /**
    * Guarda un turno y, si eso empuja mensajes fuera de la ventana, los resume
-   * antes de perderlos (memoria resumida). Se resumen exactamente los que podó
-   * el almacén. El resumen se hace en segundo plano: quien preguntó no tiene
-   * por qué esperar una llamada más al modelo para ver su respuesta, y si falla
-   * solo se pierde el resumen de esos mensajes.
+   * antes de perderlos (`ai/memoria-resumida.ts`, en segundo plano). Se
+   * resumen exactamente los que podó el almacén.
    */
   const guardarTurno = async (
     proyectoId: string,
@@ -130,33 +121,9 @@ export function assistantRouter(deps: {
     respuesta: string,
   ): Promise<void> => {
     const salen = await conversations.appendTurn(proyectoId, usuarioId, texto, respuesta);
-    if (salen.length === 0) return;
-    const clave = `${proyectoId}\u0000${usuarioId}`;
-    const anterior = colaDeResumenes.get(clave) ?? Promise.resolve();
-    const siguiente = anterior.then(async () => {
-      try {
-        const previo = await conversations.getResumen(proyectoId, usuarioId);
-        // Sin cupo no se llama al modelo: el resumen local no se pierde.
-        const reserva = assistant.resumirConversacion ? await cupo.reservar(usuarioId) : null;
-        let nuevo: string;
-        try {
-          nuevo =
-            reserva && assistant.resumirConversacion
-              ? await assistant.resumirConversacion(previo, salen, reserva.registrar)
-              : resumenLocal(previo, salen);
-        } finally {
-          await reserva?.cerrar();
-        }
-        await conversations.setResumen(proyectoId, usuarioId, nuevo);
-      } catch (error) {
-        console.warn('No se pudo actualizar el resumen de la conversación:', (error as Error).message);
-      }
-    });
-    colaDeResumenes.set(clave, siguiente);
-    void siguiente.then(() => {
-      if (colaDeResumenes.get(clave) === siguiente) colaDeResumenes.delete(clave);
-    });
+    resumidor.resumir(proyectoId, usuarioId, salen);
   };
+
 
   router.post(
     '/:proyectoId/asistente',

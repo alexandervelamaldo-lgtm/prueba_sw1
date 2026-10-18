@@ -17,6 +17,7 @@ const eventos: EventoAsistente[] = [
     descripcion: 'Crear clase «Pedido»',
   },
   { tipo: 'senalar', clases: ['Pedido', 'Cliente'] },
+  { tipo: 'repasar' },
   { tipo: 'fin', motor: 'modelo-remoto (prueba)', confianza: 0.9 },
 ];
 

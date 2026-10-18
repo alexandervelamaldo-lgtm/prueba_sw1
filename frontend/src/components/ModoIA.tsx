@@ -8,12 +8,17 @@ import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
 import { crearCursorIA, nodoDeClase, prefiereMenosMovimiento, resaltarClase } from './cursor-ia';
 import { clasesPorNombre, crearEjecutorEnCola } from './ia-ejecucion';
 import { crearColaDeVoz } from './cola-voz';
-import { crearManejadorDeStream, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
+import { crearManejadorDeStream, debeRepasar, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
 import type { GrupoDeshacer } from '../hooks/deshacer-agrupado';
 
 /** Pausa entre dos pasos de la IA, para que se vea cada uno. */
 const PAUSA_ENTRE_PASOS_MS = 350;
 const CLAVE_AUTO_APLICAR = 'modo-ia:auto-aplicar';
+/** Lo que se le pide a la IA cuando quiso repasar lo hecho (`debeRepasar`). */
+const PETICION_DE_REPASO =
+  'Repasa los cambios que acabas de hacer con el diagrama actual: si falta algo de lo que te pedí o hay un error, corrígelo; si está bien, dilo en una frase. No pidas otro repaso.';
+/** Lo que se espera antes del repaso, para que el servidor ya tenga el diagrama aplicado. */
+const ESPERA_ANTES_DE_REPASAR_MS = 1200;
 
 /** Preferencia de este navegador; si no se puede leer, el valor por defecto (encendido). */
 function leerAutoAplicar(): boolean {
@@ -88,6 +93,8 @@ interface Turno {
   escribiendo?: boolean;
   /** Ya se publicó en el tablón del proyecto. */
   compartido?: boolean;
+  /** Lo pidió el propio Modo IA (un repaso), no la persona. */
+  automatico?: boolean;
 }
 
 let contadorTurno = 0;
@@ -256,7 +263,12 @@ export function ModoIA({
    * revisor local y propone arreglos, que nunca se aplican solos: son cambios
    * que nadie pidió, así que esperan su «Aplicar».
    */
-  const enviarUnaOrden = async (orden: string, porVoz: boolean, revision: boolean): Promise<void> => {
+  const enviarUnaOrden = async (
+    orden: string,
+    porVoz: boolean,
+    revision: boolean,
+    esRepaso = false,
+  ): Promise<void> => {
     const limpia = orden.trim();
     if (!limpia) return;
 
@@ -268,13 +280,14 @@ export function ModoIA({
       {
         id: idTurno(),
         role: 'user',
-        texto: limpia,
+        texto: esRepaso ? 'Repasando lo que acabo de hacer…' : limpia,
         autorId: usuario.id,
         autorNombre: usuario.nombre,
         creadoEn: null,
         propuesta: [],
         motor: null,
         tipo: 'respuesta',
+        automatico: esRepaso,
       },
       {
         id: idRespuesta,
@@ -398,6 +411,16 @@ export function ModoIA({
     const final = ultimo as EstadoRespuesta | null;
     if (final?.error) setError(final.error);
     else if (resultado.error) setError(`La IA se detuvo tras ${resultado.aplicadas} cambio(s): ${resultado.error}`);
+
+    // Un paso más, si la IA lo pidió: repasa con el diagrama ya actualizado.
+    if (final && !resultado.error && debeRepasar(final, esRepaso)) {
+      // La orden sigue en curso: el campo queda ocupado durante la espera, para
+      // que nadie escriba algo que `enviar` descartaría por estar ocupado.
+      setEjecutando(true);
+      await new Promise((resolve) => setTimeout(resolve, ESPERA_ANTES_DE_REPASAR_MS));
+      if (montadoRef.current) await enviarUnaOrden(PETICION_DE_REPASO, porVoz, false, true);
+      else setEjecutando(false);
+    }
   };
 
   /** Publica una respuesta de la IA en el tablón, con la pregunta que la originó. */
@@ -500,7 +523,11 @@ export function ModoIA({
           >
             {turno.role === 'user' && (
               <p className="modo-ia__autor">
-                {turno.autorId === usuario.id ? 'Usted' : turno.autorNombre ?? 'Alguien del equipo'}
+                {turno.automatico
+                  ? 'Repaso automático'
+                  : turno.autorId === usuario.id
+                    ? 'Usted'
+                    : (turno.autorNombre ?? 'Alguien del equipo')}
               </p>
             )}
             {turno.tipo === 'observacion' && (

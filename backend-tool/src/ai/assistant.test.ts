@@ -504,6 +504,23 @@ describe('LlmAssistant.interpretarEnStream contra un proveedor simulado', () => 
     await expect(resultado).rejects.toThrow(/dejó de responder|no respondió/);
   });
 
+  it('la acción de repasar lo hecho llega como evento repasar', async () => {
+    const json = JSON.stringify({
+      actions: [
+        { _type: 'operation', operation: { op: 'addClass', name: 'Pedido', kind: 'class' } },
+        { _type: 'review' },
+      ],
+    });
+    bloquesSse = [`data: ${JSON.stringify({ choices: [{ delta: { content: json } }] })}\n\n`, 'data: [DONE]\n\n'];
+
+    const eventos: EventoAsistente[] = [];
+    for await (const evento of motor().interpretarEnStream('crea Pedido', diagrama)) eventos.push(evento);
+
+    expect(eventos.map((e) => e.tipo)).toEqual(['operacion', 'repasar', 'fin']);
+    const sistema = (recibidos[0]?.messages as { role: string; content: string }[])[0];
+    expect(sistema?.content).toContain('"review"');
+  });
+
   it('envía la acción de señalar clases como evento senalar, en su orden', async () => {
     const json = JSON.stringify({
       actions: [

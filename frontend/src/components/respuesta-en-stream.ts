@@ -33,6 +33,8 @@ export interface EstadoRespuesta {
   motor: string | null;
   terminado: boolean;
   error: string | null;
+  /** La IA pidió repasar lo hecho; ver `debeRepasar`. */
+  repasar: boolean;
 }
 
 interface Ejecutor {
@@ -60,6 +62,7 @@ export function crearManejadorDeStream(opciones: {
   let motor: string | null = null;
   let terminado = false;
   let error: string | null = null;
+  let repasar = false;
   let retener = !opciones.autoAplicar || opciones.soloLectura;
   let huboOperaciones = false;
   // Cuántas operaciones se mandaron al ejecutor y cuántas ya terminó, y los
@@ -91,6 +94,7 @@ export function crearManejadorDeStream(opciones: {
       motor,
       terminado,
       error,
+      repasar,
     });
   }
 
@@ -121,6 +125,9 @@ export function crearManejadorDeStream(opciones: {
         break;
       case 'senalar':
         opciones.senalar?.(evento.clases);
+        break;
+      case 'repasar':
+        repasar = true;
         break;
       case 'fin':
         motor = evento.motor;
@@ -175,4 +182,16 @@ export function textoParaCompartir(turno: { pregunta: string; respuesta: string;
   if (turno.aplicadas.length > 0) lineas.push(`Aplicó: ${turno.aplicadas.join('; ')}`);
   const texto = lineas.join('\n');
   return texto.length <= MAXIMO_TABLON ? texto : `${texto.slice(0, MAXIMO_TABLON - 1)}…`;
+}
+
+/**
+ * Si, al terminar una respuesta, el Modo IA tiene que pedirle a la IA que
+ * repase lo que hizo. Solo si la IA lo pidió, aplicó algo y no falló, y nunca
+ * para un repaso: un solo paso más por orden, para no encadenar llamadas.
+ */
+export function debeRepasar(
+  estado: Pick<EstadoRespuesta, 'repasar' | 'aplicadas' | 'error'>,
+  esRepaso: boolean,
+): boolean {
+  return !esRepaso && estado.repasar && estado.aplicadas.length > 0 && !estado.error;
 }

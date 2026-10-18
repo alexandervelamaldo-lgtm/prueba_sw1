@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createClass, createDiagram, withClass, type EventoAsistente, type Operation } from '@app/shared';
-import { crearManejadorDeStream, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
+import { crearManejadorDeStream, debeRepasar, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
 
 /**
  * Qué hace el Modo IA con cada evento del stream: qué texto pinta, qué dice en
@@ -236,5 +236,44 @@ describe('textoParaCompartir', () => {
     const texto = textoParaCompartir({ pregunta: 'x', respuesta: 'a'.repeat(20_000), aplicadas: [] });
     expect(texto.length).toBeLessThanOrEqual(10_000);
     expect(texto.endsWith('…')).toBe(true);
+  });
+});
+
+describe('repasar lo hecho', () => {
+  it('el evento repasar marca la respuesta para un repaso', () => {
+    const { enviar, ultimo } = preparar();
+
+    enviar(op(crearPedido), { tipo: 'repasar' }, { tipo: 'fin', motor: 'm', confianza: 1 });
+
+    expect(ultimo().repasar).toBe(true);
+  });
+
+  it('una respuesta normal no pide repaso', () => {
+    const { enviar, ultimo } = preparar();
+
+    enviar({ tipo: 'mensaje', texto: 'Hola.' }, { tipo: 'fin', motor: 'm', confianza: 1 });
+
+    expect(ultimo().repasar).toBe(false);
+  });
+});
+
+describe('debeRepasar', () => {
+  const base = { repasar: true, aplicadas: ['Crear clase «Pedido»'], error: null };
+
+  it('repasa si la IA lo pidió y aplicó algo', () => {
+    expect(debeRepasar(base, false)).toBe(true);
+  });
+
+  it('nunca repasa un repaso: un solo paso más por orden', () => {
+    expect(debeRepasar(base, true)).toBe(false);
+  });
+
+  it('no repasa si no aplicó nada o si hubo un error', () => {
+    expect(debeRepasar({ ...base, aplicadas: [] }, false)).toBe(false);
+    expect(debeRepasar({ ...base, error: 'falló' }, false)).toBe(false);
+  });
+
+  it('no repasa si la IA no lo pidió', () => {
+    expect(debeRepasar({ ...base, repasar: false }, false)).toBe(false);
   });
 });

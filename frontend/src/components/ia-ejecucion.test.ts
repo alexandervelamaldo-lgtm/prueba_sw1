@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createClass, createDiagram, withClass, type ClassDiagram, type Operation } from '@app/shared';
 import {
+  crearEjecutorEnCola,
   ejecutarPropuesta,
   planificarEjecucion,
   selectorDeBoton,
@@ -246,5 +247,57 @@ describe('ejecutarPropuesta, cuando algo se interrumpe', () => {
     await expect(ejecutarPropuesta([crearPedido], deps)).rejects.toThrow('se rompió');
     expect(registro).toContain('ocultar');
     expect(registro.at(-1)).toBe('cerrar-grupo');
+  });
+});
+
+describe('crearEjecutorEnCola (operaciones que llegan por el stream)', () => {
+  it('aplica en orden lo que se va encolando, aunque llegue mientras aplica lo anterior', async () => {
+    const { deps, registro } = dobles({ conCursor: false });
+    const aplicadas: string[] = [];
+    const ejecutor = crearEjecutorEnCola(deps, { alAplicar: (operacion) => aplicadas.push(operacion.op) });
+
+    ejecutor.encolar(crearPedido);
+    await Promise.resolve();
+    ejecutor.encolar(atributoEmail);
+    const resultado = await ejecutor.terminar();
+
+    expect(resultado).toEqual({ aplicadas: 2, error: null });
+    expect(aplicadas).toEqual(['addClass', 'addAttribute']);
+    expect(registro.filter((r) => r.startsWith('aplicar'))).toEqual([
+      'aplicar:addClass:asistente',
+      'aplicar:addAttribute:asistente',
+    ]);
+  });
+
+  it('un solo grupo de deshacer para todo lo encolado, que se cierra al terminar', async () => {
+    const { deps, registro } = dobles({ conCursor: false });
+    const ejecutor = crearEjecutorEnCola(deps);
+
+    ejecutor.encolar(crearPedido);
+    ejecutor.encolar(atributoEmail);
+    await ejecutor.terminar();
+
+    expect(registro.filter((r) => r === 'agrupar')).toHaveLength(1);
+    expect(registro.at(-1)).toBe('cerrar-grupo');
+  });
+
+  it('sin nada encolado no abre grupo ni crea cursor', async () => {
+    const { deps, registro } = dobles();
+    const ejecutor = crearEjecutorEnCola(deps);
+
+    expect(await ejecutor.terminar()).toEqual({ aplicadas: 0, error: null });
+    expect(registro).toEqual([]);
+  });
+
+  it('tras un fallo ignora lo que se encole después', async () => {
+    const { deps, registro } = dobles({ conCursor: false, fallaEn: 1 });
+    const ejecutor = crearEjecutorEnCola(deps);
+
+    ejecutor.encolar(crearPedido);
+    ejecutor.encolar(atributoEmail);
+    const resultado = await ejecutor.terminar();
+
+    expect(resultado).toEqual({ aplicadas: 0, error: 'no se pudo' });
+    expect(registro.filter((r) => r.startsWith('aplicar'))).toHaveLength(1);
   });
 });

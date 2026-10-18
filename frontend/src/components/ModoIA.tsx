@@ -5,9 +5,10 @@ import { puntuarPorVocabulario } from '../services/dictado';
 import { dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDictado } from '../services/voz';
 import { Icono } from './iconos';
 import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
-import { textoDeRespuesta } from './asistente-voz';
 import { crearCursorIA, nodoDeClase, prefiereMenosMovimiento, resaltarClase } from './cursor-ia';
-import { ejecutarPropuesta, planificarEjecucion } from './ia-ejecucion';
+import { crearEjecutorEnCola } from './ia-ejecucion';
+import { crearColaDeVoz } from './cola-voz';
+import { crearManejadorDeStream, type EstadoRespuesta } from './respuesta-en-stream';
 import type { GrupoDeshacer } from '../hooks/deshacer-agrupado';
 
 /** Pausa entre dos pasos de la IA, para que se vea cada uno. */
@@ -83,6 +84,8 @@ interface Turno {
   tipo: 'respuesta' | 'observacion';
   /** Lo que la IA ya aplicó sola en este turno, descrito; ver `ia-ejecucion.ts`. */
   aplicadas?: string[];
+  /** La IA todavía está escribiendo esta respuesta. */
+  escribiendo?: boolean;
 }
 
 let contadorTurno = 0;
@@ -126,11 +129,17 @@ export function ModoIA({
   // Al cerrar el panel, la IA deja de aplicar en el paso siguiente.
   const montadoRef = useRef(true);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  // La respuesta en curso, para cortarla si se cierra el panel.
+  const abortarRef = useRef<AbortController | null>(null);
+  // El diagrama más reciente: una respuesta en streaming dura varios renders.
+  const diagramaRef = useRef(diagrama);
+  diagramaRef.current = diagrama;
 
   useEffect(() => {
     montadoRef.current = true;
     return () => {
       montadoRef.current = false;
+      abortarRef.current?.abort();
     };
   }, []);
   const [cargando, setCargando] = useState(true);
@@ -246,6 +255,7 @@ export function ModoIA({
 
     setError(null);
     setTexto('');
+    const idRespuesta = idTurno();
     setTurnos((previos) => [
       ...previos,
       {
@@ -259,105 +269,122 @@ export function ModoIA({
         motor: null,
         tipo: 'respuesta',
       },
-    ]);
-    setEnviando(true);
-
-    let motor: string | null = null;
-    let propuesta: Propuesta[] = [];
-    let explicacion = '';
-
-    try {
-      const respuesta = await api.interpretar(proyecto.id, limpia);
-      motor = respuesta.motor;
-      propuesta = respuesta.propuesta;
-      explicacion = textoDeRespuesta(respuesta);
-    } catch (fallo) {
-      // Mismo criterio que la burbuja flotante: sin servidor se usa la
-      // gramática local, y se dice de dónde viene la respuesta. Este turno no
-      // queda en el historial del servidor —nunca llegó a verlo—, así que al
-      // reabrir la conversación no aparecerá.
-      if (fallo instanceof ApiError && (fallo.esDeRed || fallo.status >= 500)) {
-        const local = interpretCommand(limpia);
-        motor = 'gramática local (sin conexión)';
-        propuesta = local.operations.map((operacion) => ({
-          operacion,
-          descripcion: describeOperation(operacion),
-        }));
-        explicacion =
-          local.operations.length === 0
-            ? (local.clarification ??
-                'Sin conexión solo entiendo órdenes sencillas: «crea la clase Cliente», «añade el atributo nombre de tipo String a Cliente».')
-            : local.explanation;
-      } else {
-        explicacion = fallo instanceof Error ? fallo.message : 'No se pudo interpretar la orden';
-        setError(explicacion);
-        setEnviando(false);
-        return;
-      }
-    }
-
-    setEnviando(false);
-    const plan = planificarEjecucion(diagrama, propuesta, { autoAplicar, soloLectura });
-    const idRespuesta = idTurno();
-    setTurnos((previos) => [
-      ...previos,
       {
         id: idRespuesta,
         role: 'assistant',
-        texto: explicacion,
+        texto: '',
         autorId: null,
         autorNombre: null,
         creadoEn: null,
-        // Lo que la IA aplica sola no se ofrece además con «Aplicar».
-        propuesta: plan === 'automatico' ? [] : propuesta,
-        motor,
+        propuesta: [],
+        motor: null,
         tipo: 'respuesta',
+        aplicadas: [],
+        escribiendo: true,
       },
     ]);
-    // Se habla la respuesta solo si la orden llegó por voz: quien escribió no
-    // necesita que el ordenador le lea lo que ya tiene delante.
-    if (porVoz) hablar(explicacion);
-    if (plan === 'automatico') await ejecutarSola(idRespuesta, propuesta, motor);
-  };
-
-  /**
-   * La IA aplica sola una propuesta que no borra nada, paso a paso y con el
-   * cursor fantasma; todo queda como un solo paso de deshacer.
-   */
-  const ejecutarSola = async (idRespuesta: string, propuesta: Propuesta[], motor: string | null) => {
+    setEnviando(true);
     setEjecutando(true);
-    let aplicadas = 0;
-    let fallo: string | null = null;
+
+    // La respuesta llega por partes (`api.interpretarEnStream`): el texto se
+    // pinta mientras la IA escribe, cada mensaje se dice en cuanto está
+    // completo (solo si la orden fue por voz) y cada operación que no borra
+    // nada se aplica en cuanto llega, con el cursor. Lo retenido se ofrece con
+    // «Aplicar» solo al final, para no confirmar algo a medio escribir.
+    let ultimo: EstadoRespuesta | null = null;
+    const manejador = crearManejadorDeStream({
+      diagrama: () => diagramaRef.current,
+      autoAplicar,
+      soloLectura,
+      crearEjecutor: (avisos) =>
+        crearEjecutorEnCola(
+          {
+            aplicar,
+            contexto: { origen: 'asistente', propuestoPor: 'Modo IA' },
+            centrar: centrar ?? (() => {}),
+            resaltar: resaltarClase,
+            buscar: (selector) => document.querySelector(selector),
+            nodo: nodoDeClase,
+            cursor: prefiereMenosMovimiento() ? null : crearCursorIA(panelRef.current),
+            pausaMs: PAUSA_ENTRE_PASOS_MS,
+            esperar: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+            ...(agruparDeshacer ? { agrupar: agruparDeshacer } : {}),
+            cancelado: () => !montadoRef.current,
+          },
+          avisos,
+        ),
+      voz: porVoz ? crearColaDeVoz(hablar) : null,
+      alCambiar: (estado) => {
+        ultimo = estado;
+        if (!montadoRef.current) return;
+        setTurnos((previos) =>
+          previos.map((t) =>
+            t.id === idRespuesta
+              ? {
+                  ...t,
+                  texto: estado.texto,
+                  propuesta: estado.terminado ? estado.propuesta : [],
+                  aplicadas: estado.aplicadas,
+                  motor: estado.motor,
+                  escribiendo: !estado.terminado,
+                }
+              : t,
+          ),
+        );
+      },
+    });
+
+    const controlador = new AbortController();
+    abortarRef.current = controlador;
     try {
-      const resultado = await ejecutarPropuesta(propuesta.map((p) => p.operacion), {
-        aplicar,
-        contexto: { origen: 'asistente', ...(motor ? { propuestoPor: motor } : {}) },
-        centrar: centrar ?? (() => {}),
-        resaltar: resaltarClase,
-        buscar: (selector) => document.querySelector(selector),
-        nodo: nodoDeClase,
-        cursor: prefiereMenosMovimiento() ? null : crearCursorIA(panelRef.current),
-        pausaMs: PAUSA_ENTRE_PASOS_MS,
-        esperar: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-        ...(agruparDeshacer ? { agrupar: agruparDeshacer } : {}),
-        cancelado: () => !montadoRef.current,
-      });
-      aplicadas = resultado.aplicadas;
-      fallo = resultado.error;
-    } catch (error) {
-      fallo = error instanceof Error ? error.message : 'error inesperado';
+      await api.interpretarEnStream(proyecto.id, limpia, manejador.alEvento, controlador.signal);
+      if (!(ultimo as EstadoRespuesta | null)?.terminado) {
+        manejador.alEvento({ tipo: 'error', mensaje: 'La respuesta se cortó antes de terminar.' });
+      }
+    } catch (fallo) {
+      if (controlador.signal.aborted) {
+        // Se cerró el panel: no hay a quién contarle nada.
+      } else if (ultimo === null && fallo instanceof ApiError && (fallo.esDeRed || fallo.status >= 500)) {
+        // Mismo criterio que la burbuja flotante: sin servidor se usa la
+        // gramática local, y se dice de dónde viene la respuesta. Este turno no
+        // queda en el historial del servidor —nunca llegó a verlo—, así que al
+        // reabrir la conversación no aparecerá.
+        const local = interpretCommand(limpia);
+        manejador.alEvento({
+          tipo: 'mensaje',
+          texto:
+            local.operations.length === 0
+              ? (local.clarification ??
+                  'Sin conexión solo entiendo órdenes sencillas: «crea la clase Cliente», «añade el atributo nombre de tipo String a Cliente».')
+              : local.explanation,
+        });
+        for (const operacion of local.operations) {
+          manejador.alEvento({ tipo: 'operacion', operacion, descripcion: describeOperation(operacion) });
+        }
+        manejador.alEvento({ tipo: 'fin', motor: 'gramática local (sin conexión)', confianza: local.confidence });
+      } else {
+        manejador.alEvento({
+          tipo: 'error',
+          mensaje: fallo instanceof Error ? fallo.message : 'No se pudo interpretar la orden',
+        });
+      }
+    } finally {
+      abortarRef.current = null;
+      setEnviando(false);
+    }
+
+    let resultado: { aplicadas: number; error: string | null } = { aplicadas: 0, error: null };
+    try {
+      resultado = await manejador.terminar();
+    } catch (fallo) {
+      resultado = { aplicadas: 0, error: fallo instanceof Error ? fallo.message : 'error inesperado' };
     } finally {
       setEjecutando(false);
     }
     if (!montadoRef.current) return;
-    setTurnos((previos) =>
-      previos.map((t) =>
-        t.id === idRespuesta
-          ? { ...t, aplicadas: propuesta.slice(0, aplicadas).map((p) => p.descripcion) }
-          : t,
-      ),
-    );
-    if (fallo) setError(`La IA se detuvo en el paso ${aplicadas + 1}: ${fallo}`);
+    const final = ultimo as EstadoRespuesta | null;
+    if (final?.error) setError(final.error);
+    else if (resultado.error) setError(`La IA se detuvo tras ${resultado.aplicadas} cambio(s): ${resultado.error}`);
   };
 
   const cambiarAutoAplicar = (valor: boolean): void => {
@@ -436,7 +463,11 @@ export function ModoIA({
                 <Icono nombre="revisar" /> Observación de la IA
               </p>
             )}
-            <p className="modo-ia__burbuja">{turno.texto}</p>
+            {/* Una respuesta que falló sin decir nada no deja una burbuja
+                vacía: el error ya se muestra debajo de la conversación. */}
+            {(turno.texto || turno.escribiendo) && (
+              <p className="modo-ia__burbuja">{turno.texto || '…'}</p>
+            )}
             {turno.aplicadas && turno.aplicadas.length > 0 && (
               <ul className="modo-ia__aplicadas" aria-label="Cambios que aplicó la IA">
                 {turno.aplicadas.map((descripcion, indice) => (

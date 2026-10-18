@@ -10,6 +10,7 @@ import type {
   RespuestaTablon,
   TablaExtraida,
 } from '@app/shared';
+import { crearLectorSse, type EventoAsistente } from '@app/shared';
 import { descargar, nombreDeFichero } from './descarga';
 
 /**
@@ -329,7 +330,52 @@ export const api = {
       body: JSON.stringify({ texto }),
     }),
 
-  /** Lo ya hablado con el asistente en este proyecto: un hilo compartido por todo el equipo (Modo IA). */
+  /**
+   * Como `interpretar`, pero la respuesta llega a trozos mientras el modelo
+   * escribe (Modo IA): cada evento completo se entrega a `alEvento` en cuanto
+   * llega. Ver `EventoAsistente` en `@app/shared` para el orden de eventos.
+   * Termina cuando el servidor cierra la respuesta; `senal` la corta antes.
+   */
+  interpretarEnStream: async (
+    id: string,
+    texto: string,
+    alEvento: (evento: EventoAsistente) => void,
+    senal?: AbortSignal,
+  ): Promise<void> => {
+    const cabeceras = new Headers({ Accept: 'text/event-stream', 'Content-Type': 'application/json' });
+    if (tokenActual) cabeceras.set('Authorization', `Bearer ${tokenActual}`);
+
+    let respuesta: Response;
+    try {
+      respuesta = await fetch(`/api/proyectos/${id}/asistente/stream`, {
+        method: 'POST',
+        headers: cabeceras,
+        body: JSON.stringify({ texto }),
+        ...(senal ? { signal: senal } : {}),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') throw error;
+      throw new ApiError(0, 'No hay conexión con el servidor');
+    }
+
+    if (!respuesta.ok || !respuesta.body) {
+      const detalle = (await respuesta.json().catch(() => null)) as { error?: string; code?: string } | null;
+      if (respuesta.status === 401 && tokenActual) alPerderLaSesion?.();
+      throw new ApiError(respuesta.status, detalle?.error ?? `Error ${respuesta.status}`, detalle?.code);
+    }
+
+    const lector = crearLectorSse(alEvento);
+    const decodificador = new TextDecoder();
+    const cuerpo = respuesta.body.getReader();
+    for (;;) {
+      const { done, value } = await cuerpo.read();
+      if (done) break;
+      lector.empujar(decodificador.decode(value, { stream: true }));
+    }
+    lector.empujar(decodificador.decode());
+  },
+
+  /** Lo ya hablado con el asistente en este proyecto: el hilo privado de quien pregunta (Modo IA). */
   obtenerHistorialAsistente: (id: string) =>
     pedir<{ turnos: TurnoAsistente[] }>(`/proyectos/${id}/asistente/historial`),
 

@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createDiagram, createClass, createAttribute } from '@app/shared';
+import { createDiagram, createClass, createAttribute, type EventoAsistente } from '@app/shared';
 import { GrammarAssistant, LlmAssistant, createAssistant, extractJson } from './assistant.js';
 import { OpenAiVisionEngine, createVisionEngine } from './vision.js';
 import { ErrorDeModelo } from './transporte.js';
@@ -21,6 +21,9 @@ let server: Server;
 let baseUrl: string;
 /** Lo que el proveedor falso responderá a la siguiente petición. */
 let responder: (body: unknown) => { status: number; payload: unknown };
+/** Los bloques SSE que responderá la siguiente petición, si la prueba lo necesita. */
+let bloquesSse: string[] | null;
+let dejarStreamAbierto: boolean;
 /** Los cuerpos que ha recibido, para comprobar qué se le manda. */
 let recibidos: Record<string, unknown>[];
 
@@ -43,6 +46,8 @@ function comoOpenAi(contenido: string, extra: Record<string, unknown> = {}) {
 
 beforeEach(async () => {
   recibidos = [];
+  bloquesSse = null;
+  dejarStreamAbierto = false;
   responder = () => ({ status: 200, payload: comoOpenAi('{"operations":[]}') });
 
   server = createServer((request, response) => {
@@ -51,6 +56,12 @@ beforeEach(async () => {
     request.on('end', () => {
       const parseado = cuerpo ? JSON.parse(cuerpo) : {};
       recibidos.push(parseado);
+      if (bloquesSse) {
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        for (const bloque of bloquesSse) response.write(bloque);
+        if (!dejarStreamAbierto) response.end();
+        return;
+      }
       const { status, payload } = responder(parseado);
       response.writeHead(status, { 'content-type': 'application/json' });
       response.end(typeof payload === 'string' ? payload : JSON.stringify(payload));
@@ -301,6 +312,177 @@ describe('LlmAssistant contra un proveedor simulado', () => {
 
     expect(await conCabecera).toBe('clave-de-prueba');
     expect(respuesta.operations).toHaveLength(0);
+  });
+});
+
+describe('LlmAssistant.interpretarEnStream contra un proveedor simulado', () => {
+  it('reconoce eventos OpenAI aunque los fragmentos corten claves y cadenas, y no envía think', async () => {
+    const json = JSON.stringify({
+      actions: [
+        { _type: 'message', text: 'Creo Pedido.' },
+        { _type: 'think', text: 'razonamiento privado' },
+        { _type: 'operation', operation: { op: 'addClass', name: 'Pedido', kind: 'class' } },
+        { _type: 'message', text: 'Listo.' },
+      ],
+      confidence: 0.8,
+    });
+    const cortes = [json.indexOf('_type') + 2, json.indexOf('Creo') + 2].sort((a, b) => a - b);
+    const trozos = [json.slice(0, cortes[0]), json.slice(cortes[0], cortes[1]), json.slice(cortes[1])];
+    bloquesSse = [
+      ...trozos.map((content) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`),
+      'data: [DONE]\n\n',
+    ];
+
+    const eventos: EventoAsistente[] = [];
+    for await (const evento of motor().interpretarEnStream('crea Pedido', diagrama)) eventos.push(evento);
+
+    expect(eventos.some((evento) => evento.tipo === 'mensaje-parcial' && evento.texto.length > 0)).toBe(true);
+    expect(eventos.filter((evento) => evento.tipo === 'mensaje').map((evento) => evento.texto)).toEqual([
+      'Creo Pedido.',
+      'Listo.',
+    ]);
+    expect(eventos.find((evento) => evento.tipo === 'operacion')).toMatchObject({
+      tipo: 'operacion',
+      operacion: { op: 'addClass', name: 'Pedido' },
+    });
+    expect(eventos.some((evento) => JSON.stringify(evento).includes('razonamiento privado'))).toBe(false);
+    expect(eventos.at(-1)).toEqual({ tipo: 'fin', motor: motor().name, confianza: 0.8 });
+    expect(recibidos[0]).toMatchObject({ stream: true, max_tokens: 4096 });
+  });
+
+  it('lee content_block_delta de Anthropic y mantiene el prefijo JSON abierto', async () => {
+    const jsonSinLlave = '"actions":[{"_type":"message","text":"Hola"}],"confidence":1}';
+    bloquesSse = [
+      ...[jsonSinLlave.slice(0, 18), jsonSinLlave.slice(18)].map((text) =>
+        `event: content_block_delta\ndata: ${JSON.stringify({
+          type: 'content_block_delta',
+          delta: { type: 'text_delta', text },
+        })}\n\n`,
+      ),
+      'event: message_stop\ndata: {}\n\n',
+    ];
+
+    const asistente = new LlmAssistant({ apiKey: 'clave', provider: 'anthropic', baseUrl, timeoutMs: 1000 });
+    const eventos: EventoAsistente[] = [];
+    for await (const evento of asistente.interpretarEnStream('hola', diagrama)) eventos.push(evento);
+
+    expect(eventos).toContainEqual({ tipo: 'mensaje', texto: 'Hola' });
+    expect(eventos.at(-1)).toMatchObject({ tipo: 'fin', confianza: 1 });
+    expect(recibidos[0]).toMatchObject({ max_tokens: 4096, messages: [{ role: 'user' }, { role: 'assistant', content: '{' }] });
+  });
+
+  it('usa la gramática si el proveedor falla antes de producir un evento', async () => {
+    responder = () => ({ status: 500, payload: { error: 'fallo del modelo' } });
+
+    const eventos: EventoAsistente[] = [];
+    for await (const evento of motor().interpretarEnStream('crea la clase Pedido', diagrama)) eventos.push(evento);
+
+    expect(eventos).toContainEqual(expect.objectContaining({ tipo: 'operacion', operacion: expect.objectContaining({ op: 'addClass', name: 'Pedido' }) }));
+    expect(eventos.at(-1)).toMatchObject({ tipo: 'fin', motor: 'gramatica-local' });
+  });
+
+  it('propaga como error una operación inválida después de haber enviado el mensaje anterior', async () => {
+    const json = JSON.stringify({ actions: [
+      { _type: 'message', text: 'Empiezo.' },
+      { _type: 'operation', operation: { op: 'no-existe' } },
+    ] });
+    bloquesSse = [`data: ${JSON.stringify({ choices: [{ delta: { content: json } }] })}\n\n`, 'data: [DONE]\n\n'];
+    const eventos: EventoAsistente[] = [];
+
+    await expect(async () => {
+      for await (const evento of motor().interpretarEnStream('hazlo', diagrama)) eventos.push(evento);
+    }).rejects.toThrow();
+    expect(eventos).toContainEqual({ tipo: 'mensaje', texto: 'Empiezo.' });
+    expect(eventos.some((evento) => evento.tipo === 'operacion' || evento.tipo === 'fin')).toBe(false);
+  });
+
+  it('aplica el plazo máximo hasta recibir el primer byte del cuerpo', async () => {
+    bloquesSse = [];
+    dejarStreamAbierto = true;
+
+    const eventos: EventoAsistente[] = [];
+    for await (const evento of motor({ timeoutMs: 60 }).interpretarEnStream('crea la clase Pedido', diagrama)) {
+      eventos.push(evento);
+    }
+
+    expect(eventos.at(-1)).toMatchObject({ tipo: 'fin', motor: 'gramatica-local' });
+  });
+
+  it('entiende una respuesta envuelta en vallas de código o con texto delante, como interpret', async () => {
+    const json = JSON.stringify({
+      actions: [
+        { _type: 'message', text: 'Hola, creo la clase.' },
+        { _type: 'operation', operation: { op: 'addClass', name: 'Pedido', kind: 'class' } },
+      ],
+      confidence: 0.9,
+    });
+    const respuesta = `Claro:\n\`\`\`json\n${json}\n\`\`\``;
+    bloquesSse = [
+      ...[respuesta.slice(0, 12), respuesta.slice(12, 40), respuesta.slice(40)].map(
+        (content) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`,
+      ),
+      'data: [DONE]\n\n',
+    ];
+
+    const eventos: EventoAsistente[] = [];
+    for await (const evento of motor().interpretarEnStream('crea Pedido', diagrama)) eventos.push(evento);
+
+    expect(eventos).toContainEqual({ tipo: 'mensaje', texto: 'Hola, creo la clase.' });
+    expect(eventos.find((evento) => evento.tipo === 'operacion')).toMatchObject({
+      operacion: { op: 'addClass', name: 'Pedido' },
+    });
+    expect(eventos.at(-1)).toEqual({ tipo: 'fin', motor: motor().name, confianza: 0.9 });
+  });
+
+  it('una respuesta cortada a medias no da por completa su última acción', async () => {
+    const json = JSON.stringify({
+      actions: [
+        { _type: 'message', text: 'Creo Pedido.' },
+        { _type: 'operation', operation: { op: 'addClass', name: 'Pedido', kind: 'class' } },
+      ],
+    });
+    const cortada = json.slice(0, json.indexOf('Pedido",') + 3);
+    bloquesSse = [`data: ${JSON.stringify({ choices: [{ delta: { content: cortada } }] })}\n\n`, 'data: [DONE]\n\n'];
+    const eventos: EventoAsistente[] = [];
+
+    await expect(async () => {
+      for await (const evento of motor().interpretarEnStream('crea Pedido', diagrama)) eventos.push(evento);
+    }).rejects.toThrow('la respuesta del modelo llegó incompleta');
+    expect(eventos).toContainEqual({ tipo: 'mensaje', texto: 'Creo Pedido.' });
+    expect(eventos.some((evento) => evento.tipo === 'operacion' || evento.tipo === 'fin')).toBe(false);
+  });
+
+  it('corta el stream si el proveedor deja de mandar trozos a mitad de respuesta', async () => {
+    const empiezo = '{"actions":[{"_type":"message","text":"Empiezo.';
+    bloquesSse = [`data: ${JSON.stringify({ choices: [{ delta: { content: empiezo } }] })}\n\n`];
+    dejarStreamAbierto = true;
+
+    const flujo = motor({ timeoutMs: 80 }).interpretarEnStream('crea Pedido', diagrama);
+    const resultado = (async () => {
+      for await (const _evento of flujo) {
+        // Se consume hasta que se corta.
+      }
+    })();
+
+    await expect(resultado).rejects.toThrow(/dejó de responder|no respondió/);
+  });
+
+  it('propaga la cancelación externa en vez de degradar a la gramática', async () => {
+    const json = JSON.stringify({ actions: [{ _type: 'message', text: 'Hola' }] });
+    bloquesSse = [`data: ${JSON.stringify({ choices: [{ delta: { content: json } }] })}\n\n`];
+    dejarStreamAbierto = true;
+    const abortador = new AbortController();
+    const eventos: EventoAsistente[] = [];
+    const flujo = motor().interpretarEnStream('hola', diagrama, undefined, abortador.signal);
+
+    await expect(async () => {
+      for await (const evento of flujo) {
+        eventos.push(evento);
+        if (evento.tipo === 'mensaje-parcial') abortador.abort();
+      }
+    }).rejects.toThrow();
+    expect(eventos.some((evento) => evento.tipo === 'mensaje-parcial')).toBe(true);
+    expect(eventos.some((evento) => evento.tipo === 'fin')).toBe(false);
   });
 });
 

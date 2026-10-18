@@ -1,12 +1,15 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
+import { crearLectorSse, describeOperation, type EventoAsistente } from '@app/shared';
 import { loadConfig } from './config.js';
 import { createApp, createDependencies, type AppDependencies } from './app.js';
 import { LocalIdentityProvider } from './auth/identity.js';
+import type { AssistantEngine } from './ai/assistant.js';
 
 /**
  * Pruebas de la API contra la aplicación entera.
@@ -758,6 +761,7 @@ describe('asistente', () => {
       .send({ texto: 'crea la clase Cliente' });
 
     expect(response.status).toBe(200);
+    expect(Object.keys(response.body).sort()).toEqual(['aclaracion', 'confianza', 'explicacion', 'motor', 'propuesta']);
     expect(response.body.propuesta).toHaveLength(1);
     expect(response.body.propuesta[0].descripcion).toContain('Cliente');
 
@@ -798,6 +802,168 @@ describe('asistente', () => {
     expect(historial.body.turnos.map((t: { texto: string }) => t.texto)).toContain(
       'crea la clase Cliente',
     );
+  });
+
+  it('envía mensajes, operaciones y el cierre en orden, calcula la descripción y guarda un único turno', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+    const operacion = { op: 'addClass' as const, name: 'Pedido', kind: 'class' as const };
+    const fake: AssistantEngine = {
+      name: 'motor-prueba',
+      interpret: async () => ({ operations: [], confidence: 1, clarification: null, explanation: '' }),
+      revisar: async () => null,
+      async *interpretarEnStream(): AsyncGenerator<EventoAsistente> {
+        yield { tipo: 'mensaje-parcial', texto: 'Creo' };
+        yield { tipo: 'mensaje', texto: 'Creo Pedido.' };
+        yield { tipo: 'operacion', operacion, descripcion: 'descripción falsa' };
+        yield { tipo: 'mensaje', texto: 'Listo.' };
+        yield { tipo: 'fin', motor: 'motor-prueba', confianza: 0.7 };
+      },
+    };
+    app = createApp({ ...deps, assistant: fake }).app;
+    const response = await request(app)
+      .post(`/api/proyectos/${proyectoId}/asistente/stream`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ texto: 'crea Pedido' })
+      .buffer(true)
+      .parse((res, callback) => {
+        let cuerpo = '';
+        res.setEncoding('utf8');
+        res.on('data', (trozo) => (cuerpo += trozo));
+        res.on('end', () => callback(null, cuerpo));
+      });
+
+    const eventos: EventoAsistente[] = [];
+    crearLectorSse((evento) => eventos.push(evento)).empujar(response.body as string);
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toContain('text/event-stream');
+    expect(response.headers['cache-control']).toContain('no-cache');
+    expect(eventos.map((evento) => evento.tipo)).toEqual([
+      'mensaje-parcial', 'mensaje', 'operacion', 'mensaje', 'fin',
+    ]);
+    expect(eventos[2]).toEqual({ tipo: 'operacion', operacion, descripcion: describeOperation(operacion) });
+
+    const historial = await request(app)
+      .get(`/api/proyectos/${proyectoId}/asistente/historial`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(historial.body.turnos).toHaveLength(2);
+    expect(historial.body.turnos.map((turno: { texto: string }) => turno.texto)).toEqual([
+      'crea Pedido', 'Creo Pedido. Listo.',
+    ]);
+  });
+
+  it('termina con error y no emite nada más si el stream falla después de un mensaje', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+    const fake: AssistantEngine = {
+      name: 'motor-prueba',
+      interpret: async () => ({ operations: [], confidence: 1, clarification: null, explanation: '' }),
+      revisar: async () => null,
+      async *interpretarEnStream(): AsyncGenerator<EventoAsistente> {
+        yield { tipo: 'mensaje', texto: 'Inicio.' };
+        throw new Error('fallo de proveedor');
+      },
+    };
+    app = createApp({ ...deps, assistant: fake }).app;
+
+    const response = await request(app)
+      .post(`/api/proyectos/${proyectoId}/asistente/stream`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ texto: 'hazlo' })
+      .buffer(true)
+      .parse((res, callback) => {
+        let cuerpo = '';
+        res.setEncoding('utf8');
+        res.on('data', (trozo) => (cuerpo += trozo));
+        res.on('end', () => callback(null, cuerpo));
+      });
+    const eventos: EventoAsistente[] = [];
+    crearLectorSse((evento) => eventos.push(evento)).empujar(response.body as string);
+
+    expect(eventos.map((evento) => evento.tipo)).toEqual(['mensaje', 'error']);
+    expect(eventos[1]).toMatchObject({ tipo: 'error', mensaje: 'fallo de proveedor' });
+  });
+
+  it('aborta el modelo y no guarda el turno si el cliente se desconecta durante el stream', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+    let registrarCancelacion!: () => void;
+    const cancelacion = new Promise<void>((resolve) => { registrarCancelacion = resolve; });
+    const fake: AssistantEngine = {
+      name: 'motor-prueba',
+      interpret: async () => ({ operations: [], confidence: 1, clarification: null, explanation: '' }),
+      revisar: async () => null,
+      async *interpretarEnStream(
+        _prompt: string,
+        _diagram: Parameters<AssistantEngine['interpret']>[1],
+        _contexto?: Parameters<NonNullable<AssistantEngine['interpretarEnStream']>>[2],
+        signal?: AbortSignal,
+      ): AsyncGenerator<EventoAsistente> {
+        yield { tipo: 'mensaje', texto: 'Todavía escribo.' };
+        await new Promise<void>((resolve) => signal?.addEventListener('abort', () => resolve(), { once: true }));
+        registrarCancelacion();
+      },
+    };
+    app = createApp({ ...deps, assistant: fake }).app;
+    const servidor = app.listen(0);
+    await new Promise<void>((resolve) => servidor.once('listening', resolve));
+    const direccion = servidor.address();
+    if (!direccion || typeof direccion === 'string') throw new Error('el servidor de prueba no abrió un puerto');
+
+    const desconectado = new Promise<void>((resolve, reject) => {
+      const cliente = httpRequest({
+        hostname: '127.0.0.1',
+        port: direccion.port,
+        path: `/api/proyectos/${proyectoId}/asistente/stream`,
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+      }, (respuesta) => {
+        respuesta.on('close', resolve);
+        respuesta.on('data', (trozo: Buffer) => {
+          if (trozo.toString().includes('Todavía escribo.')) cliente.destroy();
+        });
+      });
+      cliente.on('error', (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ECONNRESET') resolve();
+        else reject(error);
+      });
+      cliente.end(JSON.stringify({ texto: 'hola' }));
+    });
+    await desconectado;
+    await cancelacion;
+    await new Promise<void>((resolve, reject) => servidor.close((error) => error ? reject(error) : resolve()));
+
+    const historial = await request(app)
+      .get(`/api/proyectos/${proyectoId}/asistente/historial`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(historial.body.turnos).toEqual([]);
+  });
+
+  it('sin clave de API devuelve eventos de la gramática local', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+
+    const response = await request(app)
+      .post(`/api/proyectos/${proyectoId}/asistente/stream`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ texto: 'crea la clase Pedido' })
+      .buffer(true)
+      .parse((res, callback) => {
+        let cuerpo = '';
+        res.setEncoding('utf8');
+        res.on('data', (trozo) => (cuerpo += trozo));
+        res.on('end', () => callback(null, cuerpo));
+      });
+    const eventos: EventoAsistente[] = [];
+    crearLectorSse((evento) => eventos.push(evento)).empujar(response.body as string);
+
+    expect(response.status).toBe(200);
+    expect(eventos.some((evento) => evento.tipo === 'mensaje')).toBe(true);
+    expect(eventos.some((evento) => evento.tipo === 'operacion')).toBe(true);
+    expect(eventos.at(-1)).toMatchObject({ tipo: 'fin', motor: 'gramatica-local' });
   });
 
   it('cada integrante tiene su propio hilo: Beto no ve lo que Ana le pidió a la IA', async () => {

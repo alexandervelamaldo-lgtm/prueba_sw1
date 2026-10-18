@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { describeOperation, readDiagram } from '@app/shared';
+import { describeOperation, formatearEventoSse, readDiagram, type EventoAsistente } from '@app/shared';
 import type { AssistantEngine, TurnoConAutor } from '../ai/assistant.js';
 import type { IdentityProvider } from '../auth/identity.js';
 import type { ProjectStore } from '../storage/store.js';
@@ -107,6 +107,106 @@ export function assistantRouter(deps: {
     }),
   );
 
+  router.post(
+    '/:proyectoId/asistente/stream',
+    requireRole(store, 'editor'),
+    handler(async (request, response) => {
+      const body = parseBody(PeticionSchema, request.body);
+      const proyectoId = request.params.proyectoId ?? '';
+      const room = await rooms.open(proyectoId);
+      const diagram = readDiagram(room.doc);
+      const [turnos, misProyectos] = await Promise.all([
+        conversations.getHistory(proyectoId, request.user.id, MAXIMO_TURNOS * 2),
+        store.listProjectsForUser(request.user.id),
+      ]);
+      const historial = await conAutores(turnos, identity);
+      const otrosProyectos = misProyectos
+        .filter((proyecto) => proyecto.id !== proyectoId)
+        .slice(0, MAXIMO_OTROS_PROYECTOS)
+        .map((proyecto) => `${proyecto.name} (${proyecto.role})`);
+      const contexto = { historial, otrosProyectos };
+
+      const abortador = new AbortController();
+      let desconectado = false;
+      const cancelarSiCerro = (): void => {
+        if (!response.writableEnded) {
+          desconectado = true;
+          abortador.abort();
+        }
+      };
+      request.on('close', () => {
+        if (!request.complete) cancelarSiCerro();
+      });
+      response.on('close', cancelarSiCerro);
+
+      response.setHeader('content-type', 'text/event-stream; charset=utf-8');
+      response.setHeader('cache-control', 'no-cache');
+      response.flushHeaders();
+
+      const mensajes: string[] = [];
+      let eventosEmitidos = 0;
+      let fin: Extract<EventoAsistente, { tipo: 'fin' }> | null = null;
+      let fallo: string | null = null;
+      const enviarEvento = (evento: EventoAsistente): void => {
+        if (evento.tipo === 'mensaje') mensajes.push(evento.texto);
+        if (evento.tipo === 'operacion') {
+          evento = { ...evento, descripcion: describeOperation(evento.operacion) };
+        }
+        response.write(formatearEventoSse(evento));
+        eventosEmitidos += 1;
+      };
+
+      try {
+        const flujo = assistant.interpretarEnStream
+          ? assistant.interpretarEnStream(body.texto, diagram, contexto, abortador.signal)
+          : eventosDeRespuesta(assistant, body.texto, diagram, contexto);
+        for await (const evento of flujo) {
+          if (desconectado || abortador.signal.aborted) return;
+          if (evento.tipo === 'fin') {
+            fin = evento;
+            continue;
+          }
+          if (evento.tipo === 'error') {
+            fallo = evento.mensaje;
+            break;
+          }
+          enviarEvento(evento);
+        }
+      } catch (error) {
+        if (desconectado || abortador.signal.aborted) return;
+        fallo = error instanceof Error ? error.message : 'No se pudo completar el stream del asistente';
+        // Un motor opcional que no encontró salida todavía puede degradar por
+        // la misma ruta compatible que usa la respuesta JSON de siempre.
+        if (eventosEmitidos === 0 && assistant.interpretarEnStream) {
+          try {
+            for await (const evento of eventosDeRespuesta(assistant, body.texto, diagram, contexto)) {
+              if (evento.tipo === 'fin') fin = evento;
+              else enviarEvento(evento);
+            }
+            fallo = null;
+          } catch {
+            // El fallo se comunica como evento SSE más abajo.
+          }
+        }
+      }
+
+      if (desconectado || abortador.signal.aborted) return;
+      try {
+        await conversations.appendTurn(proyectoId, request.user.id, body.texto, mensajes.join(' '));
+      } catch (error) {
+        // Los encabezados SSE ya salieron: el fallo viaja como evento, no como
+        // la respuesta JSON de error de siempre.
+        fallo ??= `No se pudo guardar la conversación: ${(error as Error).message}`;
+      }
+      if (fallo) {
+        enviarEvento({ tipo: 'error', mensaje: fallo });
+      } else {
+        enviarEvento(fin ?? { tipo: 'fin', motor: assistant.name, confianza: 1 });
+      }
+      response.end();
+    }),
+  );
+
   router.get(
     '/:proyectoId/asistente/historial',
     requireRole(store, 'editor'),
@@ -121,4 +221,19 @@ export function assistantRouter(deps: {
   );
 
   return router;
+}
+
+async function* eventosDeRespuesta(
+  assistant: AssistantEngine,
+  prompt: string,
+  diagram: ReturnType<typeof readDiagram>,
+  contexto: { historial: TurnoConAutor[]; otrosProyectos: string[] },
+): AsyncGenerator<EventoAsistente> {
+  const respuesta = await assistant.interpret(prompt, diagram, contexto);
+  const mensaje = respuesta.clarification || respuesta.explanation;
+  if (mensaje) yield { tipo: 'mensaje', texto: mensaje };
+  for (const operacion of respuesta.operations) {
+    yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion) };
+  }
+  yield { tipo: 'fin', motor: assistant.name, confianza: respuesta.confidence };
 }

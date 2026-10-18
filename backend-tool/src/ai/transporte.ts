@@ -34,6 +34,70 @@ export interface PeticionAlModelo {
   pausaMs?: number;
 }
 
+/** Devuelve el cuerpo SSE sin interpretar el protocolo concreto del proveedor. */
+export async function* leerStreamDelModelo(
+  opciones: PeticionAlModelo,
+  signal?: AbortSignal,
+): AsyncGenerator<string> {
+  const controller = new AbortController();
+  const abortar = (): void => controller.abort();
+  if (signal?.aborted) throw new DOMException('La petición se canceló', 'AbortError');
+  signal?.addEventListener('abort', abortar, { once: true });
+  let primerByte = false;
+  // El plazo cuenta hasta el primer byte y, después, entre dos trozos: un
+  // proveedor que se queda callado a mitad de respuesta también se corta, en
+  // vez de dejar el Modo IA esperando para siempre.
+  let timer = setTimeout(() => controller.abort(), opciones.timeoutMs);
+
+  try {
+    const response = await fetch(opciones.url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json', ...opciones.headers },
+      body: JSON.stringify(opciones.body),
+    });
+    if (!response.ok) {
+      const detalle = await response.text().catch(() => '');
+      throw new ErrorDeModelo(`${response.status} ${detalle.slice(0, 300)}`.trim(), response.status);
+    }
+    if (!response.body) throw new ErrorDeModelo('el modelo no devolvió un stream');
+
+    const reader = response.body.getReader();
+    const decodificador = new TextDecoder();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          clearTimeout(timer);
+          const resto = decodificador.decode();
+          if (resto) yield resto;
+          return;
+        }
+        primerByte = true;
+        clearTimeout(timer);
+        timer = setTimeout(() => controller.abort(), opciones.timeoutMs);
+        const texto = decodificador.decode(value, { stream: true });
+        if (texto) yield texto;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new ErrorDeModelo(
+        primerByte
+          ? `el modelo dejó de responder durante ${opciones.timeoutMs} ms`
+          : `el modelo no respondió en ${opciones.timeoutMs} ms`,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abortar);
+  }
+}
+
 /**
  * Códigos que merecen otro intento.
  *

@@ -1,7 +1,15 @@
-import type { AssistantResponse, ClassDiagram } from '@app/shared';
-import { interpretCommand, listSupportedTypes, parseAssistantResponse, revisarDiagrama } from '@app/shared';
+import type { AssistantResponse, ClassDiagram, EventoAsistente } from '@app/shared';
+import {
+  AssistantActionSchema,
+  describeOperation,
+  interpretCommand,
+  listSupportedTypes,
+  parseAssistantResponse,
+  revisarDiagrama,
+} from '@app/shared';
 import type { ChatMessage } from '../storage/conversaciones.js';
-import { pedirAlModelo } from './transporte.js';
+import { leerStreamDelModelo, pedirAlModelo } from './transporte.js';
+import { cerrarYParsearJson } from './json-incompleto.js';
 
 /**
  * Explicación general del módulo:
@@ -37,6 +45,12 @@ export interface AssistantContext {
 export interface AssistantEngine {
   readonly name: string;
   interpret(prompt: string, diagram: ClassDiagram, contexto?: AssistantContext): Promise<AssistantResponse>;
+  interpretarEnStream?(
+    prompt: string,
+    diagram: ClassDiagram,
+    contexto?: AssistantContext,
+    signal?: AbortSignal,
+  ): AsyncIterable<EventoAsistente>;
   /**
    * Mira el diagrama sin que nadie haya preguntado nada y decide si hay algo
    * que merezca la pena decirle a quien lo acaba de cambiar. Devuelve
@@ -60,6 +74,16 @@ export class GrammarAssistant implements AssistantEngine {
   // Función que recibe la petición en texto y devuelve la orden traducida localmente.
   async interpret(prompt: string): Promise<AssistantResponse> {
     return interpretCommand(prompt);
+  }
+
+  async *interpretarEnStream(prompt: string, diagram: ClassDiagram): AsyncGenerator<EventoAsistente> {
+    const respuesta = await this.interpret(prompt);
+    const mensaje = respuesta.clarification || respuesta.explanation;
+    if (mensaje) yield { tipo: 'mensaje', texto: mensaje };
+    for (const operacion of respuesta.operations) {
+      yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion) };
+    }
+    yield { tipo: 'fin', motor: this.name, confianza: respuesta.confidence };
   }
 
   // Versión sin conexión de "hablar sola": usa el mismo revisor de calidad de
@@ -210,6 +234,122 @@ export class LlmAssistant implements AssistantEngine {
     };
   }
 
+  async *interpretarEnStream(
+    prompt: string,
+    diagram: ClassDiagram,
+    contexto?: AssistantContext,
+    signal?: AbortSignal,
+  ): AsyncGenerator<EventoAsistente> {
+    let eventosEnviados = 0;
+    const defectos = DEFECTOS[this.provider];
+    const baseUrl = (this.options.baseUrl ?? defectos.baseUrl).replace(/\/+$/, '');
+    const model = this.options.model ?? defectos.model;
+    const { system, user, historial } = this.prepararInterpretacion(prompt, diagram, contexto);
+    const mensajes = [...historial, { role: 'user' as const, content: user }];
+    const prefijo = this.provider === 'anthropic' ? '{' : '';
+    if (prefijo) mensajes.push({ role: 'assistant', content: prefijo });
+    const body = this.provider === 'anthropic'
+      ? { model, max_tokens: 4096, stream: true, system, messages: mensajes }
+      : { model, max_tokens: 4096, stream: true, messages: [{ role: 'system' as const, content: system }, ...mensajes] };
+
+    let texto = prefijo;
+    let accionesProcesadas = 0;
+    let ultimoParcial: string | undefined;
+    let confianza = 1;
+
+    const emitirAccion = (valor: unknown): EventoAsistente | null => {
+      const validada = AssistantActionSchema.safeParse(valor);
+      if (!validada.success) throw new Error(`acción del modelo no válida: ${validada.error.message}`);
+      const accion = validada.data;
+      if (accion._type === 'think') return null;
+      if (accion._type === 'message') return { tipo: 'mensaje', texto: accion.text };
+      return { tipo: 'operacion', operacion: accion.operation, descripcion: describeOperation(accion.operation) };
+    };
+
+    const registrar = async function* (evento: EventoAsistente | null): AsyncGenerator<EventoAsistente> {
+      if (!evento) return;
+      eventosEnviados += 1;
+      yield evento;
+    };
+
+    try {
+      for await (const fragmento of textoDelStream(
+        leerStreamDelModelo({
+          url: this.provider === 'anthropic' ? `${baseUrl}/v1/messages` : `${baseUrl}/chat/completions`,
+          headers: this.provider === 'anthropic'
+            ? { 'x-api-key': this.options.apiKey, 'anthropic-version': '2023-06-01' }
+            : { authorization: `Bearer ${this.options.apiKey}` },
+          body,
+          timeoutMs: this.options.timeoutMs ?? 20_000,
+        }, signal),
+        this.provider,
+      )) {
+        texto += fragmento;
+        // Lo que el modelo escriba antes del objeto (una valla ```json o una
+        // frase) no forma parte del JSON: igual que `extractJson`.
+        const inicio = texto.indexOf('{');
+        if (inicio === -1) continue;
+        const parcial = cerrarYParsearJson(texto.slice(inicio));
+        if (!esObjeto(parcial) || !Array.isArray(parcial.actions)) continue;
+        const acciones = parcial.actions;
+        while (accionesProcesadas < acciones.length - 1) {
+          const evento = emitirAccion(acciones[accionesProcesadas]);
+          accionesProcesadas += 1;
+          ultimoParcial = undefined;
+          yield* registrar(evento);
+        }
+        const actual = acciones[accionesProcesadas];
+        if (esObjeto(actual) && actual._type === 'message' && typeof actual.text === 'string' && actual.text !== ultimoParcial) {
+          const evento: EventoAsistente = { tipo: 'mensaje-parcial', texto: actual.text };
+          ultimoParcial = actual.text;
+          eventosEnviados += 1;
+          yield evento;
+        }
+        if (typeof parcial.confidence === 'number' && Number.isFinite(parcial.confidence) && parcial.confidence >= 0 && parcial.confidence <= 1) {
+          confianza = parcial.confidence;
+        }
+      }
+
+      // Al final, el texto tiene que ser un JSON completo de verdad. Cerrarlo a
+      // la fuerza daría por buena una respuesta truncada (por ejemplo, por el
+      // tope de tokens) y aplicaría una clase llamada «Ped».
+      let completa: unknown;
+      try {
+        completa = extractJson(texto);
+      } catch {
+        throw new Error('la respuesta del modelo llegó incompleta');
+      }
+      if (!esObjeto(completa) || !Array.isArray(completa.actions)) throw new Error('el modelo no terminó una lista de acciones válida');
+      if (typeof completa.confidence === 'number' && Number.isFinite(completa.confidence) && completa.confidence >= 0 && completa.confidence <= 1) {
+        confianza = completa.confidence;
+      }
+      // Todas las que falten, no solo la última: el trozo final puede traer
+      // varias acciones de golpe (o el JSON entero, si venía tras una valla).
+      for (const accion of completa.actions.slice(accionesProcesadas)) {
+        yield* registrar(emitirAccion(accion));
+      }
+      if (eventosEnviados === 0) {
+        yield* this.eventosDeFallback(prompt, diagram);
+        return;
+      }
+      yield { tipo: 'fin', motor: this.name, confianza };
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (eventosEnviados > 0) throw error;
+      yield* this.eventosDeFallback(prompt, diagram);
+    }
+  }
+
+  private async *eventosDeFallback(prompt: string, diagram: ClassDiagram): AsyncGenerator<EventoAsistente> {
+    const respuesta = await this.fallback.interpret(prompt, diagram);
+    const mensaje = respuesta.clarification || respuesta.explanation;
+    if (mensaje) yield { tipo: 'mensaje', texto: mensaje };
+    for (const operacion of respuesta.operations) {
+      yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion) };
+    }
+    yield { tipo: 'fin', motor: this.fallback.name, confianza: respuesta.confidence };
+  }
+
   // "HABLAR SOLA" CON MODELO REMOTO:
   // Mismo transporte que `interpret`, pero con el prompt de revisión y sin
   // exigir JSON: aquí la respuesta es texto llano o la palabra NADA. Si el
@@ -236,23 +376,22 @@ export class LlmAssistant implements AssistantEngine {
   // FUNCIÓN PRIVADA DE COMUNICACIÓN CON LA IA:
   // Se encarga de empaquetar la petición y enviarla por internet según el proveedor (Anthropic u OpenAI).
   private async ask(prompt: string, diagram: ClassDiagram, contexto?: AssistantContext): Promise<string> {
-    // Prepara las instrucciones agregando los tipos de datos válidos.
+    const { system, user, historial } = this.prepararInterpretacion(prompt, diagram, contexto);
+    return this.enviarConversacion(system, user, historial, 4096, true);
+  }
+
+  private prepararInterpretacion(
+    prompt: string,
+    diagram: ClassDiagram,
+    contexto?: AssistantContext,
+  ): { system: string; user: string; historial: { role: 'user' | 'assistant'; content: string }[] } {
     const system = SYSTEM_PROMPT.replace('TIPOS', listSupportedTypes().join(', '));
-
-    // Los otros proyectos del usuario van en el mensaje de esta petición, como
-    // una línea de contexto y no como instrucción: la IA puede mencionar que
-    // existen, pero nunca ha visto ni verá sus clases o relaciones, porque
-    // quien construye este contexto (`api/assistant.ts`) nunca abre esos
-    // proyectos para leerlos.
     const otrosProyectos = contexto?.otrosProyectos ?? [];
-    const lineaOtrosProyectos =
-      otrosProyectos.length > 0
-        ? `\n\nOtros proyectos de este usuario (solo el nombre, para contexto; nunca mezcles su contenido con este diagrama): ${otrosProyectos.join(', ')}.`
-        : '';
-    // Crea el mensaje combinando el diagrama actual y la petición del usuario.
+    const lineaOtrosProyectos = otrosProyectos.length > 0
+      ? `\n\nOtros proyectos de este usuario (solo el nombre, para contexto; nunca mezcles su contenido con este diagrama): ${otrosProyectos.join(', ')}.`
+      : '';
     const user = `Diagrama actual:\n${summarize(diagram)}${lineaOtrosProyectos}\n\nPetición: ${prompt}`;
-
-    return this.enviarConversacion(system, user, this.historialComoMensajes(contexto), 4096, true);
+    return { system, user, historial: this.historialComoMensajes(contexto) };
   }
 
   // PETICIÓN PRIVADA DE REVISIÓN ESPONTÁNEA:
@@ -335,6 +474,68 @@ export class LlmAssistant implements AssistantEngine {
 // Estructura de la respuesta que se espera recibir desde la API de OpenAI.
 interface RespuestaOpenAi {
   choices?: { message?: { content?: string } }[];
+}
+
+function esObjeto(valor: unknown): valor is Record<string, unknown> {
+  return typeof valor === 'object' && valor !== null && !Array.isArray(valor);
+}
+
+async function* textoDelStream(
+  trozos: AsyncIterable<string>,
+  proveedor: 'anthropic' | 'openai',
+): AsyncGenerator<string> {
+  let pendiente = '';
+  for await (const trozo of trozos) {
+    pendiente += trozo.replace(/\r\n/g, '\n');
+    let corte = pendiente.indexOf('\n\n');
+    while (corte !== -1) {
+      const bloque = pendiente.slice(0, corte);
+      pendiente = pendiente.slice(corte + 2);
+      for (const linea of bloque.split('\n')) {
+        if (!linea.startsWith('data:')) continue;
+        const dato = linea.slice(5).trim();
+        if (dato === '[DONE]') return;
+        let contenido: unknown;
+        try {
+          contenido = JSON.parse(dato);
+        } catch {
+          throw new Error('el modelo envió un evento SSE no válido');
+        }
+        if (!esObjeto(contenido)) continue;
+        if (proveedor === 'openai') {
+          const choices = contenido.choices;
+          const delta = Array.isArray(choices) && esObjeto(choices[0]) ? choices[0].delta : null;
+          if (esObjeto(delta) && typeof delta.content === 'string') yield delta.content;
+        } else if (
+          contenido.type === 'content_block_delta' &&
+          esObjeto(contenido.delta) &&
+          contenido.delta.type === 'text_delta' &&
+          typeof contenido.delta.text === 'string'
+        ) {
+          yield contenido.delta.text;
+        } else if (contenido.type === 'error') {
+          throw new Error('el modelo devolvió un error durante el stream');
+        }
+      }
+      corte = pendiente.indexOf('\n\n');
+    }
+  }
+  if (pendiente.trim()) {
+    const lineas = pendiente.split('\n').filter((linea) => linea.startsWith('data:'));
+    for (const linea of lineas) {
+      const dato = linea.slice(5).trim();
+      if (dato === '[DONE]') return;
+      const contenido: unknown = JSON.parse(dato);
+      if (!esObjeto(contenido)) continue;
+      if (proveedor === 'openai') {
+        const choices = contenido.choices;
+        const delta = Array.isArray(choices) && esObjeto(choices[0]) ? choices[0].delta : null;
+        if (esObjeto(delta) && typeof delta.content === 'string') yield delta.content;
+      } else if (contenido.type === 'content_block_delta' && esObjeto(contenido.delta) && contenido.delta.type === 'text_delta' && typeof contenido.delta.text === 'string') {
+        yield contenido.delta.text;
+      }
+    }
+  }
 }
 
 /**

@@ -402,6 +402,14 @@ describe('LlmAssistant contra un proveedor simulado', () => {
     expect(recibidos.map((cuerpo) => cuerpo.max_tokens)).toEqual([1024, 1024]);
   });
 
+  it('el prompt enseña a modificar una relación con updateRelation, sin borrarla y volver a crearla', async () => {
+    await motor().interpret('cambia la relación a agregación', diagrama);
+    const sistema = (recibidos[0]?.messages as { role: string; content: string }[])[0]?.content ?? '';
+
+    expect(sistema).toContain('{"op":"updateRelation","id":"..."');
+    expect(sistema).toMatch(/updateRelation[^\n]*no la borres/);
+  });
+
   it('usa el protocolo de Anthropic cuando se le pide', async () => {
     responder = () => ({
       status: 200,

@@ -165,6 +165,24 @@ describe.runIf(activa)('evaluación del Modo IA contra el modelo real', () => {
       expect(intermedia).toBe(true);
     }, PLAZO);
 
+    it('modificar el tipo de una relación la cambia, no la borra y la vuelve a crear', async () => {
+      const r = await pedir('cambia la relación entre Cliente y Pedido a una agregación');
+      expect(operaciones(r, 'updateRelation')).toContainEqual(
+        expect.objectContaining({ id: 'R1', changes: expect.objectContaining({ kind: 'aggregation' }) }),
+      );
+      expect(borra(r)).toBe(false);
+    }, PLAZO);
+
+    it('modificar la multiplicidad de una relación', async () => {
+      const r = await pedir('en la relación entre Cliente y Pedido, un cliente tiene como máximo un pedido');
+      const cambio = operaciones(r, 'updateRelation')[0];
+      expect(cambio?.id).toBe('R1');
+      // «Como máximo uno» es 0..1 en UML; 1 también es aceptable si el modelo lo lee como «exactamente uno».
+      const extremos = [cambio?.changes.sourceMultiplicity, cambio?.changes.targetMultiplicity];
+      expect(extremos.some((m) => m === '0..1' || m === '1')).toBe(true);
+      expect(borra(r)).toBe(false);
+    }, PLAZO);
+
     it('una orden con un cambio y un borrado no esconde el borrado', async () => {
       const r = await pedir('crea la clase Factura y borra la clase Pedido');
       expect(operaciones(r, 'addClass').map((o) => o.name)).toContain('Factura');

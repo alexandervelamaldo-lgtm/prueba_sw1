@@ -9,24 +9,24 @@ import { textoDeBienvenida } from './bienvenida-ia';
 const a = (hora: number) => new Date(2026, 9, 18, hora, 0, 0);
 
 describe('textoDeBienvenida', () => {
-  it('saluda por el nombre y nombra el proyecto', () => {
-    const texto = textoDeBienvenida({ nombre: 'Demo', proyecto: 'Tienda', ahora: a(10) });
-    expect(texto).toContain('Demo');
-    expect(texto).toContain('«Tienda»');
+  it('es corta: un saludo con el nombre y la pregunta, sin enumerar lo que sabe hacer', () => {
+    expect(textoDeBienvenida({ nombre: 'Demo', ahora: a(10) })).toBe(
+      '¡Buenos días, Demo! ¿En qué te puedo ayudar hoy?',
+    );
   });
 
   it('el saludo depende de la hora del día', () => {
-    expect(textoDeBienvenida({ nombre: 'Ana', proyecto: 'P', ahora: a(9) })).toMatch(/^¡Buenos días, Ana!/);
-    expect(textoDeBienvenida({ nombre: 'Ana', proyecto: 'P', ahora: a(15) })).toMatch(/^¡Buenas tardes, Ana!/);
-    expect(textoDeBienvenida({ nombre: 'Ana', proyecto: 'P', ahora: a(22) })).toMatch(/^¡Buenas noches, Ana!/);
-    expect(textoDeBienvenida({ nombre: 'Ana', proyecto: 'P', ahora: a(3) })).toMatch(/^¡Buenas noches, Ana!/);
+    expect(textoDeBienvenida({ nombre: 'Ana', ahora: a(9) })).toMatch(/^¡Buenos días, Ana!/);
+    expect(textoDeBienvenida({ nombre: 'Ana', ahora: a(15) })).toMatch(/^¡Buenas tardes, Ana!/);
+    expect(textoDeBienvenida({ nombre: 'Ana', ahora: a(22) })).toMatch(/^¡Buenas noches, Ana!/);
+    expect(textoDeBienvenida({ nombre: 'Ana', ahora: a(3) })).toMatch(/^¡Buenas noches, Ana!/);
   });
 
   it('sin nombre saluda igual, sin dejar una coma colgando', () => {
-    expect(textoDeBienvenida({ nombre: '  ', proyecto: 'P', ahora: a(10) })).toMatch(/^¡Buenos días!/);
+    expect(textoDeBienvenida({ nombre: '  ', ahora: a(10) })).toMatch(/^¡Buenos días!/);
   });
 
   it('termina invitando a pedir algo', () => {
-    expect(textoDeBienvenida({ nombre: 'Ana', proyecto: 'P', ahora: a(10) })).toMatch(/\?$/);
+    expect(textoDeBienvenida({ nombre: 'Ana', ahora: a(10) })).toMatch(/\?$/);
   });
 });

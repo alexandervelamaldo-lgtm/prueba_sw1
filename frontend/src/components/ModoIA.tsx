@@ -260,7 +260,7 @@ export function ModoIA({
   // final de la conversación. No se guarda en el hilo; solo se pinta y se dice.
   useEffect(() => {
     if (!saludoPendiente || cargando) return;
-    const texto = textoDeBienvenida({ nombre: usuario.nombre, proyecto: proyecto.name });
+    const texto = textoDeBienvenida({ nombre: usuario.nombre });
     setTurnos((previos) => [
       ...previos,
       {
@@ -277,7 +277,7 @@ export function ModoIA({
     ]);
     hablar(texto);
     onSaludado?.();
-  }, [saludoPendiente, cargando, usuario.nombre, proyecto.name, onSaludado]);
+  }, [saludoPendiente, cargando, usuario.nombre, onSaludado]);
 
   useEffect(() => {
     onEstado?.(enviando || ejecutando ? 'pensando' : 'reposo');

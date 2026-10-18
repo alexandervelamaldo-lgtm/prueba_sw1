@@ -57,6 +57,16 @@ describe('api.interpretarEnStream', () => {
     expect(init.body).toBe(JSON.stringify({ texto: 'Revisa mi diagrama', revision: true }));
   });
 
+  it('la clase seleccionada viaja en el cuerpo de la petición', async () => {
+    const fetchFalso = vi.fn(async () => respuestaEnTrozos([formatearEventoSse({ tipo: 'fin', motor: 'm', confianza: 1 })]));
+    vi.stubGlobal('fetch', fetchFalso);
+
+    await api.interpretarEnStream('P1', 'añádele un email', () => {}, undefined, { seleccion: 'C1' });
+
+    const [, init] = fetchFalso.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body).toBe(JSON.stringify({ texto: 'añádele un email', seleccion: 'C1' }));
+  });
+
   it('una respuesta de error del servidor es un ApiError con su mensaje', async () => {
     vi.stubGlobal(
       'fetch',

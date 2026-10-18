@@ -326,6 +326,19 @@ describe('LlmAssistant contra un proveedor simulado', () => {
     expect(mensajes[0]?.content).toContain('cambios recientes');
   });
 
+  it('manda quién pregunta y qué clase tiene seleccionada, para entender «esta clase» y «lo que acabo de hacer»', async () => {
+    await motor().interpret('añádele un email a esta clase', diagrama, {
+      historial: [],
+      otrosProyectos: [],
+      quienPregunta: 'Ana',
+      seleccion: 'Cliente',
+    });
+
+    const mensajes = recibidos[0]?.messages as { role: string; content: string }[];
+    expect(mensajes.at(-1)?.content).toContain('Quien te habla: Ana.');
+    expect(mensajes.at(-1)?.content).toContain('Clase seleccionada ahora en el lienzo: Cliente');
+  });
+
   it('usa el protocolo de Anthropic cuando se le pide', async () => {
     responder = () => ({
       status: 200,

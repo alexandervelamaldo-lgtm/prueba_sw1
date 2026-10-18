@@ -73,6 +73,8 @@ interface Props {
   centrar?: (ids: string[]) => void;
   /** Abre un grupo de deshacer; ver `hooks/deshacer-agrupado.ts`. */
   agruparDeshacer?: () => GrupoDeshacer;
+  /** La clase seleccionada en el lienzo: la IA entiende «esta clase». */
+  seleccion?: string | null;
 }
 
 interface Turno {
@@ -127,6 +129,7 @@ export function ModoIA({
   usuario,
   centrar,
   agruparDeshacer,
+  seleccion,
 }: Props): JSX.Element {
   const [turnos, setTurnos] = useState<Turno[]>([]);
   const [autoAplicar, setAutoAplicar] = useState(leerAutoAplicar);
@@ -147,6 +150,10 @@ export function ModoIA({
   // El diagrama más reciente: una respuesta en streaming dura varios renders.
   const diagramaRef = useRef(diagrama);
   diagramaRef.current = diagrama;
+  // Igual que el diagrama: una orden dictada se envía desde un `enviar` de un
+  // render anterior, y tiene que llevar la selección de ahora.
+  const seleccionRef = useRef(seleccion);
+  seleccionRef.current = seleccion;
 
   useEffect(() => {
     montadoRef.current = true;
@@ -382,7 +389,10 @@ export function ModoIA({
     const controlador = new AbortController();
     abortarRef.current = controlador;
     try {
-      await api.interpretarEnStream(proyecto.id, limpia, manejador.alEvento, controlador.signal, { revision });
+      await api.interpretarEnStream(proyecto.id, limpia, manejador.alEvento, controlador.signal, {
+        revision,
+        seleccion: seleccionRef.current ?? null,
+      });
       if (!(ultimo as EstadoRespuesta | null)?.terminado) {
         manejador.alEvento({ tipo: 'error', mensaje: 'La respuesta se cortó antes de terminar.' });
       }

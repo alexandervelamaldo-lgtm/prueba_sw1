@@ -919,6 +919,7 @@ export function EditorDiagrama({
                     usuario={autor}
                     centrar={centrar}
                     agruparDeshacer={estado.agruparDeshacer}
+                    seleccion={seleccion}
                   />
                 ) : null,
             },

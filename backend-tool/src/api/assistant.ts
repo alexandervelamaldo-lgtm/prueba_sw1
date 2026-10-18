@@ -29,6 +29,8 @@ const PeticionSchema = z.object({
   texto: z.string().trim().min(1).max(2000),
   /** Botón «Revisar mi diagrama»: el modelo recibe `peticionDeRevision`, el historial guarda `texto`. */
   revision: z.boolean().optional(),
+  /** Id de la clase seleccionada en el lienzo; el nombre se toma del diagrama, no del cliente. */
+  seleccion: z.string().max(200).optional(),
 });
 
 /**
@@ -100,6 +102,7 @@ export function assistantRouter(deps: {
         historial,
         otrosProyectos,
         cambiosRecientes: resumirCambiosRecientes(leerHistorial(room.doc), MAXIMO_CAMBIOS_RECIENTES),
+        quienPregunta: request.user.displayName,
       });
       await conversations.appendTurn(proyectoId, request.user.id, body.texto, result.explanation);
 
@@ -137,10 +140,13 @@ export function assistantRouter(deps: {
         .filter((proyecto) => proyecto.id !== proyectoId)
         .slice(0, MAXIMO_OTROS_PROYECTOS)
         .map((proyecto) => `${proyecto.name} (${proyecto.role})`);
+      const seleccionada = body.seleccion ? diagram.classes[body.seleccion]?.name : undefined;
       const contexto = {
         historial,
         otrosProyectos,
         cambiosRecientes: resumirCambiosRecientes(leerHistorial(room.doc), MAXIMO_CAMBIOS_RECIENTES),
+        quienPregunta: request.user.displayName,
+        ...(seleccionada ? { seleccion: seleccionada } : {}),
       };
 
       const abortador = new AbortController();

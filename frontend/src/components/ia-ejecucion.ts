@@ -93,50 +93,97 @@ export interface DependenciasEjecucion {
 const ESPERA_CAMARA_MS = 260;
 
 /**
- * Aplica las operaciones de una en una, en orden. Todas forman un solo paso de
- * deshacer: «deshaz lo último» revierte la respuesta entera de la IA, no solo
- * su último paso. Se detiene en la primera que falla o si se cancela; lo ya
+ * Aplica las operaciones de una en una, en el orden en que se encolan, también
+ * mientras siguen llegando (Modo IA en streaming): cada `encolar` espera a que
+ * termine el paso anterior. Todas forman un solo paso de deshacer: «deshaz lo
+ * último» revierte la respuesta entera de la IA, no solo su último paso. Tras
+ * un fallo o una cancelación, lo que se encole después se ignora; lo ya
  * aplicado se queda (se deshace junto con el grupo).
+ *
+ * El grupo y el cursor se crean con la primera operación: una respuesta que
+ * solo conversa no abre nada.
  */
+export function crearEjecutorEnCola(
+  deps: DependenciasEjecucion,
+  avisos: { alAplicar?(operacion: Operation): void } = {},
+): { encolar(operacion: Operation): void; terminar(): Promise<{ aplicadas: number; error: string | null }> } {
+  const { cursor } = deps;
+  let grupo: GrupoDeshacer | undefined;
+  let empezado = false;
+  let cadena: Promise<void> = Promise.resolve();
+  let aplicadas = 0;
+  let error: string | null = null;
+  let detenido = false;
+  let lanzado: unknown = null;
+
+  const paso = async (operacion: Operation): Promise<void> => {
+    if (detenido) return;
+    if (deps.cancelado?.()) {
+      detenido = true;
+      return;
+    }
+    if (aplicadas > 0) await deps.esperar(deps.pausaMs);
+
+    const selector = selectorDeBoton(operacion);
+    const boton = cursor && selector ? deps.buscar(selector) : null;
+    if (cursor && boton) {
+      await cursor.mover(boton);
+      await cursor.clic();
+    }
+
+    const aplicarPaso = () => deps.aplicar([operacion], deps.contexto);
+    const resultado = grupo ? grupo.propio(aplicarPaso) : aplicarPaso();
+    if (!resultado.ok) {
+      error = resultado.error;
+      detenido = true;
+      return;
+    }
+    aplicadas += 1;
+    avisos.alAplicar?.(operacion);
+
+    const clase = resultado.clases?.[0];
+    if (clase) {
+      deps.centrar([clase]);
+      deps.resaltar(clase);
+      if (cursor) {
+        await deps.esperar(ESPERA_CAMARA_MS);
+        const nodo = deps.nodo(clase);
+        if (nodo) await cursor.mover(nodo);
+      }
+    }
+  };
+
+  return {
+    encolar(operacion) {
+      if (!empezado) {
+        empezado = true;
+        grupo = deps.agrupar?.();
+      }
+      cadena = cadena.then(() =>
+        paso(operacion).catch((fallo: unknown) => {
+          lanzado = fallo ?? new Error('fallo al aplicar');
+          detenido = true;
+        }),
+      );
+    },
+    async terminar() {
+      await cadena;
+      if (empezado) {
+        cursor?.ocultar();
+        grupo?.cerrar();
+      }
+      if (lanzado) throw lanzado;
+      return { aplicadas, error };
+    },
+  };
+}
+
+/** Aplica una lista ya completa; ver `crearEjecutorEnCola`. */
 export async function ejecutarPropuesta(
   operaciones: Operation[],
   deps: DependenciasEjecucion,
 ): Promise<{ aplicadas: number; error: string | null }> {
-  const grupo = deps.agrupar?.();
-  const { cursor } = deps;
-  let aplicadas = 0;
-
-  try {
-    for (const [indice, operacion] of operaciones.entries()) {
-      if (deps.cancelado?.()) break;
-      const selector = selectorDeBoton(operacion);
-      const boton = cursor && selector ? deps.buscar(selector) : null;
-      if (cursor && boton) {
-        await cursor.mover(boton);
-        await cursor.clic();
-      }
-
-      const aplicarPaso = () => deps.aplicar([operacion], deps.contexto);
-      const resultado = grupo ? grupo.propio(aplicarPaso) : aplicarPaso();
-      if (!resultado.ok) return { aplicadas, error: resultado.error };
-      aplicadas += 1;
-
-      const clase = resultado.clases?.[0];
-      if (clase) {
-        deps.centrar([clase]);
-        deps.resaltar(clase);
-        if (cursor) {
-          await deps.esperar(ESPERA_CAMARA_MS);
-          const nodo = deps.nodo(clase);
-          if (nodo) await cursor.mover(nodo);
-        }
-      }
-
-      if (indice < operaciones.length - 1) await deps.esperar(deps.pausaMs);
-    }
-    return { aplicadas, error: null };
-  } finally {
-    cursor?.ocultar();
-    grupo?.cerrar();
-  }
+  const ejecutor = crearEjecutorEnCola(deps);
+  for (const operacion of operaciones) ejecutor.encolar(operacion);
+  return ejecutor.terminar();
 }

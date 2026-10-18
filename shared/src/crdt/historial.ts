@@ -90,11 +90,16 @@ export interface ContextoCambio {
   propuestoPor?: string;
 }
 
-/** Firma de `aplicar`, compartida por todos los componentes que proponen cambios. */
+/**
+ * Firma de `aplicar`, compartida por todos los componentes que proponen cambios.
+ * `clases` son las clases que tocó el lote (las creadas incluidas), para quien
+ * quiera llevar la vista hasta ellas; es opcional para no obligar a los dobles
+ * de las pruebas ni a otros implementadores a calcularlas.
+ */
 export type Aplicar = (
   operaciones: Operation[],
   contexto?: ContextoCambio,
-) => { ok: true } | { ok: false; error: string };
+) => { ok: true; clases?: string[] } | { ok: false; error: string };
 
 export interface EntradaHistorial {
   id: string;

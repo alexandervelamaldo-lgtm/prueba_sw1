@@ -92,6 +92,7 @@ export const Paleta = memo(function Paleta({
             key={kind}
             type="button"
             className="paleta__boton"
+            data-ia={`addClass:${kind}`}
             disabled={soloLectura}
             onClick={() => onCrear(kind)}
             title={ayuda}
@@ -111,6 +112,7 @@ export const Paleta = memo(function Paleta({
               key={kind}
               type="button"
               className={`paleta__boton${armada ? ' paleta__boton--activo' : ''}`}
+              data-ia={`addRelation:${kind}`}
               disabled={soloLectura}
               aria-pressed={armada}
               onClick={() => onArmarRelacion(kind)}

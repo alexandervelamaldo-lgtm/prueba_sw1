@@ -24,6 +24,7 @@ import {
 import { aBase64, api, deBase64, getToken, urlColaboracion } from '../services/api';
 import { useReconexion } from './useReconexion';
 import { useRespaldo } from './useRespaldo';
+import { crearAgrupadorDeshacer, type GrupoDeshacer } from './deshacer-agrupado';
 
 /**
  * El diagrama, tal y como lo ve la interfaz.
@@ -86,6 +87,8 @@ export interface EstadoDiagrama {
   /** Deshacer y rehacer, limitados a lo que ha hecho este usuario. */
   deshacer: () => void;
   rehacer: () => void;
+  /** Abre un grupo de deshacer; ver `deshacer-agrupado.ts`. */
+  agruparDeshacer: () => GrupoDeshacer;
 }
 
 /**
@@ -116,6 +119,8 @@ export function useDiagrama(proyectoId: string, autor: Autor | null = null): Est
   const [sincronizado, setSincronizado] = useState(false);
   const [provider, setProvider] = useState<CollabProvider | null>(null);
   const undoRef = useRef<Y.UndoManager | null>(null);
+  // Uno por hook y no por render: lleva la cuenta de los grupos abiertos.
+  const agrupadorRef = useRef(crearAgrupadorDeshacer(() => undoRef.current));
 
   // -------------------------------------------------------------------------
   // Documento local: IndexedDB
@@ -351,7 +356,11 @@ export function useDiagrama(proyectoId: string, autor: Autor | null = null): Est
       const previa = componerEntrada({ autor: autorRef.current, origen, operaciones });
       enCurso.current = previa?.resumen ?? null;
 
-      const resultado = applyOperations(doc, operaciones, { origin: ORIGEN_LOCAL });
+      // `ajeno` separa este cambio de un grupo de la IA abierto, salvo que sea
+      // del propio grupo (ver `deshacer-agrupado.ts`).
+      const resultado = agrupadorRef.current.ajeno(() =>
+        applyOperations(doc, operaciones, { origin: ORIGEN_LOCAL }),
+      );
       enCurso.current = null;
       if (!resultado.ok) return { ok: false as const, error: resultado.error };
 
@@ -391,13 +400,16 @@ export function useDiagrama(proyectoId: string, autor: Autor | null = null): Est
         creadas,
       });
 
-      return { ok: true as const };
+      return { ok: true as const, clases };
     },
     [doc],
   );
 
   const deshacer = useCallback(() => undoRef.current?.undo(), []);
   const rehacer = useCallback(() => undoRef.current?.redo(), []);
+  /** Ver `deshacer-agrupado.ts`. Devuelve con qué cerrar el grupo. */
+  /** Ver `deshacer-agrupado.ts`. */
+  const agruparDeshacer = useCallback(() => agrupadorRef.current.abrir(), []);
 
   return {
     diagrama,
@@ -412,5 +424,6 @@ export function useDiagrama(proyectoId: string, autor: Autor | null = null): Est
     aplicar,
     deshacer,
     rehacer,
+    agruparDeshacer,
   };
 }

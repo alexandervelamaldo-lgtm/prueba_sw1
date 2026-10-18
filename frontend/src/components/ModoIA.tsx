@@ -6,14 +6,40 @@ import { dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDictado } f
 import { Icono } from './iconos';
 import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
 import { textoDeRespuesta } from './asistente-voz';
+import { crearCursorIA, nodoDeClase, prefiereMenosMovimiento, resaltarClase } from './cursor-ia';
+import { ejecutarPropuesta, planificarEjecucion } from './ia-ejecucion';
+import type { GrupoDeshacer } from '../hooks/deshacer-agrupado';
+
+/** Pausa entre dos pasos de la IA, para que se vea cada uno. */
+const PAUSA_ENTRE_PASOS_MS = 350;
+const CLAVE_AUTO_APLICAR = 'modo-ia:auto-aplicar';
+
+/** Preferencia de este navegador; si no se puede leer, el valor por defecto (encendido). */
+function leerAutoAplicar(): boolean {
+  try {
+    return localStorage.getItem(CLAVE_AUTO_APLICAR) !== 'no';
+  } catch {
+    return true;
+  }
+}
+
+function guardarAutoAplicar(valor: boolean): void {
+  try {
+    localStorage.setItem(CLAVE_AUTO_APLICAR, valor ? 'si' : 'no');
+  } catch {
+    // Sin almacenamiento solo se pierde recordar la preferencia.
+  }
+}
 
 /**
  * Modo IA: la conversación con memoria del proyecto (RF-IA-01, RF-IA-04), ahora
  * un panel acoplado más en vez de una vista a pantalla completa.
  *
  * Es la misma IA que la burbuja flotante de `Asistente.tsx` —mismo servidor,
- * mismo motor, misma regla de que nunca escribe sola (decisión D6)— vista
- * como una conversación en vez de una orden suelta. La diferencia la hace el
+ * mismo motor— vista como una conversación en vez de una orden suelta. Aquí,
+ * a diferencia de la burbuja, la IA aplica sola lo que no borra nada, con un
+ * cursor que recorre los botones (`ia-ejecucion.ts`); lo que borra algo sigue
+ * pidiendo «Aplicar», como en la decisión D6. La diferencia la hace el
  * servidor, no este componente: `POST /:proyectoId/asistente` carga y guarda
  * el historial del proyecto en cada llamada, así que el modelo ve los turnos
  * anteriores sin que este componente tenga que reenviarlos.
@@ -37,6 +63,10 @@ interface Props {
   aplicar: Aplicar;
   soloLectura: boolean;
   usuario: { id: string; nombre: string };
+  /** Centra la cámara del lienzo en esas clases (`EditorDiagrama`). */
+  centrar?: (ids: string[]) => void;
+  /** Abre un grupo de deshacer; ver `hooks/deshacer-agrupado.ts`. */
+  agruparDeshacer?: () => GrupoDeshacer;
 }
 
 interface Turno {
@@ -51,6 +81,8 @@ interface Turno {
   motor: string | null;
   /** Ver `TurnoAsistente.tipo`: una `'observacion'` es la IA hablando sin que nadie le haya preguntado. */
   tipo: 'respuesta' | 'observacion';
+  /** Lo que la IA ya aplicó sola en este turno, descrito; ver `ia-ejecucion.ts`. */
+  aplicadas?: string[];
 }
 
 let contadorTurno = 0;
@@ -75,8 +107,32 @@ function deTurnoDelServidor(turno: TurnoAsistente): Turno {
 
 const INTERVALO_SONDEO_MS = 8000;
 
-export function ModoIA({ proyecto, diagrama, aplicar, soloLectura, usuario }: Props): JSX.Element {
+export function ModoIA({
+  proyecto,
+  diagrama,
+  aplicar,
+  soloLectura,
+  usuario,
+  centrar,
+  agruparDeshacer,
+}: Props): JSX.Element {
   const [turnos, setTurnos] = useState<Turno[]>([]);
+  const [autoAplicar, setAutoAplicar] = useState(leerAutoAplicar);
+  const [ejecutando, setEjecutando] = useState(false);
+  // Una orden a la vez, desde que sale hasta que la IA termina de aplicarla. El
+  // estado llega tarde para una segunda orden que entra en el mismo instante
+  // (por ejemplo, por voz); la referencia no.
+  const ocupadoRef = useRef(false);
+  // Al cerrar el panel, la IA deja de aplicar en el paso siguiente.
+  const montadoRef = useRef(true);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    montadoRef.current = true;
+    return () => {
+      montadoRef.current = false;
+    };
+  }, []);
   const [cargando, setCargando] = useState(true);
   const [texto, setTexto] = useState('');
   const [enviando, setEnviando] = useState(false);
@@ -175,6 +231,16 @@ export function ModoIA({ proyecto, diagrama, aplicar, soloLectura, usuario }: Pr
   }, [proyecto.id, fusionar]);
 
   const enviar = async (orden: string, porVoz = false): Promise<void> => {
+    if (ocupadoRef.current) return;
+    ocupadoRef.current = true;
+    try {
+      await enviarUnaOrden(orden, porVoz);
+    } finally {
+      ocupadoRef.current = false;
+    }
+  };
+
+  const enviarUnaOrden = async (orden: string, porVoz: boolean): Promise<void> => {
     const limpia = orden.trim();
     if (!limpia) return;
 
@@ -231,16 +297,19 @@ export function ModoIA({ proyecto, diagrama, aplicar, soloLectura, usuario }: Pr
     }
 
     setEnviando(false);
+    const plan = planificarEjecucion(diagrama, propuesta, { autoAplicar, soloLectura });
+    const idRespuesta = idTurno();
     setTurnos((previos) => [
       ...previos,
       {
-        id: idTurno(),
+        id: idRespuesta,
         role: 'assistant',
         texto: explicacion,
         autorId: null,
         autorNombre: null,
         creadoEn: null,
-        propuesta,
+        // Lo que la IA aplica sola no se ofrece además con «Aplicar».
+        propuesta: plan === 'automatico' ? [] : propuesta,
         motor,
         tipo: 'respuesta',
       },
@@ -248,6 +317,52 @@ export function ModoIA({ proyecto, diagrama, aplicar, soloLectura, usuario }: Pr
     // Se habla la respuesta solo si la orden llegó por voz: quien escribió no
     // necesita que el ordenador le lea lo que ya tiene delante.
     if (porVoz) hablar(explicacion);
+    if (plan === 'automatico') await ejecutarSola(idRespuesta, propuesta, motor);
+  };
+
+  /**
+   * La IA aplica sola una propuesta que no borra nada, paso a paso y con el
+   * cursor fantasma; todo queda como un solo paso de deshacer.
+   */
+  const ejecutarSola = async (idRespuesta: string, propuesta: Propuesta[], motor: string | null) => {
+    setEjecutando(true);
+    let aplicadas = 0;
+    let fallo: string | null = null;
+    try {
+      const resultado = await ejecutarPropuesta(propuesta.map((p) => p.operacion), {
+        aplicar,
+        contexto: { origen: 'asistente', ...(motor ? { propuestoPor: motor } : {}) },
+        centrar: centrar ?? (() => {}),
+        resaltar: resaltarClase,
+        buscar: (selector) => document.querySelector(selector),
+        nodo: nodoDeClase,
+        cursor: prefiereMenosMovimiento() ? null : crearCursorIA(panelRef.current),
+        pausaMs: PAUSA_ENTRE_PASOS_MS,
+        esperar: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        ...(agruparDeshacer ? { agrupar: agruparDeshacer } : {}),
+        cancelado: () => !montadoRef.current,
+      });
+      aplicadas = resultado.aplicadas;
+      fallo = resultado.error;
+    } catch (error) {
+      fallo = error instanceof Error ? error.message : 'error inesperado';
+    } finally {
+      setEjecutando(false);
+    }
+    if (!montadoRef.current) return;
+    setTurnos((previos) =>
+      previos.map((t) =>
+        t.id === idRespuesta
+          ? { ...t, aplicadas: propuesta.slice(0, aplicadas).map((p) => p.descripcion) }
+          : t,
+      ),
+    );
+    if (fallo) setError(`La IA se detuvo en el paso ${aplicadas + 1}: ${fallo}`);
+  };
+
+  const cambiarAutoAplicar = (valor: boolean): void => {
+    setAutoAplicar(valor);
+    guardarAutoAplicar(valor);
   };
 
   const alternarMicrofono = (): void => {
@@ -275,14 +390,24 @@ export function ModoIA({ proyecto, diagrama, aplicar, soloLectura, usuario }: Pr
   };
 
   return (
-    <div className="modo-ia">
+    <div className="modo-ia" ref={panelRef}>
       <p className="modo-ia__resumen">
         <span className="modo-ia__insignia" aria-hidden="true">
           IA
         </span>{' '}
         Su conversación privada con la IA sobre <code>{proyecto.name}</code>: el resto del equipo no
-        la ve. Cada propuesta sigue pidiendo su «Aplicar»: nada se escribe solo.
+        la ve.
       </p>
+      <label className="modo-ia__auto">
+        <input
+          type="checkbox"
+          checked={autoAplicar}
+          disabled={soloLectura}
+          onChange={(evento) => cambiarAutoAplicar(evento.target.checked)}
+        />{' '}
+        La IA aplica sola los cambios. Lo que borra algo sigue pidiendo «Aplicar», y cada respuesta se
+        deshace de una vez.
+      </label>
 
       <div className="modo-ia__transcripcion" role="log">
         {cargando && <p className="modo-ia__vacio">Cargando la conversación…</p>}
@@ -312,6 +437,15 @@ export function ModoIA({ proyecto, diagrama, aplicar, soloLectura, usuario }: Pr
               </p>
             )}
             <p className="modo-ia__burbuja">{turno.texto}</p>
+            {turno.aplicadas && turno.aplicadas.length > 0 && (
+              <ul className="modo-ia__aplicadas" aria-label="Cambios que aplicó la IA">
+                {turno.aplicadas.map((descripcion, indice) => (
+                  <li key={indice}>
+                    <Icono nombre="revisar" /> {descripcion}
+                  </li>
+                ))}
+              </ul>
+            )}
             {turno.role === 'assistant' && turno.propuesta.length > 0 && (
               <PropuestaOperaciones
                 propuestas={turno.propuesta}
@@ -346,14 +480,14 @@ export function ModoIA({ proyecto, diagrama, aplicar, soloLectura, usuario }: Pr
       >
         <input
           value={texto}
-          disabled={soloLectura || enviando}
+          disabled={soloLectura || enviando || ejecutando}
           placeholder="crea la clase Pedido con el atributo total de tipo Double"
           onChange={(evento) => setTexto(evento.target.value)}
         />
         <button
           type="button"
           className={`boton-microfono${escuchando ? ' boton-microfono--activo' : ''}`}
-          disabled={soloLectura || !hayDictado}
+          disabled={soloLectura || !hayDictado || ejecutando}
           title={hayDictado ? 'Dictar un mensaje' : motivoSinVoz()}
           aria-label={escuchando ? 'Detener el dictado' : 'Dictar un mensaje'}
           aria-pressed={escuchando}
@@ -362,7 +496,7 @@ export function ModoIA({ proyecto, diagrama, aplicar, soloLectura, usuario }: Pr
           <Icono nombre="microfono" />
           {escuchando && <span className="boton-microfono__estado">Grabando</span>}
         </button>
-        <button type="submit" disabled={soloLectura || enviando || !texto.trim()}>
+        <button type="submit" disabled={soloLectura || enviando || ejecutando || !texto.trim()}>
           {enviando ? '…' : 'Enviar'}
         </button>
       </form>

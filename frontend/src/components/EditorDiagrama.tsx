@@ -917,6 +917,8 @@ export function EditorDiagrama({
                     aplicar={aplicar}
                     soloLectura={soloLectura}
                     usuario={autor}
+                    centrar={centrar}
+                    agruparDeshacer={estado.agruparDeshacer}
                   />
                 ) : null,
             },

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createClass, createDiagram, withClass, type ClassDiagram, type Operation } from '@app/shared';
 import {
+  clasesPorNombre,
   crearEjecutorEnCola,
   ejecutarPropuesta,
   planificarEjecucion,
@@ -299,5 +300,15 @@ describe('crearEjecutorEnCola (operaciones que llegan por el stream)', () => {
 
     expect(resultado).toEqual({ aplicadas: 0, error: 'no se pudo' });
     expect(registro.filter((r) => r.startsWith('aplicar'))).toHaveLength(1);
+  });
+});
+
+describe('clasesPorNombre', () => {
+  it('traduce los nombres que señala la IA a ids de clase, sin distinguir mayúsculas', () => {
+    expect(clasesPorNombre(diagramaConCliente(), ['cliente'])).toEqual(['C1']);
+  });
+
+  it('ignora los nombres que no están en el diagrama', () => {
+    expect(clasesPorNombre(diagramaConCliente(), ['Inventada', 'Cliente'])).toEqual(['C1']);
   });
 });

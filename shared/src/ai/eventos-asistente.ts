@@ -14,6 +14,7 @@ import type { Operation } from '../ops/operations.js';
  * - `mensaje`: un mensaje ya completo. Es lo que se habla.
  * - `operacion`: una operación completa y validada, con su descripción legible
  *   calculada en el servidor (nunca la escribe el modelo).
+ * - `senalar`: la IA señala esas clases del lienzo, por nombre, sin cambiarlas.
  * - `fin`: el modelo terminó. Siempre es el último evento de una respuesta sana.
  * - `error`: algo falló a mitad. Lo ya enviado sigue valiendo; no llega `fin`.
  *
@@ -23,10 +24,18 @@ export type EventoAsistente =
   | { tipo: 'mensaje-parcial'; texto: string }
   | { tipo: 'mensaje'; texto: string }
   | { tipo: 'operacion'; operacion: Operation; descripcion: string }
+  | { tipo: 'senalar'; clases: string[] }
   | { tipo: 'fin'; motor: string; confianza: number }
   | { tipo: 'error'; mensaje: string };
 
-const TIPOS = new Set<EventoAsistente['tipo']>(['mensaje-parcial', 'mensaje', 'operacion', 'fin', 'error']);
+const TIPOS = new Set<EventoAsistente['tipo']>([
+  'mensaje-parcial',
+  'mensaje',
+  'operacion',
+  'senalar',
+  'fin',
+  'error',
+]);
 
 /** Un evento como bloque SSE: una sola línea `data` (JSON no lleva saltos de línea sin escapar). */
 export function formatearEventoSse(evento: EventoAsistente): string {

@@ -6,7 +6,7 @@ import { dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDictado } f
 import { Icono } from './iconos';
 import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
 import { crearCursorIA, nodoDeClase, prefiereMenosMovimiento, resaltarClase } from './cursor-ia';
-import { crearEjecutorEnCola } from './ia-ejecucion';
+import { clasesPorNombre, crearEjecutorEnCola } from './ia-ejecucion';
 import { crearColaDeVoz } from './cola-voz';
 import { crearManejadorDeStream, type EstadoRespuesta } from './respuesta-en-stream';
 import type { GrupoDeshacer } from '../hooks/deshacer-agrupado';
@@ -314,6 +314,12 @@ export function ModoIA({
           avisos,
         ),
       voz: porVoz ? crearColaDeVoz(hablar) : null,
+      senalar: (nombres) => {
+        const ids = clasesPorNombre(diagramaRef.current, nombres);
+        if (ids.length === 0) return;
+        centrar?.(ids);
+        ids.forEach(resaltarClase);
+      },
       alCambiar: (estado) => {
         ultimo = estado;
         if (!montadoRef.current) return;

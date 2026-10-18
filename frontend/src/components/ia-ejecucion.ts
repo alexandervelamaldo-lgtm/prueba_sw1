@@ -187,3 +187,15 @@ export async function ejecutarPropuesta(
   for (const operacion of operaciones) ejecutor.encolar(operacion);
   return ejecutor.terminar();
 }
+
+/**
+ * Las clases que señala la IA (`point`, por nombre) como ids del lienzo. El
+ * modelo copia los nombres del resumen del diagrama, pero a veces cambia una
+ * mayúscula; lo que no está en el diagrama se ignora.
+ */
+export function clasesPorNombre(diagrama: ClassDiagram, nombres: string[]): string[] {
+  const buscados = new Set(nombres.map((nombre) => nombre.trim().toLowerCase()));
+  return Object.values(diagrama.classes)
+    .filter((clase) => buscados.has(clase.name.toLowerCase()))
+    .map((clase) => clase.id);
+}

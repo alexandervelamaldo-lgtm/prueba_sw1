@@ -115,6 +115,7 @@ Cada acción es uno de estos objetos, y "_type" va siempre primero:
 - {"_type":"think","text":"..."}: razonamiento breve para ti; el usuario no lo ve.
 - {"_type":"message","text":"..."}: lo que le dices al usuario. Una o dos frases.
 - {"_type":"operation","operation":{...}}: un cambio en el diagrama.
+- {"_type":"point","classes":["Nombre"]}: señala esas clases en el lienzo, por su nombre exacto, sin cambiarlas. Úsalo cuando hables de clases concretas («esta clase de aquí»), justo antes del mensaje que las menciona.
 
 Las acciones se ejecutan en el orden en que las escribes. Intercala mensajes y operaciones como lo haría alguien que narra lo que va haciendo ("Creo Cliente y Pedido." → operaciones → "Listo, ¿les agrego atributos?"). Toda respuesta lleva al menos un "message". Si solo te preguntan o te piden opinión, responde solo con mensajes, sin operaciones.
 
@@ -263,6 +264,7 @@ export class LlmAssistant implements AssistantEngine {
       const accion = validada.data;
       if (accion._type === 'think') return null;
       if (accion._type === 'message') return { tipo: 'mensaje', texto: accion.text };
+      if (accion._type === 'point') return { tipo: 'senalar', clases: accion.classes };
       return { tipo: 'operacion', operacion: accion.operation, descripcion: describeOperation(accion.operation) };
     };
 

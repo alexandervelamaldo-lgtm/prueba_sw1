@@ -49,6 +49,8 @@ export function crearManejadorDeStream(opciones: {
   /** `null` si la orden fue escrita: entonces no se habla. */
   voz: { decir(texto: string): void; terminar(): void } | null;
   alCambiar(estado: EstadoRespuesta): void;
+  /** La IA señala esas clases (por nombre); ver `EventoAsistente`. */
+  senalar?(clases: string[]): void;
 }): { alEvento(evento: EventoAsistente): void; terminar(): Promise<{ aplicadas: number; error: string | null }> } {
   const completos: string[] = [];
   let parcial = '';
@@ -116,6 +118,9 @@ export function crearManejadorDeStream(opciones: {
           encoladas += 1;
           ejecutor.encolar(evento.operacion);
         }
+        break;
+      case 'senalar':
+        opciones.senalar?.(evento.clases);
         break;
       case 'fin':
         motor = evento.motor;

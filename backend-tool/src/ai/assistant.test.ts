@@ -289,6 +289,31 @@ describe('LlmAssistant contra un proveedor simulado', () => {
     expect(respuesta.explanation).not.toBe('Creo la clase.');
   });
 
+  it('señalar clases no cambia la respuesta de siempre: ni operaciones ni explicación', async () => {
+    responder = () => ({
+      status: 200,
+      payload: comoOpenAi(
+        JSON.stringify({
+          actions: [
+            { _type: 'point', classes: ['Cliente'] },
+            { _type: 'message', text: 'Esta es la clase Cliente.' },
+          ],
+        }),
+      ),
+    });
+
+    const respuesta = await motor().interpret('¿cuál es Cliente?', diagrama);
+
+    expect(respuesta.operations).toEqual([]);
+    expect(respuesta.explanation).toBe('Esta es la clase Cliente.');
+  });
+
+  it('el prompt explica la acción de señalar', async () => {
+    await motor().interpret('hola', diagrama);
+    const sistema = (recibidos[0]?.messages as { role: string; content: string }[])[0];
+    expect(sistema?.content).toContain('"point"');
+  });
+
   it('usa el protocolo de Anthropic cuando se le pide', async () => {
     responder = () => ({
       status: 200,
@@ -465,6 +490,24 @@ describe('LlmAssistant.interpretarEnStream contra un proveedor simulado', () => 
     })();
 
     await expect(resultado).rejects.toThrow(/dejó de responder|no respondió/);
+  });
+
+  it('envía la acción de señalar clases como evento senalar, en su orden', async () => {
+    const json = JSON.stringify({
+      actions: [
+        { _type: 'point', classes: ['Cliente'] },
+        { _type: 'message', text: 'A esta clase le falta un email.' },
+      ],
+    });
+    bloquesSse = [`data: ${JSON.stringify({ choices: [{ delta: { content: json } }] })}\n\n`, 'data: [DONE]\n\n'];
+
+    const eventos: EventoAsistente[] = [];
+    for await (const evento of motor().interpretarEnStream('¿qué le falta?', diagrama)) eventos.push(evento);
+
+    expect(eventos.filter((e) => e.tipo === 'senalar' || e.tipo === 'mensaje')).toEqual([
+      { tipo: 'senalar', clases: ['Cliente'] },
+      { tipo: 'mensaje', texto: 'A esta clase le falta un email.' },
+    ]);
   });
 
   it('propaga la cancelación externa en vez de degradar a la gramática', async () => {

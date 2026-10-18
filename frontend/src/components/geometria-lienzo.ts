@@ -338,3 +338,15 @@ export function puntoMedioRelacion(
   const hasta = anclaje(destino, medidaDestino, control);
   return puntoEnCurva(desde, control, hasta, 0.5);
 }
+
+/**
+ * Hasta dónde puede acercar «centrar» (el árbol del proyecto, el Modo IA).
+ *
+ * `fitView` sobre una sola clase la encuadra hasta llenar la pantalla, que con
+ * una caja pequeña es un 300 %: se pierde todo lo de alrededor. Centrar no
+ * acerca más allá del tamaño real (100 %), pero tampoco aleja a quien ya
+ * estaba mirando de cerca.
+ */
+export function zoomMaximoAlCentrar(zoomActual: number): number {
+  return Math.max(1, zoomActual);
+}

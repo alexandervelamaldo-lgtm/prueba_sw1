@@ -20,6 +20,7 @@ function preparar(
   const porAplicar: Operation[] = [];
   const dichas: string[] = [];
   const estados: EstadoRespuesta[] = [];
+  const senaladas: string[][] = [];
   let alAplicar: ((operacion: Operation) => void) | undefined;
   const manejador = crearManejadorDeStream({
     diagrama: () => diagrama,
@@ -41,6 +42,7 @@ function preparar(
         ? null
         : { decir: (texto) => dichas.push(texto), terminar: () => dichas.push('<fin>') },
     alCambiar: (estado) => estados.push(estado),
+    senalar: (clases) => senaladas.push(clases),
   });
   const enviar = (...eventos: EventoAsistente[]): void => eventos.forEach((e) => manejador.alEvento(e));
   const ultimo = (): EstadoRespuesta => estados.at(-1)!;
@@ -49,7 +51,7 @@ function preparar(
     const operacion = porAplicar.shift();
     if (operacion) alAplicar?.(operacion);
   };
-  return { manejador, enviar, encoladas, dichas, ultimo, aplicarSiguiente };
+  return { manejador, enviar, encoladas, dichas, ultimo, aplicarSiguiente, senaladas };
 }
 
 const op = (operacion: Operation): EventoAsistente => ({ tipo: 'operacion', operacion, descripcion: `desc ${operacion.op}` });
@@ -190,5 +192,25 @@ describe('crearManejadorDeStream, narración en orden', () => {
     await manejador.terminar();
 
     expect(ultimo()).toMatchObject({ texto: 'Listo.', terminado: true });
+  });
+});
+
+describe('crearManejadorDeStream, señalar clases', () => {
+  it('señala las clases que nombra la IA', () => {
+    const { enviar, senaladas } = preparar();
+
+    enviar({ tipo: 'senalar', clases: ['Cliente'] });
+
+    expect(senaladas).toEqual([['Cliente']]);
+  });
+
+  it('señalar respeta el orden de la narración: espera a la operación anterior', () => {
+    const { enviar, senaladas, aplicarSiguiente } = preparar({ aplicarAMano: true });
+
+    enviar(op(crearPedido), { tipo: 'senalar', clases: ['Pedido'] });
+    expect(senaladas).toEqual([]);
+
+    aplicarSiguiente();
+    expect(senaladas).toEqual([['Pedido']]);
   });
 });

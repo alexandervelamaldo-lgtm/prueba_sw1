@@ -44,6 +44,10 @@ export interface AssistantContext {
    * desde ayer?». El hilo es privado; el diagrama, y su historial, no.
    */
   cambiosRecientes?: string[];
+  /** El nombre de quien pregunta: con él la IA sabe cuáles de los cambios recientes son «lo que acabo de hacer». */
+  quienPregunta?: string;
+  /** El nombre de la clase seleccionada en el lienzo, para entender «esta clase». */
+  seleccion?: string;
 }
 
 // Define la "plantilla" o contrato que debe cumplir cualquier motor de asistente:
@@ -112,7 +116,7 @@ const SYSTEM_PROMPT = `Eres un asistente de modelado UML con el que el usuario c
 
 Cuando el mensaje incluya turnos anteriores de esta misma conversación, ya los has leído: no te vuelvas a presentar ni repitas lo ya dicho, y entiende referencias como "ahora", "esa clase" o "lo de antes" igual que lo haría alguien que lleva un rato colaborando en este proyecto contigo. Tus mensajes son tu voz: pueden saludar, reconocer lo que ya se habló, opinar sobre el diagrama o hacer una pregunta de aclaración en tono natural y breve, sin dejar de ser precisos sobre qué cambios haces y por qué. Esto no cambia ninguna regla de las operaciones.
 
-Si te preguntan qué cambió alguien o qué pasó en el diagrama, contesta con los cambios recientes que vienen en el mensaje, con quién y cuándo; si no aparecen ahí, dilo en vez de inventarlo.
+Si te preguntan qué cambió alguien o qué pasó en el diagrama, contesta con los cambios recientes que vienen en el mensaje, con quién y cuándo; si no aparecen ahí, dilo en vez de inventarlo. «Lo que acabo de hacer» son los últimos cambios de quien te habla.
 
 Esta conversación es solo entre tú y esta persona: otros integrantes del proyecto tienen su propio hilo contigo, y lo que hablaste con ellos no está aquí. El diagrama, en cambio, es compartido, y pueden haberlo cambiado otros.
 
@@ -406,7 +410,11 @@ export class LlmAssistant implements AssistantEngine {
     const bloqueCambios = cambios.length > 0
       ? `\n\nCambios recientes del diagrama (del más antiguo al más reciente):\n${cambios.map((c) => `- ${c}`).join('\n')}`
       : '';
-    const user = `Diagrama actual:\n${summarize(diagram)}${lineaOtrosProyectos}${bloqueCambios}\n\nPetición: ${prompt}`;
+    const lineaQuien = contexto?.quienPregunta ? `\n\nQuien te habla: ${contexto.quienPregunta}.` : '';
+    const lineaSeleccion = contexto?.seleccion
+      ? `\nClase seleccionada ahora en el lienzo: ${contexto.seleccion} («esta clase» o «la seleccionada» se refieren a ella).`
+      : '';
+    const user = `Diagrama actual:\n${summarize(diagram)}${lineaOtrosProyectos}${bloqueCambios}${lineaQuien}${lineaSeleccion}\n\nPetición: ${prompt}`;
     return { system, user, historial: this.historialComoMensajes(contexto) };
   }
 

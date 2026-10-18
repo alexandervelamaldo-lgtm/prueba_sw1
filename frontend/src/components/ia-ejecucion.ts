@@ -105,7 +105,7 @@ const ESPERA_CAMARA_MS = 260;
  */
 export function crearEjecutorEnCola(
   deps: DependenciasEjecucion,
-  avisos: { alAplicar?(operacion: Operation): void } = {},
+  avisos: { alAplicar?(operacion: Operation, clases: string[]): void } = {},
 ): { encolar(operacion: Operation): void; terminar(): Promise<{ aplicadas: number; error: string | null }> } {
   const { cursor } = deps;
   let grupo: GrupoDeshacer | undefined;
@@ -139,7 +139,7 @@ export function crearEjecutorEnCola(
       return;
     }
     aplicadas += 1;
-    avisos.alAplicar?.(operacion);
+    avisos.alAplicar?.(operacion, resultado.clases ?? []);
 
     const clase = resultado.clases?.[0];
     if (clase) {
@@ -198,4 +198,72 @@ export function clasesPorNombre(diagrama: ClassDiagram, nombres: string[]): stri
   return Object.values(diagrama.classes)
     .filter((clase) => buscados.has(clase.name.toLowerCase()))
     .map((clase) => clase.id);
+}
+
+export interface MarcasDeBorrado {
+  clases: string[];
+  relaciones: string[];
+}
+
+/** La clase a la que apunta una referencia por id o por nombre, si existe. */
+function idDeClase(diagrama: ClassDiagram, ref: { id: string } | { name: string }): string | null {
+  if ('id' in ref) return diagrama.classes[ref.id] ? ref.id : null;
+  return Object.values(diagrama.classes).find((clase) => clase.name === ref.name)?.id ?? null;
+}
+
+/**
+ * Qué marcar en el lienzo mientras una propuesta destructiva espera su
+ * «Aplicar» (vista previa fantasma): las clases que desaparecen o pierden
+ * algo, y las relaciones que se van con ellas. Se calcula sobre el diagrama de
+ * verdad, igual que `describeBatchImpact`, porque la misma orden se lleva cosas
+ * distintas según lo que haya.
+ */
+export function marcasDeBorrado(diagrama: ClassDiagram, operaciones: Operation[]): MarcasDeBorrado {
+  const clases = new Set<string>();
+  const relaciones = new Set<string>();
+  for (const operacion of operaciones) {
+    if (!isDestructiveOperation(operacion)) continue;
+    switch (operacion.op) {
+      case 'removeClass': {
+        const id = idDeClase(diagrama, operacion.ref);
+        if (!id) break;
+        clases.add(id);
+        for (const relacion of Object.values(diagrama.relations)) {
+          if (relacion.source.classId === id || relacion.target.classId === id) relaciones.add(relacion.id);
+        }
+        break;
+      }
+      case 'removeRelation':
+        if (diagrama.relations[operacion.id]) relaciones.add(operacion.id);
+        break;
+      case 'removeAttribute':
+      case 'removeMethod':
+      case 'removeSeedRow':
+      case 'setSeedRows': {
+        const id = idDeClase(diagrama, operacion.classRef);
+        if (id) clases.add(id);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return { clases: [...clases], relaciones: [...relaciones] };
+}
+
+/**
+ * Avisos para cuando la IA toca una clase que otra persona tiene seleccionada
+ * en ese momento (la presencia de Yjs, `usePresencia`). No se bloquea nada: el
+ * CRDT funde los dos cambios sin perder ninguno, pero quien edita a mano puede
+ * encontrarse la clase distinta de como la dejó, y mejor saberlo.
+ */
+export function avisosDeConflicto(
+  diagrama: ClassDiagram,
+  clases: string[],
+  participantes: { nombre: string; seleccion: string | null }[],
+): string[] {
+  const tocadas = new Set(clases);
+  return participantes
+    .filter((p) => p.seleccion !== null && tocadas.has(p.seleccion))
+    .map((p) => `Ojo: ${p.nombre} está editando «${diagrama.classes[p.seleccion!]?.name ?? 'una clase'}».`);
 }

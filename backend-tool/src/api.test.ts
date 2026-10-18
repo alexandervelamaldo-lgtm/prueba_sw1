@@ -848,6 +848,50 @@ describe('asistente', () => {
     ]);
   });
 
+  it('la clase seleccionada viaja por id y llega al motor con su nombre; quien pregunta, por la sesión', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/diagrama/operaciones`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ operaciones: [{ op: 'addClass', name: 'Factura', kind: 'class' }] });
+    const diagrama = await request(app)
+      .get(`/api/proyectos/${proyectoId}/diagrama`)
+      .set('Authorization', `Bearer ${token}`);
+    const idFactura = Object.values(diagrama.body.diagrama.classes as Record<string, { id: string; name: string }>).find(
+      (c) => c.name === 'Factura',
+    )!.id;
+    const contextos: unknown[] = [];
+    const fake: AssistantEngine = {
+      name: 'motor-prueba',
+      interpret: async () => ({ operations: [], confidence: 1, clarification: null, explanation: '' }),
+      revisar: async () => null,
+      async *interpretarEnStream(_prompt, _diagram, contexto): AsyncGenerator<EventoAsistente> {
+        contextos.push(contexto);
+        yield { tipo: 'fin', motor: 'motor-prueba', confianza: 1 };
+      },
+    };
+    app = createApp({ ...deps, assistant: fake }).app;
+    const enviar = (cuerpo: Record<string, unknown>) =>
+      request(app)
+        .post(`/api/proyectos/${proyectoId}/asistente/stream`)
+        .set('Authorization', `Bearer ${token}`)
+        .send(cuerpo)
+        .buffer(true)
+        .parse((res, callback) => {
+          let texto = '';
+          res.setEncoding('utf8');
+          res.on('data', (trozo) => (texto += trozo));
+          res.on('end', () => callback(null, texto));
+        });
+
+    await enviar({ texto: 'hola', seleccion: idFactura });
+    await enviar({ texto: 'hola', seleccion: 'no-existe' });
+
+    expect(contextos[0]).toMatchObject({ seleccion: 'Factura', quienPregunta: 'ana' });
+    expect((contextos[1] as { seleccion?: string }).seleccion).toBeUndefined();
+  });
+
   it('envía mensajes, operaciones y el cierre en orden, calcula la descripción y guarda un único turno', async () => {
     const token = await registrar('ana@ejemplo.com');
     const proyectoId = await crearProyecto(token);

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createClass, createDiagram, withClass, type ClassDiagram, type Operation } from '@app/shared';
 import {
+  avisosDeConflicto,
+  marcasDeBorrado,
   clasesPorNombre,
   crearEjecutorEnCola,
   ejecutarPropuesta,
@@ -310,5 +312,74 @@ describe('clasesPorNombre', () => {
 
   it('ignora los nombres que no están en el diagrama', () => {
     expect(clasesPorNombre(diagramaConCliente(), ['Inventada', 'Cliente'])).toEqual(['C1']);
+  });
+});
+
+describe('marcasDeBorrado (vista previa de lo que se perdería)', () => {
+  function conRelacion(): ClassDiagram {
+    const base = withClass(diagramaConCliente(), createClass({ id: 'C2', name: 'Pedido' }));
+    return {
+      ...base,
+      relations: {
+        R1: {
+          id: 'R1',
+          kind: 'association',
+          source: { classId: 'C1', multiplicity: '1' },
+          target: { classId: 'C2', multiplicity: '*' },
+        } as ClassDiagram['relations'][string],
+      },
+    };
+  }
+
+  it('borrar una clase marca la clase y las relaciones que la tocan', () => {
+    expect(marcasDeBorrado(conRelacion(), [{ op: 'removeClass', ref: { name: 'Cliente' } }])).toEqual({
+      clases: ['C1'],
+      relaciones: ['R1'],
+    });
+  });
+
+  it('borrar una relación marca solo la relación', () => {
+    expect(marcasDeBorrado(conRelacion(), [{ op: 'removeRelation', id: 'R1' }])).toEqual({
+      clases: [],
+      relaciones: ['R1'],
+    });
+  });
+
+  it('quitar un atributo marca la clase que lo pierde', () => {
+    expect(
+      marcasDeBorrado(conRelacion(), [{ op: 'removeAttribute', classRef: { id: 'C2' }, attributeName: 'total' }]),
+    ).toEqual({ clases: ['C2'], relaciones: [] });
+  });
+
+  it('lo que no borra nada no marca nada', () => {
+    expect(marcasDeBorrado(conRelacion(), [crearPedido, atributoEmail])).toEqual({ clases: [], relaciones: [] });
+  });
+});
+
+describe('avisosDeConflicto', () => {
+  const beto = { clientId: 2, nombre: 'Beto', color: '#f00', cursor: null, seleccion: 'C1' };
+  const carla = { clientId: 3, nombre: 'Carla', color: '#0f0', cursor: null, seleccion: null };
+
+  it('avisa si la IA tocó una clase que otra persona tiene seleccionada', () => {
+    expect(avisosDeConflicto(diagramaConCliente(), ['C1'], [beto, carla])).toEqual([
+      'Ojo: Beto está editando «Cliente».',
+    ]);
+  });
+
+  it('sin nadie en esas clases no hay aviso', () => {
+    expect(avisosDeConflicto(diagramaConCliente(), ['C9'], [beto, carla])).toEqual([]);
+  });
+});
+
+describe('crearEjecutorEnCola avisa de las clases que tocó cada paso', () => {
+  it('alAplicar recibe la operación y las clases que tocó', async () => {
+    const { deps } = dobles({ conCursor: false });
+    const vistas: string[][] = [];
+    const ejecutor = crearEjecutorEnCola(deps, { alAplicar: (_operacion, clases) => vistas.push(clases) });
+
+    ejecutor.encolar(crearPedido);
+    await ejecutor.terminar();
+
+    expect(vistas).toEqual([['clase-1']]);
   });
 });

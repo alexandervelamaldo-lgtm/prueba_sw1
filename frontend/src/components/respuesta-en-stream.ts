@@ -35,6 +35,8 @@ export interface EstadoRespuesta {
   error: string | null;
   /** La IA pidió repasar lo hecho; ver `debeRepasar`. */
   repasar: boolean;
+  /** Clases que la IA tocó mientras otra persona las editaba; ver `avisosDeConflicto`. */
+  conflictos: string[];
 }
 
 interface Ejecutor {
@@ -47,12 +49,14 @@ export function crearManejadorDeStream(opciones: {
   diagrama: () => ClassDiagram;
   autoAplicar: boolean;
   soloLectura: boolean;
-  crearEjecutor(avisos: { alAplicar(operacion: Operation): void }): Ejecutor;
+  crearEjecutor(avisos: { alAplicar(operacion: Operation, clases: string[]): void }): Ejecutor;
   /** `null` si la orden fue escrita: entonces no se habla. */
   voz: { decir(texto: string): void; terminar(): void } | null;
   alCambiar(estado: EstadoRespuesta): void;
   /** La IA señala esas clases (por nombre); ver `EventoAsistente`. */
   senalar?(clases: string[]): void;
+  /** Avisos por las clases que tocó un paso aplicado, si otra persona las edita. */
+  conflictos?(clases: string[]): string[];
 }): { alEvento(evento: EventoAsistente): void; terminar(): Promise<{ aplicadas: number; error: string | null }> } {
   const completos: string[] = [];
   let parcial = '';
@@ -63,6 +67,7 @@ export function crearManejadorDeStream(opciones: {
   let terminado = false;
   let error: string | null = null;
   let repasar = false;
+  const conflictos: string[] = [];
   let retener = !opciones.autoAplicar || opciones.soloLectura;
   let huboOperaciones = false;
   // Cuántas operaciones se mandaron al ejecutor y cuántas ya terminó, y los
@@ -77,8 +82,11 @@ export function crearManejadorDeStream(opciones: {
   };
 
   const ejecutor = opciones.crearEjecutor({
-    alAplicar: (operacion) => {
+    alAplicar: (operacion, clases) => {
       aplicadas.push(descripciones.get(operacion) ?? operacion.op);
+      for (const aviso of opciones.conflictos?.(clases) ?? []) {
+        if (!conflictos.includes(aviso)) conflictos.push(aviso);
+      }
       avisar();
       soltar(false);
     },
@@ -95,6 +103,7 @@ export function crearManejadorDeStream(opciones: {
       terminado,
       error,
       repasar,
+      conflictos: [...conflictos],
     });
   }
 

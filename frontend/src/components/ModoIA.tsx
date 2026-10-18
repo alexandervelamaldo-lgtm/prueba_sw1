@@ -2,18 +2,23 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { describeOperation, interpretCommand, type Aplicar, type ClassDiagram } from '@app/shared';
 import { ApiError, api, type Proyecto, type TurnoAsistente } from '../services/api';
 import { puntuarPorVocabulario } from '../services/dictado';
-import { dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDictado } from '../services/voz';
+import { callar, dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDictado } from '../services/voz';
 import { Icono } from './iconos';
 import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
 import { crearCursorIA, nodoDeClase, prefiereMenosMovimiento, resaltarClase } from './cursor-ia';
-import { crearEjecutorEnCola } from './ia-ejecucion';
+import { clasesPorNombre, crearEjecutorEnCola } from './ia-ejecucion';
 import { crearColaDeVoz } from './cola-voz';
-import { crearManejadorDeStream, type EstadoRespuesta } from './respuesta-en-stream';
+import { crearManejadorDeStream, debeRepasar, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
 import type { GrupoDeshacer } from '../hooks/deshacer-agrupado';
 
 /** Pausa entre dos pasos de la IA, para que se vea cada uno. */
 const PAUSA_ENTRE_PASOS_MS = 350;
 const CLAVE_AUTO_APLICAR = 'modo-ia:auto-aplicar';
+/** Lo que se le pide a la IA cuando quiso repasar lo hecho (`debeRepasar`). */
+const PETICION_DE_REPASO =
+  'Repasa los cambios que acabas de hacer con el diagrama actual: si falta algo de lo que te pedí o hay un error, corrígelo; si está bien, dilo en una frase. No pidas otro repaso.';
+/** Lo que se espera antes del repaso, para que el servidor ya tenga el diagrama aplicado. */
+const ESPERA_ANTES_DE_REPASAR_MS = 1200;
 
 /** Preferencia de este navegador; si no se puede leer, el valor por defecto (encendido). */
 function leerAutoAplicar(): boolean {
@@ -86,6 +91,10 @@ interface Turno {
   aplicadas?: string[];
   /** La IA todavía está escribiendo esta respuesta. */
   escribiendo?: boolean;
+  /** Ya se publicó en el tablón del proyecto. */
+  compartido?: boolean;
+  /** Lo pidió el propio Modo IA (un repaso), no la persona. */
+  automatico?: boolean;
 }
 
 let contadorTurno = 0;
@@ -122,10 +131,14 @@ export function ModoIA({
   const [turnos, setTurnos] = useState<Turno[]>([]);
   const [autoAplicar, setAutoAplicar] = useState(leerAutoAplicar);
   const [ejecutando, setEjecutando] = useState(false);
-  // Una orden a la vez, desde que sale hasta que la IA termina de aplicarla. El
-  // estado llega tarde para una segunda orden que entra en el mismo instante
-  // (por ejemplo, por voz); la referencia no.
-  const ocupadoRef = useRef(false);
+  // Una orden a la vez, desde que sale hasta que la IA termina de aplicarla: la
+  // siguiente espera a que esta termine (o se interrumpa). El estado llegaría
+  // tarde para una orden que entra en el mismo instante (por voz); la
+  // referencia no.
+  const ordenEnCursoRef = useRef<Promise<void> | null>(null);
+  // El micrófono pulsado mientras la IA responde: calla, corta y deja de aplicar.
+  const interrumpidoRef = useRef(false);
+  const colaVozRef = useRef<ReturnType<typeof crearColaDeVoz> | null>(null);
   // Al cerrar el panel, la IA deja de aplicar en el paso siguiente.
   const montadoRef = useRef(true);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -239,20 +252,45 @@ export function ModoIA({
     };
   }, [proyecto.id, fusionar]);
 
-  const enviar = async (orden: string, porVoz = false): Promise<void> => {
-    if (ocupadoRef.current) return;
-    ocupadoRef.current = true;
+  const enviar = async (orden: string, porVoz = false, revision = false): Promise<void> => {
+    while (ordenEnCursoRef.current) await ordenEnCursoRef.current;
+    const enCurso = enviarUnaOrden(orden, porVoz, revision);
+    ordenEnCursoRef.current = enCurso;
     try {
-      await enviarUnaOrden(orden, porVoz);
+      await enCurso;
     } finally {
-      ocupadoRef.current = false;
+      if (ordenEnCursoRef.current === enCurso) ordenEnCursoRef.current = null;
     }
   };
 
-  const enviarUnaOrden = async (orden: string, porVoz: boolean): Promise<void> => {
+  /**
+   * Corta la respuesta en curso: la voz se calla al momento, lo que quedaba
+   * por decir se descarta, el stream se cierra y el ejecutor no aplica el paso
+   * siguiente. Lo ya aplicado se queda (se deshace de una vez, como siempre).
+   */
+  const interrumpir = (): void => {
+    if (!ordenEnCursoRef.current) return;
+    interrumpidoRef.current = true;
+    colaVozRef.current?.vaciar();
+    callar();
+    abortarRef.current?.abort();
+  };
+
+  /**
+   * `revision`: el botón «Revisar mi diagrama». La IA revisa con las pistas del
+   * revisor local y propone arreglos, que nunca se aplican solos: son cambios
+   * que nadie pidió, así que esperan su «Aplicar».
+   */
+  const enviarUnaOrden = async (
+    orden: string,
+    porVoz: boolean,
+    revision: boolean,
+    esRepaso = false,
+  ): Promise<void> => {
     const limpia = orden.trim();
     if (!limpia) return;
 
+    interrumpidoRef.current = false;
     setError(null);
     setTexto('');
     const idRespuesta = idTurno();
@@ -261,13 +299,14 @@ export function ModoIA({
       {
         id: idTurno(),
         role: 'user',
-        texto: limpia,
+        texto: esRepaso ? 'Repasando lo que acabo de hacer…' : limpia,
         autorId: usuario.id,
         autorNombre: usuario.nombre,
         creadoEn: null,
         propuesta: [],
         motor: null,
         tipo: 'respuesta',
+        automatico: esRepaso,
       },
       {
         id: idRespuesta,
@@ -294,7 +333,7 @@ export function ModoIA({
     let ultimo: EstadoRespuesta | null = null;
     const manejador = crearManejadorDeStream({
       diagrama: () => diagramaRef.current,
-      autoAplicar,
+      autoAplicar: autoAplicar && !revision,
       soloLectura,
       crearEjecutor: (avisos) =>
         crearEjecutorEnCola(
@@ -309,11 +348,17 @@ export function ModoIA({
             pausaMs: PAUSA_ENTRE_PASOS_MS,
             esperar: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
             ...(agruparDeshacer ? { agrupar: agruparDeshacer } : {}),
-            cancelado: () => !montadoRef.current,
+            cancelado: () => !montadoRef.current || interrumpidoRef.current,
           },
           avisos,
         ),
-      voz: porVoz ? crearColaDeVoz(hablar) : null,
+      voz: (colaVozRef.current = porVoz ? crearColaDeVoz(hablar) : null),
+      senalar: (nombres) => {
+        const ids = clasesPorNombre(diagramaRef.current, nombres);
+        if (ids.length === 0) return;
+        centrar?.(ids);
+        ids.forEach(resaltarClase);
+      },
       alCambiar: (estado) => {
         ultimo = estado;
         if (!montadoRef.current) return;
@@ -337,13 +382,15 @@ export function ModoIA({
     const controlador = new AbortController();
     abortarRef.current = controlador;
     try {
-      await api.interpretarEnStream(proyecto.id, limpia, manejador.alEvento, controlador.signal);
+      await api.interpretarEnStream(proyecto.id, limpia, manejador.alEvento, controlador.signal, { revision });
       if (!(ultimo as EstadoRespuesta | null)?.terminado) {
         manejador.alEvento({ tipo: 'error', mensaje: 'La respuesta se cortó antes de terminar.' });
       }
     } catch (fallo) {
       if (controlador.signal.aborted) {
-        // Se cerró el panel: no hay a quién contarle nada.
+        // Se cerró el panel o se interrumpió con el micrófono. Al interrumpir,
+        // la respuesta se da por terminada con lo que llegó hasta ahí.
+        if (interrumpidoRef.current) manejador.alEvento({ tipo: 'error', mensaje: 'Interrumpida.' });
       } else if (ultimo === null && fallo instanceof ApiError && (fallo.esDeRed || fallo.status >= 500)) {
         // Mismo criterio que la burbuja flotante: sin servidor se usa la
         // gramática local, y se dice de dónde viene la respuesta. Este turno no
@@ -383,8 +430,45 @@ export function ModoIA({
     }
     if (!montadoRef.current) return;
     const final = ultimo as EstadoRespuesta | null;
+    if (interrumpidoRef.current) return;
     if (final?.error) setError(final.error);
     else if (resultado.error) setError(`La IA se detuvo tras ${resultado.aplicadas} cambio(s): ${resultado.error}`);
+
+    // Un paso más, si la IA lo pidió: repasa con el diagrama ya actualizado.
+    if (final && !resultado.error && debeRepasar(final, esRepaso)) {
+      // La orden sigue en curso: el campo queda ocupado durante la espera, para
+      // que nadie escriba algo que `enviar` descartaría por estar ocupado.
+      setEjecutando(true);
+      await new Promise((resolve) => setTimeout(resolve, ESPERA_ANTES_DE_REPASAR_MS));
+      if (montadoRef.current && !interrumpidoRef.current) {
+        await enviarUnaOrden(PETICION_DE_REPASO, porVoz, false, true);
+      } else {
+        setEjecutando(false);
+      }
+    }
+  };
+
+  /** Publica una respuesta de la IA en el tablón, con la pregunta que la originó. */
+  const compartir = async (indice: number): Promise<void> => {
+    const turno = turnos[indice];
+    if (!turno) return;
+    const pregunta = turnos
+      .slice(0, indice)
+      .reverse()
+      .find((t) => t.role === 'user')?.texto;
+    try {
+      await api.publicarEnTablon(
+        proyecto.id,
+        textoParaCompartir({
+          pregunta: pregunta ?? '(comentario espontáneo de la IA)',
+          respuesta: turno.texto,
+          aplicadas: turno.aplicadas ?? [],
+        }),
+      );
+      setTurnos((previos) => previos.map((t) => (t.id === turno.id ? { ...t, compartido: true } : t)));
+    } catch (fallo) {
+      setError(fallo instanceof Error ? fallo.message : 'No se pudo compartir en el tablón');
+    }
   };
 
   const cambiarAutoAplicar = (valor: boolean): void => {
@@ -397,6 +481,9 @@ export function ModoIA({
       dictadoRef.current?.detener();
       return;
     }
+    // Pulsarlo mientras la IA responde o habla la interrumpe, y se escucha la
+    // orden nueva, que espera a que la anterior termine de cerrarse.
+    interrumpir();
     setError(null);
     setEscuchando(true);
     dictadoRef.current = dictar({
@@ -435,6 +522,15 @@ export function ModoIA({
         La IA aplica sola los cambios. Lo que borra algo sigue pidiendo «Aplicar», y cada respuesta se
         deshace de una vez.
       </label>
+      <button
+        type="button"
+        className="modo-ia__revisar"
+        disabled={soloLectura || enviando || ejecutando}
+        onClick={() => void enviar('Revisa mi diagrama', false, true)}
+        title="La IA señala lo que mejoraría y propone los arreglos; nada se aplica sin su «Aplicar»."
+      >
+        <Icono nombre="revisar" /> Revisar mi diagrama
+      </button>
 
       <div className="modo-ia__transcripcion" role="log">
         {cargando && <p className="modo-ia__vacio">Cargando la conversación…</p>}
@@ -446,7 +542,7 @@ export function ModoIA({
           </p>
         )}
 
-        {turnos.map((turno) => (
+        {turnos.map((turno, indice) => (
           <div
             key={turno.id}
             className={`modo-ia__turno modo-ia__turno--${turno.role}${
@@ -455,7 +551,11 @@ export function ModoIA({
           >
             {turno.role === 'user' && (
               <p className="modo-ia__autor">
-                {turno.autorId === usuario.id ? 'Usted' : turno.autorNombre ?? 'Alguien del equipo'}
+                {turno.automatico
+                  ? 'Repaso automático'
+                  : turno.autorId === usuario.id
+                    ? 'Usted'
+                    : (turno.autorNombre ?? 'Alguien del equipo')}
               </p>
             )}
             {turno.tipo === 'observacion' && (
@@ -467,6 +567,17 @@ export function ModoIA({
                 vacía: el error ya se muestra debajo de la conversación. */}
             {(turno.texto || turno.escribiendo) && (
               <p className="modo-ia__burbuja">{turno.texto || '…'}</p>
+            )}
+            {turno.role === 'assistant' && turno.texto && !turno.escribiendo && (
+              <button
+                type="button"
+                className="modo-ia__compartir"
+                disabled={turno.compartido}
+                onClick={() => void compartir(indice)}
+                title="Publica esta respuesta en el tablón del proyecto para el resto del equipo."
+              >
+                {turno.compartido ? 'Compartido en el tablón' : 'Compartir en el tablón'}
+              </button>
             )}
             {turno.aplicadas && turno.aplicadas.length > 0 && (
               <ul className="modo-ia__aplicadas" aria-label="Cambios que aplicó la IA">
@@ -518,8 +629,14 @@ export function ModoIA({
         <button
           type="button"
           className={`boton-microfono${escuchando ? ' boton-microfono--activo' : ''}`}
-          disabled={soloLectura || !hayDictado || ejecutando}
-          title={hayDictado ? 'Dictar un mensaje' : motivoSinVoz()}
+          disabled={soloLectura || !hayDictado}
+          title={
+            !hayDictado
+              ? motivoSinVoz()
+              : ejecutando
+                ? 'Interrumpir a la IA y dictar otra orden'
+                : 'Dictar un mensaje'
+          }
           aria-label={escuchando ? 'Detener el dictado' : 'Dictar un mensaje'}
           aria-pressed={escuchando}
           onClick={alternarMicrofono}

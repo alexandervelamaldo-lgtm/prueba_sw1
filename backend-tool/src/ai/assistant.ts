@@ -1,4 +1,4 @@
-import type { AssistantResponse, ClassDiagram, EventoAsistente } from '@app/shared';
+import type { AssistantResponse, ClassDiagram, EntradaHistorial, EventoAsistente } from '@app/shared';
 import {
   AssistantActionSchema,
   describeOperation,
@@ -38,6 +38,12 @@ export interface TurnoConAutor extends ChatMessage {
 export interface AssistantContext {
   historial: TurnoConAutor[];
   otrosProyectos: string[];
+  /**
+   * Los últimos cambios del diagrama, de cualquier integrante, ya resumidos
+   * (`resumirCambiosRecientes`): con ellos la IA contesta «¿qué cambió Juan
+   * desde ayer?». El hilo es privado; el diagrama, y su historial, no.
+   */
+  cambiosRecientes?: string[];
 }
 
 // Define la "plantilla" o contrato que debe cumplir cualquier motor de asistente:
@@ -106,6 +112,8 @@ const SYSTEM_PROMPT = `Eres un asistente de modelado UML con el que el usuario c
 
 Cuando el mensaje incluya turnos anteriores de esta misma conversación, ya los has leído: no te vuelvas a presentar ni repitas lo ya dicho, y entiende referencias como "ahora", "esa clase" o "lo de antes" igual que lo haría alguien que lleva un rato colaborando en este proyecto contigo. Tus mensajes son tu voz: pueden saludar, reconocer lo que ya se habló, opinar sobre el diagrama o hacer una pregunta de aclaración en tono natural y breve, sin dejar de ser precisos sobre qué cambios haces y por qué. Esto no cambia ninguna regla de las operaciones.
 
+Si te preguntan qué cambió alguien o qué pasó en el diagrama, contesta con los cambios recientes que vienen en el mensaje, con quién y cuándo; si no aparecen ahí, dilo en vez de inventarlo.
+
 Esta conversación es solo entre tú y esta persona: otros integrantes del proyecto tienen su propio hilo contigo, y lo que hablaste con ellos no está aquí. El diagrama, en cambio, es compartido, y pueden haberlo cambiado otros.
 
 Respondes ÚNICAMENTE con un objeto JSON, sin texto alrededor y sin vallas de código, con esta forma:
@@ -115,6 +123,8 @@ Cada acción es uno de estos objetos, y "_type" va siempre primero:
 - {"_type":"think","text":"..."}: razonamiento breve para ti; el usuario no lo ve.
 - {"_type":"message","text":"..."}: lo que le dices al usuario. Una o dos frases.
 - {"_type":"operation","operation":{...}}: un cambio en el diagrama.
+- {"_type":"point","classes":["Nombre"]}: señala esas clases en el lienzo, por su nombre exacto, sin cambiarlas. Úsalo cuando hables de clases concretas («esta clase de aquí»), justo antes del mensaje que las menciona.
+- {"_type":"review"}: al final, si hiciste varios cambios y conviene comprobarlos con el diagrama ya actualizado. Recibirás el diagrama resultante en un turno más para corregir lo que falte. Úsalo solo en encargos grandes, no en cambios sueltos.
 
 Las acciones se ejecutan en el orden en que las escribes. Intercala mensajes y operaciones como lo haría alguien que narra lo que va haciendo ("Creo Cliente y Pedido." → operaciones → "Listo, ¿les agrego atributos?"). Toda respuesta lleva al menos un "message". Si solo te preguntan o te piden opinión, responde solo con mensajes, sin operaciones.
 
@@ -263,6 +273,8 @@ export class LlmAssistant implements AssistantEngine {
       const accion = validada.data;
       if (accion._type === 'think') return null;
       if (accion._type === 'message') return { tipo: 'mensaje', texto: accion.text };
+      if (accion._type === 'point') return { tipo: 'senalar', clases: accion.classes };
+      if (accion._type === 'review') return { tipo: 'repasar' };
       return { tipo: 'operacion', operacion: accion.operation, descripcion: describeOperation(accion.operation) };
     };
 
@@ -390,7 +402,11 @@ export class LlmAssistant implements AssistantEngine {
     const lineaOtrosProyectos = otrosProyectos.length > 0
       ? `\n\nOtros proyectos de este usuario (solo el nombre, para contexto; nunca mezcles su contenido con este diagrama): ${otrosProyectos.join(', ')}.`
       : '';
-    const user = `Diagrama actual:\n${summarize(diagram)}${lineaOtrosProyectos}\n\nPetición: ${prompt}`;
+    const cambios = contexto?.cambiosRecientes ?? [];
+    const bloqueCambios = cambios.length > 0
+      ? `\n\nCambios recientes del diagrama (del más antiguo al más reciente):\n${cambios.map((c) => `- ${c}`).join('\n')}`
+      : '';
+    const user = `Diagrama actual:\n${summarize(diagram)}${lineaOtrosProyectos}${bloqueCambios}\n\nPetición: ${prompt}`;
     return { system, user, historial: this.historialComoMensajes(contexto) };
   }
 
@@ -402,15 +418,7 @@ export class LlmAssistant implements AssistantEngine {
   // aunque puede ignorarlas o fijarse en otra cosa que le parezca más
   // importante.
   private async pedirRevision(diagram: ClassDiagram, contexto?: AssistantContext): Promise<string> {
-    const hallazgos = revisarDiagrama(diagram);
-    const pistas =
-      hallazgos.length > 0
-        ? `\n\nUn revisor automático ya detectó esto (puedes mencionarlo con tus palabras, ignorarlo si no lo ves relevante, o fijarte en otra cosa que te parezca más importante):\n${hallazgos
-            .slice(0, 5)
-            .map((hallazgo) => `- ${hallazgo.titulo}: ${hallazgo.detalle}`)
-            .join('\n')}`
-        : '';
-    const user = `Diagrama actual:\n${summarize(diagram)}${pistas}`;
+    const user = `Diagrama actual:\n${summarize(diagram)}${pistasDelRevisor(diagram)}`;
 
     return this.enviarConversacion(REVIEW_SYSTEM_PROMPT, user, this.historialComoMensajes(contexto), 300, false);
   }
@@ -536,6 +544,44 @@ async function* textoDelStream(
       }
     }
   }
+}
+
+/**
+ * Lo que ya encontró el revisor local (`revisarDiagrama`), como pistas para el
+ * modelo: así no repite ese trabajo desde cero, aunque puede ignorarlas o
+ * fijarse en otra cosa que le parezca más importante. Vacío si no hay nada.
+ */
+function pistasDelRevisor(diagram: ClassDiagram): string {
+  const hallazgos = revisarDiagrama(diagram);
+  if (hallazgos.length === 0) return '';
+  return `\n\nUn revisor automático ya detectó esto (puedes mencionarlo con tus palabras, ignorarlo si no lo ves relevante, o fijarte en otra cosa que te parezca más importante):\n${hallazgos
+    .slice(0, 5)
+    .map((hallazgo) => `- ${hallazgo.titulo}: ${hallazgo.detalle}`)
+    .join('\n')}`;
+}
+
+/**
+ * La petición del botón «Revisar mi diagrama» del Modo IA: la segunda capa de
+ * la revisión, la semántica, encima de las reglas locales de `revisarDiagrama`
+ * (la primera capa, que ya tiene su propio panel). Va como la petición de un
+ * turno normal, así que la respuesta usa la misma lista de acciones.
+ */
+export function peticionDeRevision(diagram: ClassDiagram): string {
+  return `Revisa este diagrama como lo haría alguien con experiencia en modelado UML: qué relaciones deberían ser de otro tipo, qué clase intermedia falta, qué nombres o tipos no encajan con el dominio. Señala con "point" cada clase de la que hables, justo antes del mensaje que la menciona, y explica en mensajes breves qué mejorarías y por qué. Después propone las operaciones que lo arreglan, sin eliminar nada. Esas operaciones no se aplican solas: quedan propuestas hasta que la persona las acepte, así que no digas que ya las hiciste («te propongo…», no «listo, he completado…»). Si el diagrama está bien, dilo en un mensaje y no propongas cambios.${pistasDelRevisor(diagram)}`;
+}
+
+/**
+ * El historial del diagrama (`leerHistorial`) como líneas para el prompt: los
+ * `limite` cambios más recientes, del más antiguo al más reciente, con fecha
+ * en UTC (el servidor no sabe la zona de quien pregunta), autor, resumen y,
+ * si no lo hizo una persona a mano, quién lo propuso.
+ */
+export function resumirCambiosRecientes(entradas: EntradaHistorial[], limite: number): string[] {
+  return entradas.slice(-limite).map((entrada) => {
+    const fecha = `${entrada.momento.slice(0, 10)} ${entrada.momento.slice(11, 16)} UTC`;
+    const via = entrada.propuestoPor ? ` (propuesto por ${entrada.propuestoPor})` : '';
+    return `${fecha} · ${entrada.autorNombre || 'alguien'} · ${entrada.resumen}${via}`;
+  });
 }
 
 /**

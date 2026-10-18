@@ -321,11 +321,15 @@ export type AssistantResponse = z.infer<typeof AssistantResponseSchema>;
  * dice al usuario es una acción más (`message`), intercalada con las
  * operaciones, para que la IA pueda contestar sin proponer nada o narrar lo
  * que hace mientras lo hace. `think` es razonamiento interno: se valida pero
- * no se muestra. `_type` va primero para que el modelo lo escriba primero.
+ * no se muestra. `point` señala clases del lienzo por nombre («esta de aquí»)
+ * sin cambiar nada. `review` pide un repaso de lo hecho con el diagrama ya
+ * actualizado (un solo paso más; ver `debeRepasar`). `_type` va primero para que el modelo lo escriba primero.
  */
 export const AssistantActionSchema = z.discriminatedUnion('_type', [
   z.object({ _type: z.literal('message'), text: z.string() }),
   z.object({ _type: z.literal('think'), text: z.string() }),
+  z.object({ _type: z.literal('point'), classes: z.array(z.string()) }),
+  z.object({ _type: z.literal('review') }),
   z.object({ _type: z.literal('operation'), operation: OperationSchema }),
 ]);
 

@@ -47,6 +47,16 @@ describe('api.interpretarEnStream', () => {
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-de-prueba');
   });
 
+  it('una revisión lo dice en el cuerpo de la petición', async () => {
+    const fetchFalso = vi.fn(async () => respuestaEnTrozos([formatearEventoSse({ tipo: 'fin', motor: 'm', confianza: 1 })]));
+    vi.stubGlobal('fetch', fetchFalso);
+
+    await api.interpretarEnStream('P1', 'Revisa mi diagrama', () => {}, undefined, { revision: true });
+
+    const [, init] = fetchFalso.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body).toBe(JSON.stringify({ texto: 'Revisa mi diagrama', revision: true }));
+  });
+
   it('una respuesta de error del servidor es un ApiError con su mensaje', async () => {
     vi.stubGlobal(
       'fetch',

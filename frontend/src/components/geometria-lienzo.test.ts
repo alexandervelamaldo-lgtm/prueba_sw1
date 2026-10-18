@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { UmlClassSchema, UmlRelationSchema, type UmlClass, type UmlRelation } from '@app/shared';
 import {
+  zoomMaximoAlCentrar,
   ANCHO_MAXIMO,
   ANCHO_MINIMO,
   ESCALA_MAXIMA,
@@ -411,5 +412,15 @@ describe('encuadrar', () => {
     expect(encuadrar([caja(0, 0)], VENTANA, { ajustar: true, escala: 1 }).escala).toBe(
       ESCALA_MAXIMA,
     );
+  });
+});
+
+describe('zoomMaximoAlCentrar', () => {
+  it('no acerca más allá del 100 % para centrar una clase', () => {
+    expect(zoomMaximoAlCentrar(0.6)).toBe(1);
+  });
+
+  it('si ya estaba más cerca, no aleja: respeta el zoom de quien mira', () => {
+    expect(zoomMaximoAlCentrar(1.8)).toBe(1.8);
   });
 });

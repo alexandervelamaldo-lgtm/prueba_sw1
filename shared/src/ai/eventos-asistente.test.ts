@@ -16,6 +16,8 @@ const eventos: EventoAsistente[] = [
     operacion: { op: 'addClass', name: 'Pedido', kind: 'class' },
     descripcion: 'Crear clase «Pedido»',
   },
+  { tipo: 'senalar', clases: ['Pedido', 'Cliente'] },
+  { tipo: 'repasar' },
   { tipo: 'fin', motor: 'modelo-remoto (prueba)', confianza: 0.9 },
 ];
 

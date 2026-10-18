@@ -6773,3 +6773,17 @@ select:focus {
   gap: 4px;
   align-items: center;
 }
+
+.modo-ia__revisar {
+  align-self: flex-start;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.modo-ia__compartir {
+  align-self: flex-start;
+  font-size: 12px;
+  padding: 2px 8px;
+}

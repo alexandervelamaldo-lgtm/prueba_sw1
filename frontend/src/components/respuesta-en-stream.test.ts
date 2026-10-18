@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createClass, createDiagram, withClass, type EventoAsistente, type Operation } from '@app/shared';
-import { crearManejadorDeStream, type EstadoRespuesta } from './respuesta-en-stream';
+import { crearManejadorDeStream, debeRepasar, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
 
 /**
  * Qué hace el Modo IA con cada evento del stream: qué texto pinta, qué dice en
@@ -20,6 +20,7 @@ function preparar(
   const porAplicar: Operation[] = [];
   const dichas: string[] = [];
   const estados: EstadoRespuesta[] = [];
+  const senaladas: string[][] = [];
   let alAplicar: ((operacion: Operation) => void) | undefined;
   const manejador = crearManejadorDeStream({
     diagrama: () => diagrama,
@@ -41,6 +42,7 @@ function preparar(
         ? null
         : { decir: (texto) => dichas.push(texto), terminar: () => dichas.push('<fin>') },
     alCambiar: (estado) => estados.push(estado),
+    senalar: (clases) => senaladas.push(clases),
   });
   const enviar = (...eventos: EventoAsistente[]): void => eventos.forEach((e) => manejador.alEvento(e));
   const ultimo = (): EstadoRespuesta => estados.at(-1)!;
@@ -49,7 +51,7 @@ function preparar(
     const operacion = porAplicar.shift();
     if (operacion) alAplicar?.(operacion);
   };
-  return { manejador, enviar, encoladas, dichas, ultimo, aplicarSiguiente };
+  return { manejador, enviar, encoladas, dichas, ultimo, aplicarSiguiente, senaladas };
 }
 
 const op = (operacion: Operation): EventoAsistente => ({ tipo: 'operacion', operacion, descripcion: `desc ${operacion.op}` });
@@ -190,5 +192,88 @@ describe('crearManejadorDeStream, narración en orden', () => {
     await manejador.terminar();
 
     expect(ultimo()).toMatchObject({ texto: 'Listo.', terminado: true });
+  });
+});
+
+describe('crearManejadorDeStream, señalar clases', () => {
+  it('señala las clases que nombra la IA', () => {
+    const { enviar, senaladas } = preparar();
+
+    enviar({ tipo: 'senalar', clases: ['Cliente'] });
+
+    expect(senaladas).toEqual([['Cliente']]);
+  });
+
+  it('señalar respeta el orden de la narración: espera a la operación anterior', () => {
+    const { enviar, senaladas, aplicarSiguiente } = preparar({ aplicarAMano: true });
+
+    enviar(op(crearPedido), { tipo: 'senalar', clases: ['Pedido'] });
+    expect(senaladas).toEqual([]);
+
+    aplicarSiguiente();
+    expect(senaladas).toEqual([['Pedido']]);
+  });
+});
+
+describe('textoParaCompartir', () => {
+  it('lleva la pregunta, la respuesta de la IA y lo que aplicó', () => {
+    expect(
+      textoParaCompartir({
+        pregunta: 'crea la clase Pedido',
+        respuesta: 'Creo la clase Pedido.',
+        aplicadas: ['Crear clase «Pedido»'],
+      }),
+    ).toBe('Le pregunté a la IA: «crea la clase Pedido»\nRespuesta: Creo la clase Pedido.\nAplicó: Crear clase «Pedido»');
+  });
+
+  it('sin cambios aplicados no añade esa línea', () => {
+    expect(textoParaCompartir({ pregunta: '¿qué opinas?', respuesta: 'Está bien.', aplicadas: [] })).toBe(
+      'Le pregunté a la IA: «¿qué opinas?»\nRespuesta: Está bien.',
+    );
+  });
+
+  it('no pasa del tope del tablón', () => {
+    const texto = textoParaCompartir({ pregunta: 'x', respuesta: 'a'.repeat(20_000), aplicadas: [] });
+    expect(texto.length).toBeLessThanOrEqual(10_000);
+    expect(texto.endsWith('…')).toBe(true);
+  });
+});
+
+describe('repasar lo hecho', () => {
+  it('el evento repasar marca la respuesta para un repaso', () => {
+    const { enviar, ultimo } = preparar();
+
+    enviar(op(crearPedido), { tipo: 'repasar' }, { tipo: 'fin', motor: 'm', confianza: 1 });
+
+    expect(ultimo().repasar).toBe(true);
+  });
+
+  it('una respuesta normal no pide repaso', () => {
+    const { enviar, ultimo } = preparar();
+
+    enviar({ tipo: 'mensaje', texto: 'Hola.' }, { tipo: 'fin', motor: 'm', confianza: 1 });
+
+    expect(ultimo().repasar).toBe(false);
+  });
+});
+
+describe('debeRepasar', () => {
+  const base = { repasar: true, aplicadas: ['Crear clase «Pedido»'], error: null };
+
+  it('repasa si la IA lo pidió y aplicó algo', () => {
+    expect(debeRepasar(base, false)).toBe(true);
+  });
+
+  it('nunca repasa un repaso: un solo paso más por orden', () => {
+    expect(debeRepasar(base, true)).toBe(false);
+  });
+
+  it('no repasa si no aplicó nada o si hubo un error', () => {
+    expect(debeRepasar({ ...base, aplicadas: [] }, false)).toBe(false);
+    expect(debeRepasar({ ...base, error: 'falló' }, false)).toBe(false);
+  });
+
+  it('no repasa si la IA no lo pidió', () => {
+    expect(debeRepasar({ ...base, repasar: false }, false)).toBe(false);
   });
 });

@@ -1,7 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { describeOperation, formatearEventoSse, readDiagram, type EventoAsistente } from '@app/shared';
-import type { AssistantEngine, TurnoConAutor } from '../ai/assistant.js';
+import { describeOperation, formatearEventoSse, leerHistorial, readDiagram, type EventoAsistente } from '@app/shared';
+import {
+  peticionDeRevision,
+  resumirCambiosRecientes,
+  type AssistantEngine,
+  type TurnoConAutor,
+} from '../ai/assistant.js';
 import type { IdentityProvider } from '../auth/identity.js';
 import type { ProjectStore } from '../storage/store.js';
 import type { RoomManager } from '../collab/rooms.js';
@@ -22,6 +27,8 @@ import { handler, parseBody, requireRole } from './http.js';
 
 const PeticionSchema = z.object({
   texto: z.string().trim().min(1).max(2000),
+  /** Botón «Revisar mi diagrama»: el modelo recibe `peticionDeRevision`, el historial guarda `texto`. */
+  revision: z.boolean().optional(),
 });
 
 /**
@@ -32,6 +39,7 @@ const PeticionSchema = z.object({
  * para eso y no hinchan el prompt de alguien con treinta proyectos.
  */
 const MAXIMO_OTROS_PROYECTOS = 5;
+/** * Cuántos cambios del historial del diagrama van al prompt, para preguntas como * «¿qué cambió Juan desde ayer?». Treinta líneas cortas bastan para un día de * trabajo sin inflar cada petición. */ const MAXIMO_CAMBIOS_RECIENTES = 30;
 
 /**
  * Resuelve `autorId → autorNombre` para un lote de turnos, igual que
@@ -88,7 +96,11 @@ export function assistantRouter(deps: {
         .slice(0, MAXIMO_OTROS_PROYECTOS)
         .map((proyecto) => `${proyecto.name} (${proyecto.role})`);
 
-      const result = await assistant.interpret(body.texto, diagram, { historial, otrosProyectos });
+      const result = await assistant.interpret(body.texto, diagram, {
+        historial,
+        otrosProyectos,
+        cambiosRecientes: resumirCambiosRecientes(leerHistorial(room.doc), MAXIMO_CAMBIOS_RECIENTES),
+      });
       await conversations.appendTurn(proyectoId, request.user.id, body.texto, result.explanation);
 
       response.json({
@@ -115,6 +127,7 @@ export function assistantRouter(deps: {
       const proyectoId = request.params.proyectoId ?? '';
       const room = await rooms.open(proyectoId);
       const diagram = readDiagram(room.doc);
+      const peticion = body.revision ? peticionDeRevision(diagram) : body.texto;
       const [turnos, misProyectos] = await Promise.all([
         conversations.getHistory(proyectoId, request.user.id, MAXIMO_TURNOS * 2),
         store.listProjectsForUser(request.user.id),
@@ -124,7 +137,11 @@ export function assistantRouter(deps: {
         .filter((proyecto) => proyecto.id !== proyectoId)
         .slice(0, MAXIMO_OTROS_PROYECTOS)
         .map((proyecto) => `${proyecto.name} (${proyecto.role})`);
-      const contexto = { historial, otrosProyectos };
+      const contexto = {
+        historial,
+        otrosProyectos,
+        cambiosRecientes: resumirCambiosRecientes(leerHistorial(room.doc), MAXIMO_CAMBIOS_RECIENTES),
+      };
 
       const abortador = new AbortController();
       let desconectado = false;
@@ -158,8 +175,8 @@ export function assistantRouter(deps: {
 
       try {
         const flujo = assistant.interpretarEnStream
-          ? assistant.interpretarEnStream(body.texto, diagram, contexto, abortador.signal)
-          : eventosDeRespuesta(assistant, body.texto, diagram, contexto);
+          ? assistant.interpretarEnStream(peticion, diagram, contexto, abortador.signal)
+          : eventosDeRespuesta(assistant, peticion, diagram, contexto);
         for await (const evento of flujo) {
           if (desconectado || abortador.signal.aborted) return;
           if (evento.tipo === 'fin') {
@@ -179,7 +196,7 @@ export function assistantRouter(deps: {
         // la misma ruta compatible que usa la respuesta JSON de siempre.
         if (eventosEmitidos === 0 && assistant.interpretarEnStream) {
           try {
-            for await (const evento of eventosDeRespuesta(assistant, body.texto, diagram, contexto)) {
+            for await (const evento of eventosDeRespuesta(assistant, peticion, diagram, contexto)) {
               if (evento.tipo === 'fin') fin = evento;
               else enviarEvento(evento);
             }

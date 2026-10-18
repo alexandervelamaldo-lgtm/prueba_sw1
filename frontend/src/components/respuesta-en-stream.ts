@@ -33,6 +33,8 @@ export interface EstadoRespuesta {
   motor: string | null;
   terminado: boolean;
   error: string | null;
+  /** La IA pidió repasar lo hecho; ver `debeRepasar`. */
+  repasar: boolean;
 }
 
 interface Ejecutor {
@@ -49,6 +51,8 @@ export function crearManejadorDeStream(opciones: {
   /** `null` si la orden fue escrita: entonces no se habla. */
   voz: { decir(texto: string): void; terminar(): void } | null;
   alCambiar(estado: EstadoRespuesta): void;
+  /** La IA señala esas clases (por nombre); ver `EventoAsistente`. */
+  senalar?(clases: string[]): void;
 }): { alEvento(evento: EventoAsistente): void; terminar(): Promise<{ aplicadas: number; error: string | null }> } {
   const completos: string[] = [];
   let parcial = '';
@@ -58,6 +62,7 @@ export function crearManejadorDeStream(opciones: {
   let motor: string | null = null;
   let terminado = false;
   let error: string | null = null;
+  let repasar = false;
   let retener = !opciones.autoAplicar || opciones.soloLectura;
   let huboOperaciones = false;
   // Cuántas operaciones se mandaron al ejecutor y cuántas ya terminó, y los
@@ -89,6 +94,7 @@ export function crearManejadorDeStream(opciones: {
       motor,
       terminado,
       error,
+      repasar,
     });
   }
 
@@ -116,6 +122,12 @@ export function crearManejadorDeStream(opciones: {
           encoladas += 1;
           ejecutor.encolar(evento.operacion);
         }
+        break;
+      case 'senalar':
+        opciones.senalar?.(evento.clases);
+        break;
+      case 'repasar':
+        repasar = true;
         break;
       case 'fin':
         motor = evento.motor;
@@ -154,4 +166,32 @@ export function crearManejadorDeStream(opciones: {
       }
     },
   };
+}
+
+/** El tope de un mensaje del tablón (`api/tablon.ts`). */
+const MAXIMO_TABLON = 10_000;
+
+/**
+ * Una respuesta de la IA lista para el tablón del proyecto. El hilo con la IA
+ * es privado de cada integrante; compartir un turno es la forma de pasarle al
+ * resto del equipo lo que se habló, con la pregunta delante para que se
+ * entienda fuera de contexto.
+ */
+export function textoParaCompartir(turno: { pregunta: string; respuesta: string; aplicadas: string[] }): string {
+  const lineas = [`Le pregunté a la IA: «${turno.pregunta}»`, `Respuesta: ${turno.respuesta}`];
+  if (turno.aplicadas.length > 0) lineas.push(`Aplicó: ${turno.aplicadas.join('; ')}`);
+  const texto = lineas.join('\n');
+  return texto.length <= MAXIMO_TABLON ? texto : `${texto.slice(0, MAXIMO_TABLON - 1)}…`;
+}
+
+/**
+ * Si, al terminar una respuesta, el Modo IA tiene que pedirle a la IA que
+ * repase lo que hizo. Solo si la IA lo pidió, aplicó algo y no falló, y nunca
+ * para un repaso: un solo paso más por orden, para no encadenar llamadas.
+ */
+export function debeRepasar(
+  estado: Pick<EstadoRespuesta, 'repasar' | 'aplicadas' | 'error'>,
+  esRepaso: boolean,
+): boolean {
+  return !esRepaso && estado.repasar && estado.aplicadas.length > 0 && !estado.error;
 }

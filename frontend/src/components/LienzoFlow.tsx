@@ -38,6 +38,7 @@ import {
   recortar,
   textoAtributo,
   textoMetodo,
+  zoomMaximoAlCentrar,
   type Medida,
   type Punto,
 } from './geometria-lienzo';
@@ -752,6 +753,7 @@ function LienzoInterno({
         void flow.fitView({
           duration: 220,
           padding: 0.35,
+          maxZoom: zoomMaximoAlCentrar(flow.getZoom()),
           nodes: orden.ids.map((id) => ({ id })),
         });
         return;
@@ -845,7 +847,11 @@ function LienzoInterno({
         nodesConnectable={!soloLectura}
         elementsSelectable
         fitView
-        fitViewOptions={{ padding: 0.18 }}
+        /*
+          El encuadre inicial tampoco acerca más allá del 100 %: con una sola
+          clase recién creada llegaba al 300 % (ver `zoomMaximoAlCentrar`).
+        */
+        fitViewOptions={{ padding: 0.18, maxZoom: zoomMaximoAlCentrar(0) }}
         /*
           La atribución de React Flow se queda.
           ------------------------------------

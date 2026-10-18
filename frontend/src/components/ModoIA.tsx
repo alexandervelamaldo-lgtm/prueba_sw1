@@ -8,7 +8,7 @@ import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
 import { crearCursorIA, nodoDeClase, prefiereMenosMovimiento, resaltarClase } from './cursor-ia';
 import { clasesPorNombre, crearEjecutorEnCola } from './ia-ejecucion';
 import { crearColaDeVoz } from './cola-voz';
-import { crearManejadorDeStream, type EstadoRespuesta } from './respuesta-en-stream';
+import { crearManejadorDeStream, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
 import type { GrupoDeshacer } from '../hooks/deshacer-agrupado';
 
 /** Pausa entre dos pasos de la IA, para que se vea cada uno. */
@@ -86,6 +86,8 @@ interface Turno {
   aplicadas?: string[];
   /** La IA todavía está escribiendo esta respuesta. */
   escribiendo?: boolean;
+  /** Ya se publicó en el tablón del proyecto. */
+  compartido?: boolean;
 }
 
 let contadorTurno = 0;
@@ -398,6 +400,29 @@ export function ModoIA({
     else if (resultado.error) setError(`La IA se detuvo tras ${resultado.aplicadas} cambio(s): ${resultado.error}`);
   };
 
+  /** Publica una respuesta de la IA en el tablón, con la pregunta que la originó. */
+  const compartir = async (indice: number): Promise<void> => {
+    const turno = turnos[indice];
+    if (!turno) return;
+    const pregunta = turnos
+      .slice(0, indice)
+      .reverse()
+      .find((t) => t.role === 'user')?.texto;
+    try {
+      await api.publicarEnTablon(
+        proyecto.id,
+        textoParaCompartir({
+          pregunta: pregunta ?? '(comentario espontáneo de la IA)',
+          respuesta: turno.texto,
+          aplicadas: turno.aplicadas ?? [],
+        }),
+      );
+      setTurnos((previos) => previos.map((t) => (t.id === turno.id ? { ...t, compartido: true } : t)));
+    } catch (fallo) {
+      setError(fallo instanceof Error ? fallo.message : 'No se pudo compartir en el tablón');
+    }
+  };
+
   const cambiarAutoAplicar = (valor: boolean): void => {
     setAutoAplicar(valor);
     guardarAutoAplicar(valor);
@@ -466,7 +491,7 @@ export function ModoIA({
           </p>
         )}
 
-        {turnos.map((turno) => (
+        {turnos.map((turno, indice) => (
           <div
             key={turno.id}
             className={`modo-ia__turno modo-ia__turno--${turno.role}${
@@ -487,6 +512,17 @@ export function ModoIA({
                 vacía: el error ya se muestra debajo de la conversación. */}
             {(turno.texto || turno.escribiendo) && (
               <p className="modo-ia__burbuja">{turno.texto || '…'}</p>
+            )}
+            {turno.role === 'assistant' && turno.texto && !turno.escribiendo && (
+              <button
+                type="button"
+                className="modo-ia__compartir"
+                disabled={turno.compartido}
+                onClick={() => void compartir(indice)}
+                title="Publica esta respuesta en el tablón del proyecto para el resto del equipo."
+              >
+                {turno.compartido ? 'Compartido en el tablón' : 'Compartir en el tablón'}
+              </button>
             )}
             {turno.aplicadas && turno.aplicadas.length > 0 && (
               <ul className="modo-ia__aplicadas" aria-label="Cambios que aplicó la IA">

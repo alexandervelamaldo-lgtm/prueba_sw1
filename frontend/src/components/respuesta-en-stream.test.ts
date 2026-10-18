@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createClass, createDiagram, withClass, type EventoAsistente, type Operation } from '@app/shared';
-import { crearManejadorDeStream, type EstadoRespuesta } from './respuesta-en-stream';
+import { crearManejadorDeStream, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
 
 /**
  * Qué hace el Modo IA con cada evento del stream: qué texto pinta, qué dice en
@@ -212,5 +212,29 @@ describe('crearManejadorDeStream, señalar clases', () => {
 
     aplicarSiguiente();
     expect(senaladas).toEqual([['Pedido']]);
+  });
+});
+
+describe('textoParaCompartir', () => {
+  it('lleva la pregunta, la respuesta de la IA y lo que aplicó', () => {
+    expect(
+      textoParaCompartir({
+        pregunta: 'crea la clase Pedido',
+        respuesta: 'Creo la clase Pedido.',
+        aplicadas: ['Crear clase «Pedido»'],
+      }),
+    ).toBe('Le pregunté a la IA: «crea la clase Pedido»\nRespuesta: Creo la clase Pedido.\nAplicó: Crear clase «Pedido»');
+  });
+
+  it('sin cambios aplicados no añade esa línea', () => {
+    expect(textoParaCompartir({ pregunta: '¿qué opinas?', respuesta: 'Está bien.', aplicadas: [] })).toBe(
+      'Le pregunté a la IA: «¿qué opinas?»\nRespuesta: Está bien.',
+    );
+  });
+
+  it('no pasa del tope del tablón', () => {
+    const texto = textoParaCompartir({ pregunta: 'x', respuesta: 'a'.repeat(20_000), aplicadas: [] });
+    expect(texto.length).toBeLessThanOrEqual(10_000);
+    expect(texto.endsWith('…')).toBe(true);
   });
 });

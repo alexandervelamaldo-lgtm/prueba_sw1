@@ -6781,3 +6781,9 @@ select:focus {
   align-items: center;
   flex-shrink: 0;
 }
+
+.modo-ia__compartir {
+  align-self: flex-start;
+  font-size: 12px;
+  padding: 2px 8px;
+}

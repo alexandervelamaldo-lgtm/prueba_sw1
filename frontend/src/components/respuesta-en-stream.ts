@@ -160,3 +160,19 @@ export function crearManejadorDeStream(opciones: {
     },
   };
 }
+
+/** El tope de un mensaje del tablón (`api/tablon.ts`). */
+const MAXIMO_TABLON = 10_000;
+
+/**
+ * Una respuesta de la IA lista para el tablón del proyecto. El hilo con la IA
+ * es privado de cada integrante; compartir un turno es la forma de pasarle al
+ * resto del equipo lo que se habló, con la pregunta delante para que se
+ * entienda fuera de contexto.
+ */
+export function textoParaCompartir(turno: { pregunta: string; respuesta: string; aplicadas: string[] }): string {
+  const lineas = [`Le pregunté a la IA: «${turno.pregunta}»`, `Respuesta: ${turno.respuesta}`];
+  if (turno.aplicadas.length > 0) lineas.push(`Aplicó: ${turno.aplicadas.join('; ')}`);
+  const texto = lineas.join('\n');
+  return texto.length <= MAXIMO_TABLON ? texto : `${texto.slice(0, MAXIMO_TABLON - 1)}…`;
+}

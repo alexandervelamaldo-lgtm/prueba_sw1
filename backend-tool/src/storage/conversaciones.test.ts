@@ -296,3 +296,26 @@ describe('appendTurn devuelve lo que podó', () => {
     expect(podados[0]).toMatchObject({ role: 'user', autorId: ANA, tipo: 'respuesta' });
   });
 });
+
+describe('pedidos a la vez al abrir el almacén', () => {
+  it('dos turnos antes de la primera lectura del fichero no se pisan', async () => {
+    await almacen.appendTurn(P, ANA, 'orden previa', 'respuesta previa');
+    await almacen.flush();
+    const reabierto = new FileConversationStore(dataDir);
+
+    await Promise.all([
+      reabierto.appendTurn(P, ANA, 'orden de Ana', 'respuesta a Ana'),
+      reabierto.appendTurn(P, BETO, 'orden de Beto', 'respuesta a Beto'),
+    ]);
+    await reabierto.flush();
+
+    const releido = new FileConversationStore(dataDir);
+    expect((await releido.getHistory(P, ANA, 10)).map((m) => m.texto)).toEqual([
+      'orden previa',
+      'respuesta previa',
+      'orden de Ana',
+      'respuesta a Ana',
+    ]);
+    expect((await releido.getHistory(P, BETO, 10)).map((m) => m.texto)).toEqual(['orden de Beto', 'respuesta a Beto']);
+  });
+});

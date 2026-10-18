@@ -925,6 +925,7 @@ export function EditorDiagrama({
                     agruparDeshacer={estado.agruparDeshacer}
                     seleccion={seleccion}
                     onVistaPrevia={setABorrar}
+                    participantes={participantes}
                   />
                 ) : null,
             },

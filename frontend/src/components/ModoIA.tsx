@@ -6,7 +6,13 @@ import { callar, dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDic
 import { Icono } from './iconos';
 import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
 import { crearCursorIA, nodoDeClase, prefiereMenosMovimiento, resaltarClase } from './cursor-ia';
-import { clasesPorNombre, crearEjecutorEnCola, marcasDeBorrado, type MarcasDeBorrado } from './ia-ejecucion';
+import {
+  avisosDeConflicto,
+  clasesPorNombre,
+  crearEjecutorEnCola,
+  marcasDeBorrado,
+  type MarcasDeBorrado,
+} from './ia-ejecucion';
 import { crearColaDeVoz } from './cola-voz';
 import { crearManejadorDeStream, debeRepasar, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
 import type { GrupoDeshacer } from '../hooks/deshacer-agrupado';
@@ -77,6 +83,8 @@ interface Props {
   seleccion?: string | null;
   /** Lo que se perdería con los borrados propuestos aún sin aplicar, para marcarlo en el lienzo. */
   onVistaPrevia?: (marcas: MarcasDeBorrado | null) => void;
+  /** Quién más está en el proyecto y qué clase tiene seleccionada (presencia de Yjs). */
+  participantes?: { nombre: string; seleccion: string | null }[];
 }
 
 interface Turno {
@@ -99,6 +107,8 @@ interface Turno {
   compartido?: boolean;
   /** Lo pidió el propio Modo IA (un repaso), no la persona. */
   automatico?: boolean;
+  /** Avisos de clases que la IA tocó mientras otra persona las editaba. */
+  conflictos?: string[];
 }
 
 let contadorTurno = 0;
@@ -133,6 +143,7 @@ export function ModoIA({
   agruparDeshacer,
   seleccion,
   onVistaPrevia,
+  participantes,
 }: Props): JSX.Element {
   const [turnos, setTurnos] = useState<Turno[]>([]);
   const [autoAplicar, setAutoAplicar] = useState(leerAutoAplicar);
@@ -157,6 +168,8 @@ export function ModoIA({
   // render anterior, y tiene que llevar la selección de ahora.
   const seleccionRef = useRef(seleccion);
   seleccionRef.current = seleccion;
+  const participantesRef = useRef(participantes ?? []);
+  participantesRef.current = participantes ?? [];
 
   // Vista previa fantasma: mientras haya borrados propuestos sin aplicar, el
   // lienzo marca lo que se perdería. Se recalcula con el diagrama, porque lo
@@ -380,6 +393,7 @@ export function ModoIA({
           avisos,
         ),
       voz: (colaVozRef.current = porVoz ? crearColaDeVoz(hablar) : null),
+      conflictos: (clases) => avisosDeConflicto(diagramaRef.current, clases, participantesRef.current),
       senalar: (nombres) => {
         const ids = clasesPorNombre(diagramaRef.current, nombres);
         if (ids.length === 0) return;
@@ -397,6 +411,7 @@ export function ModoIA({
                   texto: estado.texto,
                   propuesta: estado.terminado ? estado.propuesta : [],
                   aplicadas: estado.aplicadas,
+                  conflictos: estado.conflictos,
                   motor: estado.motor,
                   escribiendo: !estado.terminado,
                 }
@@ -608,6 +623,13 @@ export function ModoIA({
               >
                 {turno.compartido ? 'Compartido en el tablón' : 'Compartir en el tablón'}
               </button>
+            )}
+            {turno.conflictos && turno.conflictos.length > 0 && (
+              <ul className="modo-ia__conflictos" role="status">
+                {turno.conflictos.map((aviso) => (
+                  <li key={aviso}>{aviso}</li>
+                ))}
+              </ul>
             )}
             {turno.aplicadas && turno.aplicadas.length > 0 && (
               <ul className="modo-ia__aplicadas" aria-label="Cambios que aplicó la IA">

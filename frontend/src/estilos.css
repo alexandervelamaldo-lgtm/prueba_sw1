@@ -6802,3 +6802,12 @@ select:focus {
   stroke: var(--error);
   stroke-dasharray: 6 4;
 }
+
+.modo-ia__conflictos {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 4px 8px;
+  border-left: 3px solid var(--aviso);
+  color: var(--texto);
+  font-size: 12px;
+}

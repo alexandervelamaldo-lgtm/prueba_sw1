@@ -105,7 +105,7 @@ const ESPERA_CAMARA_MS = 260;
  */
 export function crearEjecutorEnCola(
   deps: DependenciasEjecucion,
-  avisos: { alAplicar?(operacion: Operation): void } = {},
+  avisos: { alAplicar?(operacion: Operation, clases: string[]): void } = {},
 ): { encolar(operacion: Operation): void; terminar(): Promise<{ aplicadas: number; error: string | null }> } {
   const { cursor } = deps;
   let grupo: GrupoDeshacer | undefined;
@@ -139,7 +139,7 @@ export function crearEjecutorEnCola(
       return;
     }
     aplicadas += 1;
-    avisos.alAplicar?.(operacion);
+    avisos.alAplicar?.(operacion, resultado.clases ?? []);
 
     const clase = resultado.clases?.[0];
     if (clase) {
@@ -249,4 +249,21 @@ export function marcasDeBorrado(diagrama: ClassDiagram, operaciones: Operation[]
     }
   }
   return { clases: [...clases], relaciones: [...relaciones] };
+}
+
+/**
+ * Avisos para cuando la IA toca una clase que otra persona tiene seleccionada
+ * en ese momento (la presencia de Yjs, `usePresencia`). No se bloquea nada: el
+ * CRDT funde los dos cambios sin perder ninguno, pero quien edita a mano puede
+ * encontrarse la clase distinta de como la dejó, y mejor saberlo.
+ */
+export function avisosDeConflicto(
+  diagrama: ClassDiagram,
+  clases: string[],
+  participantes: { nombre: string; seleccion: string | null }[],
+): string[] {
+  const tocadas = new Set(clases);
+  return participantes
+    .filter((p) => p.seleccion !== null && tocadas.has(p.seleccion))
+    .map((p) => `Ojo: ${p.nombre} está editando «${diagrama.classes[p.seleccion!]?.name ?? 'una clase'}».`);
 }

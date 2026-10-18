@@ -21,7 +21,7 @@ function preparar(
   const dichas: string[] = [];
   const estados: EstadoRespuesta[] = [];
   const senaladas: string[][] = [];
-  let alAplicar: ((operacion: Operation) => void) | undefined;
+  let alAplicar: ((operacion: Operation, clases: string[]) => void) | undefined;
   const manejador = crearManejadorDeStream({
     diagrama: () => diagrama,
     autoAplicar: opciones.autoAplicar ?? true,
@@ -32,7 +32,7 @@ function preparar(
         encolar: (operacion) => {
           encoladas.push(operacion);
           if (opciones.aplicarAMano) porAplicar.push(operacion);
-          else alAplicar?.(operacion);
+          else alAplicar?.(operacion, ['C1']);
         },
         terminar: async () => ({ aplicadas: encoladas.length, error: null }),
       };
@@ -43,13 +43,14 @@ function preparar(
         : { decir: (texto) => dichas.push(texto), terminar: () => dichas.push('<fin>') },
     alCambiar: (estado) => estados.push(estado),
     senalar: (clases) => senaladas.push(clases),
+    conflictos: (clases) => (clases.includes('C1') ? ['Ojo: Beto está editando «Cliente».'] : []),
   });
   const enviar = (...eventos: EventoAsistente[]): void => eventos.forEach((e) => manejador.alEvento(e));
   const ultimo = (): EstadoRespuesta => estados.at(-1)!;
   /** Simula que el ejecutor termina de aplicar la siguiente operación encolada. */
   const aplicarSiguiente = (): void => {
     const operacion = porAplicar.shift();
-    if (operacion) alAplicar?.(operacion);
+    if (operacion) alAplicar?.(operacion, ['C1']);
   };
   return { manejador, enviar, encoladas, dichas, ultimo, aplicarSiguiente, senaladas };
 }
@@ -275,5 +276,15 @@ describe('debeRepasar', () => {
 
   it('no repasa si la IA no lo pidió', () => {
     expect(debeRepasar({ ...base, repasar: false }, false)).toBe(false);
+  });
+});
+
+describe('crearManejadorDeStream, conflictos', () => {
+  it('junta los avisos de conflicto de lo aplicado, sin repetirlos', () => {
+    const { enviar, ultimo } = preparar();
+
+    enviar(op(crearPedido), op(crearLinea));
+
+    expect(ultimo().conflictos).toEqual(['Ojo: Beto está editando «Cliente».']);
   });
 });

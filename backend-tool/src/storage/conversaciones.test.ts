@@ -251,8 +251,48 @@ describe('identificadores', () => {
     // Antes esto habría fallado: `autorId` era un segmento de ruta
     // (`<proyecto>/<usuario>.json`). Ahora es solo un dato dentro del fichero
     // del proyecto, así que un valor con barras se guarda tal cual.
-    await expect(almacen.appendTurn(P, '../no-es-una-ruta', 'hola', 'hola')).resolves.toBeUndefined();
+    await expect(almacen.appendTurn(P, '../no-es-una-ruta', 'hola', 'hola')).resolves.toEqual([]);
     const historial = await almacen.getHistory(P, '../no-es-una-ruta', 10);
     expect(historial[0]).toMatchObject({ autorId: '../no-es-una-ruta' });
+  });
+});
+
+describe('resumen de lo que salió de la ventana', () => {
+  it('no hay resumen hasta que se guarda uno', async () => {
+    expect(await almacen.getResumen(P, ANA)).toBeNull();
+  });
+
+  it('cada integrante tiene el suyo', async () => {
+    await almacen.setResumen(P, ANA, 'Ana modeló una tienda.');
+
+    expect(await almacen.getResumen(P, ANA)).toBe('Ana modeló una tienda.');
+    expect(await almacen.getResumen(P, BETO)).toBeNull();
+  });
+
+  it('sobrevive a reabrir el almacén y se va con el proyecto', async () => {
+    await almacen.setResumen(P, ANA, 'persistente');
+    await almacen.flush();
+    expect(await new FileConversationStore(dataDir).getResumen(P, ANA)).toBe('persistente');
+
+    await almacen.borrarProyecto(P);
+    expect(await almacen.getResumen(P, ANA)).toBeNull();
+  });
+});
+
+describe('appendTurn devuelve lo que podó', () => {
+  it('con sitio en la ventana no poda nada', async () => {
+    expect(await almacen.appendTurn(P, ANA, 'uno', 'respuesta uno')).toEqual([]);
+  });
+
+  it('devuelve los mensajes del hilo que salieron de la ventana, del más antiguo al más reciente', async () => {
+    for (let i = 1; i <= MAXIMO_TURNOS; i += 1) {
+      await almacen.appendTurn(P, ANA, `orden ${i}`, `respuesta ${i}`);
+    }
+    await almacen.appendTurn(P, BETO, 'de Beto', 'para Beto');
+
+    const podados = await almacen.appendTurn(P, ANA, 'orden nueva', 'respuesta nueva');
+
+    expect(podados.map((m) => m.texto)).toEqual(['orden 1', 'respuesta 1']);
+    expect(podados[0]).toMatchObject({ role: 'user', autorId: ANA, tipo: 'respuesta' });
   });
 });

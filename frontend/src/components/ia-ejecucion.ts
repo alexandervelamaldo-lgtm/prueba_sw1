@@ -106,7 +106,11 @@ const ESPERA_CAMARA_MS = 260;
 export function crearEjecutorEnCola(
   deps: DependenciasEjecucion,
   avisos: { alAplicar?(operacion: Operation, clases: string[]): void } = {},
-): { encolar(operacion: Operation): void; terminar(): Promise<{ aplicadas: number; error: string | null }> } {
+): {
+  /** `propuestoPor`: el motor de esa operación, si lo dice; si no, el del contexto. */
+  encolar(operacion: Operation, propuestoPor?: string): void;
+  terminar(): Promise<{ aplicadas: number; error: string | null }>;
+} {
   const { cursor } = deps;
   let grupo: GrupoDeshacer | undefined;
   let empezado = false;
@@ -116,7 +120,7 @@ export function crearEjecutorEnCola(
   let detenido = false;
   let lanzado: unknown = null;
 
-  const paso = async (operacion: Operation): Promise<void> => {
+  const paso = async (operacion: Operation, propuestoPor?: string): Promise<void> => {
     if (detenido) return;
     if (deps.cancelado?.()) {
       detenido = true;
@@ -131,7 +135,8 @@ export function crearEjecutorEnCola(
       await cursor.clic();
     }
 
-    const aplicarPaso = () => deps.aplicar([operacion], deps.contexto);
+    const contexto = propuestoPor ? { ...deps.contexto, propuestoPor } : deps.contexto;
+    const aplicarPaso = () => deps.aplicar([operacion], contexto);
     const resultado = grupo ? grupo.propio(aplicarPaso) : aplicarPaso();
     if (!resultado.ok) {
       error = resultado.error;
@@ -154,13 +159,13 @@ export function crearEjecutorEnCola(
   };
 
   return {
-    encolar(operacion) {
+    encolar(operacion, propuestoPor) {
       if (!empezado) {
         empezado = true;
         grupo = deps.agrupar?.();
       }
       cadena = cadena.then(() =>
-        paso(operacion).catch((fallo: unknown) => {
+        paso(operacion, propuestoPor).catch((fallo: unknown) => {
           lanzado = fallo ?? new Error('fallo al aplicar');
           detenido = true;
         }),

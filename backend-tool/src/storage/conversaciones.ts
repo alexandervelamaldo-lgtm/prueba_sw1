@@ -64,9 +64,10 @@ export interface ConversationStore {
    * Añade un comentario de la IA que nadie ha pedido al hilo de `usuarioId`:
    * un único mensaje de rol `assistant`, sin el turno de usuario que
    * `appendTurn` siempre añade junto a él. Lo usa `ai/vigilancia.ts` cuando
-   * decide que el diagrama merece un comentario espontáneo.
+   * decide que el diagrama merece un comentario espontáneo. Devuelve, como
+   * `appendTurn`, los mensajes del hilo que salieron de la ventana.
    */
-  appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void>;
+  appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<ChatMessage[]>;
   /** El resumen de lo que ya salió de la ventana de este hilo, o `null`. */
   getResumen(proyectoId: string, usuarioId: string): Promise<string | null>;
   setResumen(proyectoId: string, usuarioId: string, resumen: string): Promise<void>;
@@ -119,7 +120,10 @@ function vacia(): ConversacionEnDisco {
  */
 export class FileConversationStore implements ConversationStore {
   private readonly directorio: string;
-  private readonly cache = new Map<string, ConversacionEnDisco>();
+  // La lectura de cada proyecto, compartida: dos pedidos que llegan antes de
+  // que termine la primera carga tienen que trabajar sobre el mismo objeto, o
+  // el segundo en cargar pisaría lo que añadió el primero.
+  private readonly cache = new Map<string, Promise<ConversacionEnDisco>>();
   private colaDeEscritura: Promise<void> = Promise.resolve();
 
   constructor(dataDir: string) {
@@ -131,22 +135,26 @@ export class FileConversationStore implements ConversationStore {
     return join(this.directorio, `${proyectoId}.json`);
   }
 
-  private async cargar(proyectoId: string): Promise<ConversacionEnDisco> {
-    const enMemoria = this.cache.get(proyectoId);
-    if (enMemoria) return enMemoria;
+  private cargar(proyectoId: string): Promise<ConversacionEnDisco> {
+    const enCurso = this.cache.get(proyectoId);
+    if (enCurso) return enCurso;
 
-    let conversacion = vacia();
-    try {
-      conversacion = JSON.parse(
-        await readFile(this.rutaConversacion(proyectoId), 'utf8'),
-      ) as ConversacionEnDisco;
-    } catch (error) {
-      // Proyecto sin ninguna conversación todavía: no es un error, es lo
-      // normal la primera vez que alguien abre el Modo IA.
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-    this.cache.set(proyectoId, conversacion);
-    return conversacion;
+    const carga = (async () => {
+      try {
+        return JSON.parse(await readFile(this.rutaConversacion(proyectoId), 'utf8')) as ConversacionEnDisco;
+      } catch (error) {
+        // Proyecto sin ninguna conversación todavía: no es un error, es lo
+        // normal la primera vez que alguien abre el Modo IA.
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        return vacia();
+      }
+    })();
+    this.cache.set(proyectoId, carga);
+    // Un fallo de lectura no se queda guardado: el siguiente pedido vuelve a probar.
+    carga.catch(() => {
+      if (this.cache.get(proyectoId) === carga) this.cache.delete(proyectoId);
+    });
+    return carga;
   }
 
   /** Se escribe a un temporal y se renombra: ver `tablon.ts` para el motivo. */
@@ -227,7 +235,7 @@ export class FileConversationStore implements ConversationStore {
     return podados;
   }
 
-  async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void> {
+  async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<ChatMessage[]> {
     const conversacion = await this.cargar(proyectoId);
     conversacion.mensajes.push({
       role: 'assistant',
@@ -238,8 +246,9 @@ export class FileConversationStore implements ConversationStore {
       hiloDe: usuarioId,
     });
 
-    this.recortar(conversacion, usuarioId);
+    const podados = this.recortar(conversacion, usuarioId);
     this.persistir(proyectoId, conversacion);
+    return podados;
   }
 
   async getResumen(proyectoId: string, usuarioId: string): Promise<string | null> {

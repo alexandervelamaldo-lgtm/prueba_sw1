@@ -104,7 +104,7 @@ export class GrammarAssistant implements AssistantEngine {
     const mensaje = respuesta.clarification || respuesta.explanation;
     if (mensaje) yield { tipo: 'mensaje', texto: mensaje };
     for (const operacion of respuesta.operations) {
-      yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion) };
+      yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion), motor: this.name };
     }
     yield { tipo: 'fin', motor: this.name, confianza: respuesta.confidence };
   }
@@ -292,7 +292,12 @@ export class LlmAssistant implements AssistantEngine {
       if (accion._type === 'message') return { tipo: 'mensaje', texto: accion.text };
       if (accion._type === 'point') return { tipo: 'senalar', clases: accion.classes };
       if (accion._type === 'review') return { tipo: 'repasar' };
-      return { tipo: 'operacion', operacion: accion.operation, descripcion: describeOperation(accion.operation) };
+      return {
+        tipo: 'operacion',
+        operacion: accion.operation,
+        descripcion: describeOperation(accion.operation),
+        motor: this.name,
+      };
     };
 
     const registrar = async function* (evento: EventoAsistente | null): AsyncGenerator<EventoAsistente> {
@@ -392,7 +397,7 @@ export class LlmAssistant implements AssistantEngine {
     const mensaje = respuesta.clarification || respuesta.explanation;
     if (mensaje) yield { tipo: 'mensaje', texto: mensaje };
     for (const operacion of respuesta.operations) {
-      yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion) };
+      yield { tipo: 'operacion', operacion, descripcion: describeOperation(operacion), motor: this.fallback.name };
     }
     yield { tipo: 'fin', motor: this.fallback.name, confianza: respuesta.confidence };
   }
@@ -465,7 +470,9 @@ export class LlmAssistant implements AssistantEngine {
       .join('\n');
     const user = `${previo ? `Resumen hasta ahora: ${previo}\n\n` : ''}Mensajes que añadir al resumen:\n${transcripcion}`;
     try {
-      const resumen = (await this.enviarConversacion(PROMPT_RESUMEN, user, [], 400, false, registrarUso)).trim();
+      const resumen = (
+        await this.enviarConversacion(PROMPT_RESUMEN, user, [], MAXIMO_TOKENS_TEXTO_BREVE, false, registrarUso)
+      ).trim();
       if (resumen) return resumen.slice(0, MAXIMO_RESUMEN);
     } catch (error) {
       console.warn('El modelo no pudo resumir la conversación:', (error as Error).message);
@@ -487,7 +494,7 @@ export class LlmAssistant implements AssistantEngine {
       REVIEW_SYSTEM_PROMPT,
       user,
       this.historialComoMensajes(contexto),
-      300,
+      MAXIMO_TOKENS_TEXTO_BREVE,
       false,
       contexto?.registrarUso,
     );
@@ -631,6 +638,15 @@ async function* textoDelStream(
 }
 
 const PROMPT_RESUMEN = `Resumes una conversación entre una persona y un asistente de modelado UML, para que el asistente la recuerde más adelante. Escribe en castellano, en tercera persona y en un solo párrafo de como mucho seis frases: qué se pidió, qué se decidió y qué quedó pendiente. Junta el resumen anterior (si lo hay) con los mensajes nuevos. Responde solo con el resumen, sin introducción.`;
+
+/**
+ * Tope de salida para los textos breves (el resumen y el comentario
+ * espontáneo). Lo breve lo piden los prompts, no este número: con modelos que
+ * razonan antes de responder, el tope también se gasta en ese razonamiento, y
+ * con 300 o 400 tokens el texto salía cortado a mitad de frase (medido con
+ * `gemini-3.7-flash`: unos 70 caracteres con 400, completo desde 1024).
+ */
+const MAXIMO_TOKENS_TEXTO_BREVE = 1024;
 
 /** Tope del resumen guardado: va en cada petición, así que no puede crecer sin límite. */
 const MAXIMO_RESUMEN = 1500;

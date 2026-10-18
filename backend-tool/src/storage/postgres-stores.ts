@@ -827,14 +827,14 @@ export class PostgresConversationStore implements ConversationStore {
     });
   }
 
-  async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void> {
-    await enTransaccion(this.pool, async (cliente) => {
+  async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<ChatMessage[]> {
+    return enTransaccion(this.pool, async (cliente) => {
       await cliente.query(
         `insert into conversaciones_ia (proyecto_id, hilo_usuario_id, usuario_id, rol, contenido, tipo)
          values ($1, $2, null, 'assistant', $3, 'observacion')`,
         [proyectoId, usuarioId, texto],
       );
-      await this.recortar(cliente, proyectoId, usuarioId);
+      return this.recortar(cliente, proyectoId, usuarioId);
     });
   }
 

@@ -9,6 +9,7 @@ import { FileTablonStore, type TablonStore } from './storage/tablon.js';
 import { FileConversationStore, type ConversationStore } from './storage/conversaciones.js';
 import { FileUsoIAStore, type UsoIAStore } from './storage/uso-ia.js';
 import { CupoIA } from './ai/cupo-ia.js';
+import { crearResumidor } from './ai/memoria-resumida.js';
 import { FileVersionStore, type VersionStore } from './storage/versiones.js';
 import { RoomManager } from './collab/rooms.js';
 import { CollabServer } from './collab/server.js';
@@ -212,7 +213,9 @@ export function createApp(deps: AppDependencies): BuiltApp {
   // sin tener que saber nada de él.
   // Uno para toda la app: las rutas y la vigilancia ven las mismas reservas.
   const cupo = new CupoIA(deps.usoIA, config.llmLimiteDiarioTokens);
-  const vigilante = new VigilanteDiagrama(assistant, conversations, undefined, undefined, cupo);
+  // También uno para toda la app: comparten la fila de resúmenes de cada hilo.
+  const resumidor = crearResumidor({ conversations, assistant, cupo });
+  const vigilante = new VigilanteDiagrama(assistant, conversations, undefined, undefined, cupo, resumidor);
   const collab = new CollabServer({ config, identity, store, rooms, vigilante });
 
   app.get('/salud', (_request, response) => {
@@ -271,6 +274,7 @@ export function createApp(deps: AppDependencies): BuiltApp {
       conversations,
       usoIA: deps.usoIA,
       cupo,
+      resumidor,
       limiteDiarioTokens: config.llmLimiteDiarioTokens,
     }),
   );

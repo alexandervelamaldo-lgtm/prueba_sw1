@@ -67,8 +67,11 @@ class ConversacionesFalsas implements ConversationStore {
   async appendTurn(): Promise<ChatMessage[]> {
     return [];
   }
-  async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<void> {
+  /** Lo que devolverá `appendComentario` como podado, para probar el resumen. */
+  podadosAlComentar: ChatMessage[] = [];
+  async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<ChatMessage[]> {
     this.comentarios.push({ proyectoId, usuarioId, texto });
+    return this.podadosAlComentar;
   }
   async getResumen(): Promise<string | null> {
     return null;
@@ -358,5 +361,28 @@ describe('cupo de la IA en los comentarios espontáneos', () => {
 
     expect(asistente.llamadas).toBe(0);
     expect(conversaciones.comentarios).toHaveLength(0);
+  });
+});
+
+describe('memoria resumida en los comentarios espontáneos', () => {
+  it('lo que un comentario empuja fuera de la ventana se resume en el hilo de su destinatario', async () => {
+    const resumidos: { proyectoId: string; usuarioId: string; textos: string[] }[] = [];
+    const resumidor = {
+      resumir: (proyectoId: string, usuarioId: string, mensajes: ChatMessage[]) => {
+        resumidos.push({ proyectoId, usuarioId, textos: mensajes.map((m) => m.texto) });
+      },
+    };
+    conversaciones.podadosAlComentar = [
+      { role: 'user', texto: 'orden 1', autorId: 'ana', creadoEn: '', tipo: 'respuesta' },
+    ];
+    const vigilante = new VigilanteDiagrama(asistente, conversaciones, ESPERA_MS, ENFRIAMIENTO_MS, undefined, resumidor);
+    const sala = crearSala();
+    sala.connections.add(crearConexion('ana'));
+    vigilante.observar('proyecto-1', sala);
+
+    cambiar(sala, crearConexion('ana'));
+    await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
+
+    expect(resumidos).toEqual([{ proyectoId: 'proyecto-1', usuarioId: 'ana', textos: ['orden 1'] }]);
   });
 });

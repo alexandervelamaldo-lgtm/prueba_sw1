@@ -393,6 +393,15 @@ describe('LlmAssistant contra un proveedor simulado', () => {
     expect(usos).toEqual([320]);
   });
 
+  it('el resumen y el comentario espontáneo piden margen de salida: con modelos que razonan, 300 o 400 tokens los cortaban a mitad de frase', async () => {
+    responder = () => ({ status: 200, payload: comoOpenAi('Un texto.') });
+
+    await motor().resumirConversacion(null, [{ role: 'user', texto: 'hola', autorId: 'u', creadoEn: '', tipo: 'respuesta' }]);
+    await motor().revisar(diagrama);
+
+    expect(recibidos.map((cuerpo) => cuerpo.max_tokens)).toEqual([1024, 1024]);
+  });
+
   it('usa el protocolo de Anthropic cuando se le pide', async () => {
     responder = () => ({
       status: 200,
@@ -641,6 +650,21 @@ describe('LlmAssistant.interpretarEnStream contra un proveedor simulado', () => 
     }
 
     expect(usos).toEqual([100]);
+  });
+
+  it('cada operación dice qué motor la propuso, también si la propuso la gramática de respaldo', async () => {
+    const json = JSON.stringify({ actions: [{ _type: 'operation', operation: { op: 'addClass', name: 'Pedido', kind: 'class' } }] });
+    bloquesSse = [`data: ${JSON.stringify({ choices: [{ delta: { content: json } }] })}\n\n`, 'data: [DONE]\n\n'];
+    const delModelo: EventoAsistente[] = [];
+    for await (const e of motor().interpretarEnStream('crea Pedido', diagrama)) delModelo.push(e);
+
+    responder = () => ({ status: 500, payload: { error: 'caído' } });
+    bloquesSse = [];
+    const deRespaldo: EventoAsistente[] = [];
+    for await (const e of motor().interpretarEnStream('crea la clase Pedido', diagrama)) deRespaldo.push(e);
+
+    expect(delModelo.find((e) => e.tipo === 'operacion')).toMatchObject({ motor: motor().name });
+    expect(deRespaldo.find((e) => e.tipo === 'operacion')).toMatchObject({ motor: 'gramatica-local' });
   });
 
   it('propaga la cancelación externa en vez de degradar a la gramática', async () => {

@@ -76,13 +76,15 @@ function vacio(): VersionesEnDisco {
 }
 
 /**
- * Compara por fecha y, si coinciden, por id — mismo motivo que la segunda
- * clave del índice `versiones_por_proyecto`: `creadoEn` por sí solo no basta
- * para un orden determinista entre dos versiones creadas en el mismo
- * instante.
+ * Compara solo por fecha. Dos versiones creadas en el mismo milisegundo
+ * quedan en el orden en que se crearon: el fichero las guarda en ese orden
+ * (`push`) y `sort` es estable. Desempatar por `id`, como antes, las dejaba al
+ * azar, porque el id es un UUID aleatorio. En PostgreSQL el desempate por id
+ * del índice `versiones_por_proyecto` no llega a usarse: `now()` tiene
+ * precisión de microsegundos y cada versión es su propia transacción.
  */
 function compararOrden(a: VersionResumen, b: VersionResumen): number {
-  return a.creadoEn.localeCompare(b.creadoEn) || a.id.localeCompare(b.id);
+  return a.creadoEn.localeCompare(b.creadoEn);
 }
 
 /**

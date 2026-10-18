@@ -296,3 +296,42 @@ describe('appendTurn devuelve lo que podó', () => {
     expect(podados[0]).toMatchObject({ role: 'user', autorId: ANA, tipo: 'respuesta' });
   });
 });
+
+describe('pedidos a la vez al abrir el almacén', () => {
+  it('dos turnos antes de la primera lectura del fichero no se pisan', async () => {
+    await almacen.appendTurn(P, ANA, 'orden previa', 'respuesta previa');
+    await almacen.flush();
+    const reabierto = new FileConversationStore(dataDir);
+
+    await Promise.all([
+      reabierto.appendTurn(P, ANA, 'orden de Ana', 'respuesta a Ana'),
+      reabierto.appendTurn(P, BETO, 'orden de Beto', 'respuesta a Beto'),
+    ]);
+    await reabierto.flush();
+
+    const releido = new FileConversationStore(dataDir);
+    expect((await releido.getHistory(P, ANA, 10)).map((m) => m.texto)).toEqual([
+      'orden previa',
+      'respuesta previa',
+      'orden de Ana',
+      'respuesta a Ana',
+    ]);
+    expect((await releido.getHistory(P, BETO, 10)).map((m) => m.texto)).toEqual(['orden de Beto', 'respuesta a Beto']);
+  });
+});
+
+describe('appendComentario devuelve lo que podó', () => {
+  it('un comentario que empuja un mensaje fuera de la ventana lo devuelve', async () => {
+    for (let i = 1; i <= MAXIMO_TURNOS; i += 1) {
+      await almacen.appendTurn(P, ANA, `orden ${i}`, `respuesta ${i}`);
+    }
+
+    const podados = await almacen.appendComentario(P, ANA, 'comentario');
+
+    expect(podados.map((m) => m.texto)).toEqual(['orden 1']);
+  });
+
+  it('con sitio en la ventana no poda nada', async () => {
+    expect(await almacen.appendComentario(P, ANA, 'comentario')).toEqual([]);
+  });
+});

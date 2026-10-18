@@ -25,6 +25,8 @@
  * puente no existe y no hay nada que elegir.
  */
 
+import { getToken } from './api';
+import { crearVozDelServidor, type ReproductorAudio, type VozDelServidor } from './voz-servidor';
 import {
   ALTERNATIVAS_PEDIDAS,
   MS_MAXIMO_ESCUCHANDO,
@@ -524,6 +526,20 @@ export function hablar(texto: string, alTerminar?: () => void): boolean {
     enviarAlPuente(nativo, { tipo: 'hablar', texto });
     return false;
   }
+  // La voz del servidor (ElevenLabs), si la hay. Si falla, la del navegador; y
+  // si tampoco hay, se avisa el final igual: quien espera a `alTerminar`
+  // (la cola de frases del Modo IA) no puede quedarse esperando para siempre.
+  if (vozDelServidor?.activa) {
+    vozDelServidor.hablar(texto, alTerminar, () => {
+      if (!hablarConElNavegador(texto, alTerminar)) alTerminar?.();
+    });
+    return alTerminar !== undefined;
+  }
+  return hablarConElNavegador(texto, alTerminar);
+}
+
+/** La voz del sistema (`speechSynthesis`), la de siempre. */
+function hablarConElNavegador(texto: string, alTerminar?: () => void): boolean {
   if (!sintesisDelNavegador()) return false;
 
   lecturaEnCurso += 1;
@@ -568,6 +584,7 @@ export function callar(): void {
     enviarAlPuente(nativo, { tipo: 'callar' });
     return;
   }
+  vozDelServidor?.callar();
   if (!sintesisDelNavegador()) return;
   // Se invalida el aviso antes de cancelar: quien llama a `callar` ya sabe que
   // ha parado, y el `onend` que provoca `cancel` llegaría después a contarlo
@@ -575,4 +592,83 @@ export function callar(): void {
   lecturaEnCurso += 1;
   soltarLocucion();
   speechSynthesis.cancel();
+}
+
+/* -------------------------------------------------------------------------- */
+/* Voz del servidor (ElevenLabs)                                               */
+/* -------------------------------------------------------------------------- */
+
+let vozDelServidor: VozDelServidor | null = null;
+let preparando: Promise<boolean> | null = null;
+
+/**
+ * Pregunta una vez al servidor si tiene voz de ElevenLabs y, si la tiene,
+ * `hablar` pasa a usarla. Sin sesión, sin red o sin voz configurada, no cambia
+ * nada. En el móvil no se usa: allí habla el puente nativo.
+ */
+export function prepararVozDelServidor(): Promise<boolean> {
+  if (puente() !== null || typeof Audio === 'undefined') return Promise.resolve(false);
+  preparando ??= (async () => {
+    try {
+      const respuesta = await fetch('/api/voz/estado', { headers: cabecerasConSesion() });
+      const estado = respuesta.ok ? ((await respuesta.json()) as { elevenlabs?: boolean }) : null;
+      if (!estado?.elevenlabs) return false;
+      vozDelServidor = crearVozDelServidor({
+        pedirAudio: async (texto, senal) => {
+          const audio = await fetch('/api/voz/sintetizar', {
+            method: 'POST',
+            headers: { ...cabecerasConSesion(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ texto }),
+            signal: senal,
+          });
+          if (!audio.ok) throw Object.assign(new Error(`voz ${audio.status}`), { status: audio.status });
+          return audio.blob();
+        },
+        crearReproductor: (url) => reproductorDe(new Audio(url)),
+        crearUrl: (audio) => URL.createObjectURL(audio),
+        liberarUrl: (url) => URL.revokeObjectURL(url),
+      });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      // Si no se pudo (por ejemplo, sin sesión todavía), se puede volver a probar.
+      if (!vozDelServidor) preparando = null;
+    }
+  })();
+  return preparando;
+}
+
+/** Si `hablar` está usando la voz de ElevenLabs (para mencionarla, como pide su plan gratuito). */
+export function vozDelServidorActiva(): boolean {
+  return vozDelServidor?.activa ?? false;
+}
+
+function cabecerasConSesion(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/** `HTMLAudioElement` con la forma mínima que usa `voz-servidor.ts`. */
+function reproductorDe(audio: HTMLAudioElement): ReproductorAudio {
+  let alTerminar: (() => void) | null = null;
+  let alFallar: (() => void) | null = null;
+  return {
+    play: () => audio.play(),
+    pause: () => audio.pause(),
+    get onended() {
+      return alTerminar;
+    },
+    set onended(fn) {
+      alTerminar = fn;
+      audio.onended = fn ? () => fn() : null;
+    },
+    get onerror() {
+      return alFallar;
+    },
+    set onerror(fn) {
+      alFallar = fn;
+      audio.onerror = fn ? () => fn() : null;
+    },
+  };
 }

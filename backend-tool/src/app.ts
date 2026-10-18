@@ -9,6 +9,8 @@ import { FileTablonStore, type TablonStore } from './storage/tablon.js';
 import { FileConversationStore, type ConversationStore } from './storage/conversaciones.js';
 import { FileUsoIAStore, type UsoIAStore } from './storage/uso-ia.js';
 import { CupoIA } from './ai/cupo-ia.js';
+import { crearVozElevenLabs } from './ai/voz-elevenlabs.js';
+import { vozRouter } from './api/voz.js';
 import { crearResumidor } from './ai/memoria-resumida.js';
 import { FileVersionStore, type VersionStore } from './storage/versiones.js';
 import { RoomManager } from './collab/rooms.js';
@@ -49,6 +51,8 @@ import { cabecerasDeSeguridad, limiteDeTasa } from './api/proteccion.js';
  * límite por accidente.
  */
 const LIMITE_IA = { ventanaMs: 60_000, maximo: 30, nombre: 'al asistente' };
+/** Cada frase hablada es un pedido; algo más de margen que el asistente. */
+const LIMITE_VOZ = { ventanaMs: 60_000, maximo: 60, nombre: 'a la voz' };
 const LIMITE_IMAGEN = { ventanaMs: 60_000, maximo: 10, nombre: 'de lectura de imágenes' };
 const LIMITE_GENERACION = { ventanaMs: 60_000, maximo: 10, nombre: 'de generación de código' };
 
@@ -228,6 +232,18 @@ export function createApp(deps: AppDependencies): BuiltApp {
   });
 
   app.use('/api/auth', authRouter(identity));
+
+  // La voz de ElevenLabs, si hay clave: la clave se queda aquí y el navegador
+  // solo recibe el audio. Sin clave, `estado` dice que no hay y el navegador
+  // usa su propia voz.
+  const voz = config.elevenLabsApiKey
+    ? crearVozElevenLabs({
+        apiKey: config.elevenLabsApiKey,
+        ...(config.elevenLabsVoiceId ? { voiceId: config.elevenLabsVoiceId } : {}),
+        ...(config.elevenLabsModelo ? { modelo: config.elevenLabsModelo } : {}),
+      })
+    : null;
+  app.use('/api/voz', requireAuth(identity), limiteDeTasa(LIMITE_VOZ), vozRouter(voz));
 
   // La guía no cuelga de ningún proyecto porque no habla de ninguno: habla de
   // la herramienta, y la pregunta «¿por dónde empiezo?» se hace justamente antes

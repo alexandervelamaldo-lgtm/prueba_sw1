@@ -98,6 +98,13 @@ export interface Config {
    */
   llmLimiteDiarioTokens?: number;
   /**
+   * Voz de ElevenLabs para el Modo IA (`ai/voz-elevenlabs.ts`). Sin clave, el
+   * navegador habla con su propia voz. La voz y el modelo son opcionales.
+   */
+  elevenLabsApiKey?: string;
+  elevenLabsVoiceId?: string;
+  elevenLabsModelo?: string;
+  /**
    * Techo de la respuesta del modelo de visión, en tokens.
    *
    * Se saca a variable porque el valor bueno depende del modelo y del diagrama,
@@ -285,6 +292,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     llmVisionApiKey: env.LLM_VISION_API_KEY,
     llmVisionBaseUrl: env.LLM_VISION_BASE_URL,
     llmLimiteDiarioTokens: enteroPositivo(env.LLM_LIMITE_DIARIO_TOKENS),
+    elevenLabsApiKey: env.ELEVENLABS_API_KEY?.trim() || undefined,
+    elevenLabsVoiceId: env.ELEVENLABS_VOICE_ID?.trim() || undefined,
+    elevenLabsModelo: env.ELEVENLABS_MODEL?.trim() || undefined,
     // Sin variable se deja `undefined` en vez de poner aquí un número: así el
     // valor por defecto vive en un solo sitio, junto a la explicación de por qué
     // es ese, y no repetido en dos ficheros que se separarán con el tiempo.

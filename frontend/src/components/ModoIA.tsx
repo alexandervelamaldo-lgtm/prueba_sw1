@@ -2,7 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { describeOperation, interpretCommand, type Aplicar, type ClassDiagram } from '@app/shared';
 import { ApiError, api, type Proyecto, type TurnoAsistente } from '../services/api';
 import { puntuarPorVocabulario } from '../services/dictado';
-import { callar, dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDictado } from '../services/voz';
+import {
+  callar,
+  dictadoDisponible,
+  dictar,
+  hablar,
+  motivoSinVoz,
+  prepararVozDelServidor,
+  type SesionDictado,
+} from '../services/voz';
 import { Icono } from './iconos';
 import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
 import { crearCursorIA, nodoDeClase, prefiereMenosMovimiento, resaltarClase } from './cursor-ia';
@@ -160,6 +168,17 @@ export function ModoIA({
   const [ejecutando, setEjecutando] = useState(false);
   // Control de costos: solo se muestra si el servidor tiene un límite diario.
   const [uso, setUso] = useState<{ hoy: number; limite: number | null } | null>(null);
+  // Si habla con la voz de ElevenLabs: su plan gratuito pide mencionarla.
+  const [vozElevenLabs, setVozElevenLabs] = useState(false);
+  useEffect(() => {
+    let vigente = true;
+    void prepararVozDelServidor().then((activa) => {
+      if (vigente) setVozElevenLabs(activa);
+    });
+    return () => {
+      vigente = false;
+    };
+  }, []);
   // Una orden a la vez, desde que sale hasta que la IA termina de aplicarla: la
   // siguiente espera a que esta termine (o se interrumpa). El estado llegaría
   // tarde para una orden que entra en el mismo instante (por voz); la
@@ -627,6 +646,7 @@ export function ModoIA({
         La IA aplica sola los cambios. Lo que borra algo sigue pidiendo «Aplicar», y cada respuesta se
         deshace de una vez.
       </label>
+      {vozElevenLabs && <p className="modo-ia__uso">Voz de ElevenLabs.</p>}
       {uso?.limite ? (
         <p className="modo-ia__uso">
           Uso de la IA hoy: {uso.hoy.toLocaleString('es')} de {uso.limite.toLocaleString('es')} tokens.

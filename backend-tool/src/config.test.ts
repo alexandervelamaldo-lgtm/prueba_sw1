@@ -192,3 +192,17 @@ describe('LLM_LIMITE_DIARIO_TOKENS', () => {
     expect(loadConfig({ ...base, LLM_LIMITE_DIARIO_TOKENS: '1.5' }).llmLimiteDiarioTokens).toBeUndefined();
   });
 });
+
+describe('ELEVENLABS_*', () => {
+  const base = { SESSION_SECRET: 'secreto' };
+
+  it('sin clave no hay voz del servidor', () => {
+    expect(loadConfig(base).elevenLabsApiKey).toBeUndefined();
+    expect(loadConfig({ ...base, ELEVENLABS_API_KEY: '   ' }).elevenLabsApiKey).toBeUndefined();
+  });
+
+  it('lee la clave, la voz y el modelo', () => {
+    const config = loadConfig({ ...base, ELEVENLABS_API_KEY: 'k', ELEVENLABS_VOICE_ID: 'v', ELEVENLABS_MODEL: 'm' });
+    expect([config.elevenLabsApiKey, config.elevenLabsVoiceId, config.elevenLabsModelo]).toEqual(['k', 'v', 'm']);
+  });
+});

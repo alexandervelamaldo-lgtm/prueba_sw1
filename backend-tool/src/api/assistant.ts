@@ -1,7 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { describeOperation, formatearEventoSse, readDiagram, type EventoAsistente } from '@app/shared';
-import { peticionDeRevision, type AssistantEngine, type TurnoConAutor } from '../ai/assistant.js';
+import { describeOperation, formatearEventoSse, leerHistorial, readDiagram, type EventoAsistente } from '@app/shared';
+import {
+  peticionDeRevision,
+  resumirCambiosRecientes,
+  type AssistantEngine,
+  type TurnoConAutor,
+} from '../ai/assistant.js';
 import type { IdentityProvider } from '../auth/identity.js';
 import type { ProjectStore } from '../storage/store.js';
 import type { RoomManager } from '../collab/rooms.js';
@@ -34,6 +39,7 @@ const PeticionSchema = z.object({
  * para eso y no hinchan el prompt de alguien con treinta proyectos.
  */
 const MAXIMO_OTROS_PROYECTOS = 5;
+/** * Cuántos cambios del historial del diagrama van al prompt, para preguntas como * «¿qué cambió Juan desde ayer?». Treinta líneas cortas bastan para un día de * trabajo sin inflar cada petición. */ const MAXIMO_CAMBIOS_RECIENTES = 30;
 
 /**
  * Resuelve `autorId → autorNombre` para un lote de turnos, igual que
@@ -90,7 +96,11 @@ export function assistantRouter(deps: {
         .slice(0, MAXIMO_OTROS_PROYECTOS)
         .map((proyecto) => `${proyecto.name} (${proyecto.role})`);
 
-      const result = await assistant.interpret(body.texto, diagram, { historial, otrosProyectos });
+      const result = await assistant.interpret(body.texto, diagram, {
+        historial,
+        otrosProyectos,
+        cambiosRecientes: resumirCambiosRecientes(leerHistorial(room.doc), MAXIMO_CAMBIOS_RECIENTES),
+      });
       await conversations.appendTurn(proyectoId, request.user.id, body.texto, result.explanation);
 
       response.json({
@@ -127,7 +137,11 @@ export function assistantRouter(deps: {
         .filter((proyecto) => proyecto.id !== proyectoId)
         .slice(0, MAXIMO_OTROS_PROYECTOS)
         .map((proyecto) => `${proyecto.name} (${proyecto.role})`);
-      const contexto = { historial, otrosProyectos };
+      const contexto = {
+        historial,
+        otrosProyectos,
+        cambiosRecientes: resumirCambiosRecientes(leerHistorial(room.doc), MAXIMO_CAMBIOS_RECIENTES),
+      };
 
       const abortador = new AbortController();
       let desconectado = false;

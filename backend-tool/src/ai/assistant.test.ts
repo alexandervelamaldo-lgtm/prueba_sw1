@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDiagram, createClass, createAttribute, type EventoAsistente } from '@app/shared';
-import { GrammarAssistant, LlmAssistant, createAssistant, extractJson } from './assistant.js';
+import { GrammarAssistant, LlmAssistant, createAssistant, extractJson, resumirCambiosRecientes } from './assistant.js';
 import { OpenAiVisionEngine, createVisionEngine } from './vision.js';
 import { ErrorDeModelo } from './transporte.js';
 
@@ -312,6 +312,18 @@ describe('LlmAssistant contra un proveedor simulado', () => {
     await motor().interpret('hola', diagrama);
     const sistema = (recibidos[0]?.messages as { role: string; content: string }[])[0];
     expect(sistema?.content).toContain('"point"');
+  });
+
+  it('manda los cambios recientes del diagrama para poder contestar «qué cambió…»', async () => {
+    await motor().interpret('¿qué cambió Ana?', diagrama, {
+      historial: [],
+      otrosProyectos: [],
+      cambiosRecientes: ['2026-10-17 21:03 · Ana · Crear clase «Pedido»'],
+    });
+
+    const mensajes = recibidos[0]?.messages as { role: string; content: string }[];
+    expect(mensajes.at(-1)?.content).toContain('2026-10-17 21:03 · Ana · Crear clase «Pedido»');
+    expect(mensajes[0]?.content).toContain('cambios recientes');
   });
 
   it('usa el protocolo de Anthropic cuando se le pide', async () => {
@@ -1189,5 +1201,41 @@ describe('OpenAiVisionEngine contra un proveedor simulado', () => {
 
     expect(tabla.tabla).toBe('Empleado');
     expect(modelo).toBe('de-reserva');
+  });
+});
+
+describe('resumirCambiosRecientes', () => {
+  const entrada = (n: number, extra: Record<string, unknown> = {}) => ({
+    id: `e${n}`,
+    autorId: 'u-ana',
+    autorNombre: 'Ana',
+    momento: `2026-10-17T21:0${n}:00.000Z`,
+    origen: 'manual' as const,
+    resumen: `Cambio ${n}`,
+    detalles: [],
+    clases: [],
+    relaciones: [],
+    creadas: [],
+    ...extra,
+  });
+
+  it('una línea por cambio con fecha, autor y resumen, del más antiguo al más reciente', () => {
+    expect(resumirCambiosRecientes([entrada(1), entrada(2)], 10)).toEqual([
+      '2026-10-17 21:01 UTC · Ana · Cambio 1',
+      '2026-10-17 21:02 UTC · Ana · Cambio 2',
+    ]);
+  });
+
+  it('dice cuándo el cambio lo propuso la IA o vino de otra vía', () => {
+    expect(resumirCambiosRecientes([entrada(1, { origen: 'asistente', propuestoPor: 'Modo IA' })], 10)).toEqual([
+      '2026-10-17 21:01 UTC · Ana · Cambio 1 (propuesto por Modo IA)',
+    ]);
+  });
+
+  it('se queda con los más recientes cuando hay más que el límite', () => {
+    expect(resumirCambiosRecientes([entrada(1), entrada(2), entrada(3)], 2)).toEqual([
+      '2026-10-17 21:02 UTC · Ana · Cambio 2',
+      '2026-10-17 21:03 UTC · Ana · Cambio 3',
+    ]);
   });
 });

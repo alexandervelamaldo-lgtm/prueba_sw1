@@ -30,6 +30,24 @@ export function resumirPropuesta(propuesta: PropuestaOperacion[]): string {
 }
 
 /**
+ * El texto con el que contesta la IA. Una respuesta sin operaciones no es un
+ * fallo: puede ser una charla («¿qué te parece mi diagrama?») y entonces la
+ * explicación es la respuesta. Solo si no hay nada que mostrar se pide
+ * reformular. Lo comparten la burbuja flotante y el Modo IA.
+ */
+export function textoDeRespuesta(respuesta: {
+  propuesta: PropuestaOperacion[];
+  aclaracion: string | null;
+  explicacion: string;
+}): string {
+  if (respuesta.aclaracion) return respuesta.aclaracion;
+  if (respuesta.propuesta.length === 0 && !respuesta.explicacion.trim()) {
+    return 'Orden no reconocida. Cabe reformularla con otras palabras.';
+  }
+  return respuesta.explicacion;
+}
+
+/**
  * Lo que se dice en voz alta cuando una orden no destructiva se aplicó sola.
  *
  * Deliberadamente no es la descripción de la operación. Antes lo era —«Hecho:

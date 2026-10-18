@@ -317,21 +317,63 @@ export const AssistantResponseSchema = z.object({
 export type AssistantResponse = z.infer<typeof AssistantResponseSchema>;
 
 /**
+ * Una acción de la respuesta conversacional del modelo. El texto que se le
+ * dice al usuario es una acción más (`message`), intercalada con las
+ * operaciones, para que la IA pueda contestar sin proponer nada o narrar lo
+ * que hace mientras lo hace. `think` es razonamiento interno: se valida pero
+ * no se muestra. `_type` va primero para que el modelo lo escriba primero.
+ */
+export const AssistantActionSchema = z.discriminatedUnion('_type', [
+  z.object({ _type: z.literal('message'), text: z.string() }),
+  z.object({ _type: z.literal('think'), text: z.string() }),
+  z.object({ _type: z.literal('operation'), operation: OperationSchema }),
+]);
+
+export type AssistantAction = z.infer<typeof AssistantActionSchema>;
+
+const ActionsResponseSchema = z.object({
+  actions: z.array(AssistantActionSchema),
+  confidence: z.number().min(0).max(1).default(1),
+});
+
+/**
  * Valida una respuesta del modelo. Devuelve un resultado en lugar de lanzar,
  * porque una salida inválida es un caso esperado, no excepcional: se descarta y
  * se pide reformular.
+ *
+ * Acepta dos formas: la lista de acciones (`{"actions": [...]}`) y la forma
+ * anterior (`{"operations": [...], "explanation": ...}`). Una lista de acciones
+ * se reduce a la forma anterior —operaciones en orden y mensajes unidos en
+ * `explanation`—, así que quien consume la respuesta no cambia.
  */
 export function parseAssistantResponse(
   raw: unknown,
 ): { ok: true; value: AssistantResponse } | { ok: false; error: string } {
+  if (typeof raw === 'object' && raw !== null && 'actions' in raw) {
+    const acciones = ActionsResponseSchema.safeParse(raw);
+    if (!acciones.success) return { ok: false, error: describirErrores(acciones.error) };
+    const { actions, confidence } = acciones.data;
+    return {
+      ok: true,
+      value: {
+        operations: actions.flatMap((action) => (action._type === 'operation' ? [action.operation] : [])),
+        confidence,
+        clarification: null,
+        explanation: actions
+          .flatMap((action) => (action._type === 'message' ? [action.text.trim()] : []))
+          .filter(Boolean)
+          .join(' '),
+      },
+    };
+  }
+
   const result = AssistantResponseSchema.safeParse(raw);
   if (result.success) return { ok: true, value: result.data };
-  return {
-    ok: false,
-    error: result.error.issues
-      .map((i) => `${i.path.join('.') || '(raíz)'}: ${i.message}`)
-      .join('; '),
-  };
+  return { ok: false, error: describirErrores(result.error) };
+}
+
+function describirErrores(error: z.ZodError): string {
+  return error.issues.map((i) => `${i.path.join('.') || '(raíz)'}: ${i.message}`).join('; ');
 }
 
 /**

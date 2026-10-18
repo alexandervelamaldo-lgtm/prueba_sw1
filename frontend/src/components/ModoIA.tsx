@@ -5,6 +5,7 @@ import { puntuarPorVocabulario } from '../services/dictado';
 import { dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDictado } from '../services/voz';
 import { Icono } from './iconos';
 import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
+import { textoDeRespuesta } from './asistente-voz';
 
 /**
  * Modo IA: la conversación con memoria del proyecto (RF-IA-01, RF-IA-04), ahora
@@ -204,10 +205,7 @@ export function ModoIA({ proyecto, diagrama, aplicar, soloLectura, usuario }: Pr
       const respuesta = await api.interpretar(proyecto.id, limpia);
       motor = respuesta.motor;
       propuesta = respuesta.propuesta;
-      explicacion = respuesta.aclaracion ?? respuesta.explicacion;
-      if (respuesta.propuesta.length === 0 && !respuesta.aclaracion) {
-        explicacion = 'Orden no reconocida. Cabe reformularla con otras palabras.';
-      }
+      explicacion = textoDeRespuesta(respuesta);
     } catch (fallo) {
       // Mismo criterio que la burbuja flotante: sin servidor se usa la
       // gramática local, y se dice de dónde viene la respuesta. Este turno no

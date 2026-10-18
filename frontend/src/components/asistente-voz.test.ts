@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createClass, createDiagram, withClass, type ClassDiagram } from '@app/shared';
-import { decidirAccionVoz, resumirPropuesta, type PropuestaOperacion } from './asistente-voz';
+import { decidirAccionVoz, resumirPropuesta, textoDeRespuesta, type PropuestaOperacion } from './asistente-voz';
 
 /**
  * Pruebas de la rama que decide si una orden dictada se aplica sola o espera
@@ -101,5 +101,32 @@ describe('decidirAccionVoz', () => {
       },
     ];
     expect(decidirAccionVoz(diagrama, propuesta).tipo).toBe('aplicar');
+  });
+});
+
+describe('textoDeRespuesta', () => {
+  it('una charla sin operaciones muestra lo que contestó la IA', () => {
+    expect(
+      textoDeRespuesta({ propuesta: [], aclaracion: null, explicacion: 'A Cliente le falta un email.' }),
+    ).toBe('A Cliente le falta un email.');
+  });
+
+  it('una aclaración tiene prioridad sobre la explicación', () => {
+    expect(
+      textoDeRespuesta({ propuesta: [], aclaracion: '¿Qué tipo tiene precio?', explicacion: 'Falta un dato.' }),
+    ).toBe('¿Qué tipo tiene precio?');
+  });
+
+  it('sin operaciones, sin aclaración y sin texto, pide reformular', () => {
+    expect(textoDeRespuesta({ propuesta: [], aclaracion: null, explicacion: '  ' })).toBe(
+      'Orden no reconocida. Cabe reformularla con otras palabras.',
+    );
+  });
+
+  it('con operaciones, devuelve la explicación tal cual', () => {
+    const propuesta: PropuestaOperacion[] = [
+      { operacion: { op: 'addClass', name: 'Pedido', kind: 'class' }, descripcion: 'Crear la clase Pedido' },
+    ];
+    expect(textoDeRespuesta({ propuesta, aclaracion: null, explicacion: 'Creo Pedido.' })).toBe('Creo Pedido.');
   });
 });

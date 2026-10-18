@@ -208,6 +208,76 @@ describe('LlmAssistant contra un proveedor simulado', () => {
     expect(respuesta.clarification).toBeTruthy();
   });
 
+  it('pide la respuesta como una lista de acciones', async () => {
+    await motor().interpret('crea la clase Pedido', diagrama);
+
+    const sistema = (recibidos[0]?.messages as { role: string; content: string }[])[0];
+    expect(sistema?.role).toBe('system');
+    expect(sistema?.content).toContain('"actions"');
+  });
+
+  it('lee las operaciones y los mensajes de la lista de acciones, en orden', async () => {
+    responder = () => ({
+      status: 200,
+      payload: comoOpenAi(
+        JSON.stringify({
+          actions: [
+            { _type: 'think', text: 'Hace falta una clase nueva.' },
+            { _type: 'message', text: 'Creo la clase Pedido.' },
+            { _type: 'operation', operation: { op: 'addClass', name: 'Pedido', kind: 'class' } },
+            { _type: 'message', text: '¿Le agrego atributos?' },
+          ],
+          confidence: 0.8,
+        }),
+      ),
+    });
+
+    const respuesta = await motor().interpret('crea la clase Pedido', diagrama);
+
+    expect(respuesta.operations).toEqual([{ op: 'addClass', name: 'Pedido', kind: 'class' }]);
+    expect(respuesta.explanation).toBe('Creo la clase Pedido. ¿Le agrego atributos?');
+    expect(respuesta.confidence).toBe(0.8);
+    expect(respuesta.clarification).toBeNull();
+  });
+
+  it('una respuesta con solo mensajes es una charla válida y no recurre a la gramática', async () => {
+    responder = () => ({
+      status: 200,
+      payload: comoOpenAi(
+        JSON.stringify({
+          actions: [{ _type: 'message', text: 'Tu diagrama se ve bien; a Cliente le falta un email.' }],
+          confidence: 1,
+        }),
+      ),
+    });
+
+    const respuesta = await motor().interpret('¿qué te parece mi diagrama?', diagrama);
+
+    expect(respuesta.operations).toEqual([]);
+    expect(respuesta.explanation).toBe('Tu diagrama se ve bien; a Cliente le falta un email.');
+    expect(respuesta.clarification).toBeNull();
+  });
+
+  it('descarta entera una lista de acciones con una operación inválida', async () => {
+    responder = () => ({
+      status: 200,
+      payload: comoOpenAi(
+        JSON.stringify({
+          actions: [
+            { _type: 'message', text: 'Creo la clase.' },
+            { _type: 'operation', operation: { op: 'inventada' } },
+          ],
+        }),
+      ),
+    });
+
+    const respuesta = await motor().interpret('crea la clase Pedido', diagrama);
+
+    // La gramática local entiende la orden: la respuesta viene de ella.
+    expect(respuesta.operations).toEqual([expect.objectContaining({ op: 'addClass', name: 'Pedido' })]);
+    expect(respuesta.explanation).not.toBe('Creo la clase.');
+  });
+
   it('usa el protocolo de Anthropic cuando se le pide', async () => {
     responder = () => ({
       status: 200,

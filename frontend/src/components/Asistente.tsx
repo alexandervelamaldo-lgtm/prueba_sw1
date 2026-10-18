@@ -3,7 +3,7 @@ import { type Aplicar, describeOperation, interpretCommand, type ClassDiagram } 
 import { ApiError, api } from '../services/api';
 import { puntuarPorVocabulario } from '../services/dictado';
 import { dictadoDisponible, dictar, hablar, motivoSinVoz, type SesionDictado } from '../services/voz';
-import { decidirAccionVoz } from './asistente-voz';
+import { decidirAccionVoz, textoDeRespuesta } from './asistente-voz';
 import { Icono } from './iconos';
 import { type Propuesta, PropuestaOperaciones } from './PropuestaOperaciones';
 
@@ -108,10 +108,7 @@ export function Asistente({
         const respuesta = await api.interpretar(proyectoId, limpia);
         motor = respuesta.motor;
         propuesta = respuesta.propuesta;
-        explicacion = respuesta.aclaracion ?? respuesta.explicacion ?? null;
-        if (respuesta.propuesta.length === 0 && !respuesta.aclaracion) {
-          explicacion = 'Orden no reconocida. Cabe reformularla con otras palabras.';
-        }
+        explicacion = textoDeRespuesta(respuesta);
       } catch (error) {
         // Sin servidor se usa la gramática que viaja en el propio paquete. No es
         // una degradación silenciosa: se dice de dónde viene la propuesta, para

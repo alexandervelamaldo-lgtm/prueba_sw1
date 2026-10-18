@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { describeOperation, formatearEventoSse, readDiagram, type EventoAsistente } from '@app/shared';
-import type { AssistantEngine, TurnoConAutor } from '../ai/assistant.js';
+import { peticionDeRevision, type AssistantEngine, type TurnoConAutor } from '../ai/assistant.js';
 import type { IdentityProvider } from '../auth/identity.js';
 import type { ProjectStore } from '../storage/store.js';
 import type { RoomManager } from '../collab/rooms.js';
@@ -22,6 +22,8 @@ import { handler, parseBody, requireRole } from './http.js';
 
 const PeticionSchema = z.object({
   texto: z.string().trim().min(1).max(2000),
+  /** Botón «Revisar mi diagrama»: el modelo recibe `peticionDeRevision`, el historial guarda `texto`. */
+  revision: z.boolean().optional(),
 });
 
 /**
@@ -115,6 +117,7 @@ export function assistantRouter(deps: {
       const proyectoId = request.params.proyectoId ?? '';
       const room = await rooms.open(proyectoId);
       const diagram = readDiagram(room.doc);
+      const peticion = body.revision ? peticionDeRevision(diagram) : body.texto;
       const [turnos, misProyectos] = await Promise.all([
         conversations.getHistory(proyectoId, request.user.id, MAXIMO_TURNOS * 2),
         store.listProjectsForUser(request.user.id),
@@ -158,8 +161,8 @@ export function assistantRouter(deps: {
 
       try {
         const flujo = assistant.interpretarEnStream
-          ? assistant.interpretarEnStream(body.texto, diagram, contexto, abortador.signal)
-          : eventosDeRespuesta(assistant, body.texto, diagram, contexto);
+          ? assistant.interpretarEnStream(peticion, diagram, contexto, abortador.signal)
+          : eventosDeRespuesta(assistant, peticion, diagram, contexto);
         for await (const evento of flujo) {
           if (desconectado || abortador.signal.aborted) return;
           if (evento.tipo === 'fin') {
@@ -179,7 +182,7 @@ export function assistantRouter(deps: {
         // la misma ruta compatible que usa la respuesta JSON de siempre.
         if (eventosEmitidos === 0 && assistant.interpretarEnStream) {
           try {
-            for await (const evento of eventosDeRespuesta(assistant, body.texto, diagram, contexto)) {
+            for await (const evento of eventosDeRespuesta(assistant, peticion, diagram, contexto)) {
               if (evento.tipo === 'fin') fin = evento;
               else enviarEvento(evento);
             }

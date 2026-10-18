@@ -341,6 +341,7 @@ export const api = {
     texto: string,
     alEvento: (evento: EventoAsistente) => void,
     senal?: AbortSignal,
+    opciones: { revision?: boolean } = {},
   ): Promise<void> => {
     const cabeceras = new Headers({ Accept: 'text/event-stream', 'Content-Type': 'application/json' });
     if (tokenActual) cabeceras.set('Authorization', `Bearer ${tokenActual}`);
@@ -350,7 +351,7 @@ export const api = {
       respuesta = await fetch(`/api/proyectos/${id}/asistente/stream`, {
         method: 'POST',
         headers: cabeceras,
-        body: JSON.stringify({ texto }),
+        body: JSON.stringify(opciones.revision ? { texto, revision: true } : { texto }),
         ...(senal ? { signal: senal } : {}),
       });
     } catch (error) {

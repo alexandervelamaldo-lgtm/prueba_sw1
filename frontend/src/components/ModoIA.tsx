@@ -239,17 +239,22 @@ export function ModoIA({
     };
   }, [proyecto.id, fusionar]);
 
-  const enviar = async (orden: string, porVoz = false): Promise<void> => {
+  const enviar = async (orden: string, porVoz = false, revision = false): Promise<void> => {
     if (ocupadoRef.current) return;
     ocupadoRef.current = true;
     try {
-      await enviarUnaOrden(orden, porVoz);
+      await enviarUnaOrden(orden, porVoz, revision);
     } finally {
       ocupadoRef.current = false;
     }
   };
 
-  const enviarUnaOrden = async (orden: string, porVoz: boolean): Promise<void> => {
+  /**
+   * `revision`: el botón «Revisar mi diagrama». La IA revisa con las pistas del
+   * revisor local y propone arreglos, que nunca se aplican solos: son cambios
+   * que nadie pidió, así que esperan su «Aplicar».
+   */
+  const enviarUnaOrden = async (orden: string, porVoz: boolean, revision: boolean): Promise<void> => {
     const limpia = orden.trim();
     if (!limpia) return;
 
@@ -294,7 +299,7 @@ export function ModoIA({
     let ultimo: EstadoRespuesta | null = null;
     const manejador = crearManejadorDeStream({
       diagrama: () => diagramaRef.current,
-      autoAplicar,
+      autoAplicar: autoAplicar && !revision,
       soloLectura,
       crearEjecutor: (avisos) =>
         crearEjecutorEnCola(
@@ -343,7 +348,7 @@ export function ModoIA({
     const controlador = new AbortController();
     abortarRef.current = controlador;
     try {
-      await api.interpretarEnStream(proyecto.id, limpia, manejador.alEvento, controlador.signal);
+      await api.interpretarEnStream(proyecto.id, limpia, manejador.alEvento, controlador.signal, { revision });
       if (!(ultimo as EstadoRespuesta | null)?.terminado) {
         manejador.alEvento({ tipo: 'error', mensaje: 'La respuesta se cortó antes de terminar.' });
       }
@@ -441,6 +446,15 @@ export function ModoIA({
         La IA aplica sola los cambios. Lo que borra algo sigue pidiendo «Aplicar», y cada respuesta se
         deshace de una vez.
       </label>
+      <button
+        type="button"
+        className="modo-ia__revisar"
+        disabled={soloLectura || enviando || ejecutando}
+        onClick={() => void enviar('Revisa mi diagrama', false, true)}
+        title="La IA señala lo que mejoraría y propone los arreglos; nada se aplica sin su «Aplicar»."
+      >
+        <Icono nombre="revisar" /> Revisar mi diagrama
+      </button>
 
       <div className="modo-ia__transcripcion" role="log">
         {cargando && <p className="modo-ia__vacio">Cargando la conversación…</p>}

@@ -404,15 +404,7 @@ export class LlmAssistant implements AssistantEngine {
   // aunque puede ignorarlas o fijarse en otra cosa que le parezca más
   // importante.
   private async pedirRevision(diagram: ClassDiagram, contexto?: AssistantContext): Promise<string> {
-    const hallazgos = revisarDiagrama(diagram);
-    const pistas =
-      hallazgos.length > 0
-        ? `\n\nUn revisor automático ya detectó esto (puedes mencionarlo con tus palabras, ignorarlo si no lo ves relevante, o fijarte en otra cosa que te parezca más importante):\n${hallazgos
-            .slice(0, 5)
-            .map((hallazgo) => `- ${hallazgo.titulo}: ${hallazgo.detalle}`)
-            .join('\n')}`
-        : '';
-    const user = `Diagrama actual:\n${summarize(diagram)}${pistas}`;
+    const user = `Diagrama actual:\n${summarize(diagram)}${pistasDelRevisor(diagram)}`;
 
     return this.enviarConversacion(REVIEW_SYSTEM_PROMPT, user, this.historialComoMensajes(contexto), 300, false);
   }
@@ -538,6 +530,30 @@ async function* textoDelStream(
       }
     }
   }
+}
+
+/**
+ * Lo que ya encontró el revisor local (`revisarDiagrama`), como pistas para el
+ * modelo: así no repite ese trabajo desde cero, aunque puede ignorarlas o
+ * fijarse en otra cosa que le parezca más importante. Vacío si no hay nada.
+ */
+function pistasDelRevisor(diagram: ClassDiagram): string {
+  const hallazgos = revisarDiagrama(diagram);
+  if (hallazgos.length === 0) return '';
+  return `\n\nUn revisor automático ya detectó esto (puedes mencionarlo con tus palabras, ignorarlo si no lo ves relevante, o fijarte en otra cosa que te parezca más importante):\n${hallazgos
+    .slice(0, 5)
+    .map((hallazgo) => `- ${hallazgo.titulo}: ${hallazgo.detalle}`)
+    .join('\n')}`;
+}
+
+/**
+ * La petición del botón «Revisar mi diagrama» del Modo IA: la segunda capa de
+ * la revisión, la semántica, encima de las reglas locales de `revisarDiagrama`
+ * (la primera capa, que ya tiene su propio panel). Va como la petición de un
+ * turno normal, así que la respuesta usa la misma lista de acciones.
+ */
+export function peticionDeRevision(diagram: ClassDiagram): string {
+  return `Revisa este diagrama como lo haría alguien con experiencia en modelado UML: qué relaciones deberían ser de otro tipo, qué clase intermedia falta, qué nombres o tipos no encajan con el dominio. Señala con "point" cada clase de la que hables, justo antes del mensaje que la menciona, y explica en mensajes breves qué mejorarías y por qué. Después propone las operaciones que lo arreglan, sin eliminar nada. Esas operaciones no se aplican solas: quedan propuestas hasta que la persona las acepte, así que no digas que ya las hiciste («te propongo…», no «listo, he completado…»). Si el diagrama está bien, dilo en un mensaje y no propongas cambios.${pistasDelRevisor(diagram)}`;
 }
 
 /**

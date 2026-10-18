@@ -804,6 +804,50 @@ describe('asistente', () => {
     );
   });
 
+  it('con revision, el motor recibe la petición de revisión con las pistas del revisor local, y el turno guarda lo que se escribió', async () => {
+    const token = await registrar('ana@ejemplo.com');
+    const proyectoId = await crearProyecto(token);
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/diagrama/operaciones`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ operaciones: [{ op: 'addClass', name: 'Factura', kind: 'class' }] });
+    const prompts: string[] = [];
+    const fake: AssistantEngine = {
+      name: 'motor-prueba',
+      interpret: async () => ({ operations: [], confidence: 1, clarification: null, explanation: '' }),
+      revisar: async () => null,
+      async *interpretarEnStream(prompt: string): AsyncGenerator<EventoAsistente> {
+        prompts.push(prompt);
+        yield { tipo: 'mensaje', texto: 'Factura no tiene atributos.' };
+        yield { tipo: 'fin', motor: 'motor-prueba', confianza: 1 };
+      },
+    };
+    app = createApp({ ...deps, assistant: fake }).app;
+
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/asistente/stream`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ texto: 'Revisa mi diagrama', revision: true })
+      .buffer(true)
+      .parse((res, callback) => {
+        let cuerpo = '';
+        res.setEncoding('utf8');
+        res.on('data', (trozo) => (cuerpo += trozo));
+        res.on('end', () => callback(null, cuerpo));
+      });
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('Revisa este diagrama');
+    expect(prompts[0]).toContain('Factura');
+    const historial = await request(app)
+      .get(`/api/proyectos/${proyectoId}/asistente/historial`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(historial.body.turnos.map((turno: { texto: string }) => turno.texto)).toEqual([
+      'Revisa mi diagrama',
+      'Factura no tiene atributos.',
+    ]);
+  });
+
   it('envía mensajes, operaciones y el cierre en orden, calcula la descripción y guarda un único turno', async () => {
     const token = await registrar('ana@ejemplo.com');
     const proyectoId = await crearProyecto(token);

@@ -19,6 +19,7 @@ import { LienzoFlow } from './LienzoFlow';
 import { PanelPropiedades } from './PanelPropiedades';
 import { Asistente } from './Asistente';
 import { ModoIA } from './ModoIA';
+import { AvatarIA, type EstadoAvatarIA } from './AvatarIA';
 import type { MarcasDeBorrado } from './ia-ejecucion';
 import { ImportarDiagrama } from './ImportarDiagrama';
 import { ImportarXmi } from './ImportarXmi';
@@ -110,6 +111,10 @@ export function EditorDiagrama({
   const [seleccion, setSeleccion] = useState<string | null>(null);
   // Lo que marcaría el lienzo un borrado que el Modo IA propone (vista previa fantasma).
   const [aBorrar, setABorrar] = useState<MarcasDeBorrado | null>(null);
+  // El avatar de la cabecera: pulsarlo abre el Modo IA y pide la bienvenida.
+  const [saludoPendiente, setSaludoPendiente] = useState(false);
+  const [estadoIA, setEstadoIA] = useState<EstadoAvatarIA>('reposo');
+  const alSaludar = useCallback(() => setSaludoPendiente(false), []);
   const [herramienta, setHerramienta] = useState<'seleccion' | 'relacion'>('seleccion');
   const [tipoRelacion, setTipoRelacion] = useState<RelationKind>('association');
   // Herramienta "asociación de clase": no es un séptimo `RelationKind`, es un
@@ -667,6 +672,15 @@ export function EditorDiagrama({
     <div className="editor">
       <header className="barra">
         <BarraMenu menus={menus} onComando={ejecutar} />
+        {autor && (
+          <AvatarIA
+            estado={estadoIA}
+            onClick={() => {
+              paneles.abrir('ia');
+              setSaludoPendiente(true);
+            }}
+          />
+        )}
         <h1 className="barra__titulo">{proyecto.name}</h1>
 
         {/*
@@ -926,6 +940,9 @@ export function EditorDiagrama({
                     seleccion={seleccion}
                     onVistaPrevia={setABorrar}
                     participantes={participantes}
+                    saludoPendiente={saludoPendiente}
+                    onSaludado={alSaludar}
+                    onEstado={setEstadoIA}
                   />
                 ) : null,
             },

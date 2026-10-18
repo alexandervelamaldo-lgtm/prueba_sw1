@@ -6818,3 +6818,101 @@ select:focus {
   font-size: 11px;
   flex-shrink: 0;
 }
+
+/* Avatar de la IA (`components/AvatarIA.tsx`), en la cabecera del editor. Las
+   clases de utilidad del componente original (Tailwind) traducidas a CSS. */
+.avatar-ia {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  margin-right: 10px;
+  border: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.avatar-ia:focus-visible {
+  outline: 2px solid var(--acento);
+  outline-offset: 3px;
+}
+
+.avatar-ia__textura {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.2;
+  mix-blend-mode: overlay;
+}
+
+.avatar-ia__brillo,
+.avatar-ia__sombra {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.avatar-ia__sombra {
+  background: radial-gradient(circle at 62% 68%, rgba(0, 0, 0, 0.18) 0%, transparent 55%);
+  filter: blur(4px);
+}
+
+.avatar-ia__ojos {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transform: translateY(-2px);
+}
+
+.avatar-ia__ojo {
+  display: block;
+  width: 4px;
+  height: 6px;
+  border-radius: 50%;
+  animation: avatar-ia-parpadeo 3.6s ease-in-out infinite;
+}
+
+.avatar-ia__ojo--segundo {
+  animation-delay: 60ms;
+}
+
+@keyframes avatar-ia-parpadeo {
+  0%,
+  88%,
+  100% {
+    transform: scaleY(1);
+  }
+  93%,
+  97% {
+    transform: scaleY(0.07);
+  }
+}
+
+/* Pensando: los ojos miran a un lado y a otro mientras la IA trabaja. */
+.avatar-ia--pensando .avatar-ia__ojos {
+  animation: avatar-ia-pensando 1.4s ease-in-out infinite;
+}
+
+@keyframes avatar-ia-pensando {
+  0%,
+  100% {
+    transform: translate(-3px, -2px);
+  }
+  50% {
+    transform: translate(3px, -2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .avatar-ia__ojo,
+  .avatar-ia--pensando .avatar-ia__ojos {
+    animation: none;
+  }
+}

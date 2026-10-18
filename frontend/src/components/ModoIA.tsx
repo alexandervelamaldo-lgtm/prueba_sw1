@@ -14,6 +14,7 @@ import {
   type MarcasDeBorrado,
 } from './ia-ejecucion';
 import { crearColaDeVoz } from './cola-voz';
+import { textoDeBienvenida } from './bienvenida-ia';
 import { crearManejadorDeStream, debeRepasar, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
 import type { GrupoDeshacer } from '../hooks/deshacer-agrupado';
 
@@ -85,6 +86,12 @@ interface Props {
   onVistaPrevia?: (marcas: MarcasDeBorrado | null) => void;
   /** Quién más está en el proyecto y qué clase tiene seleccionada (presencia de Yjs). */
   participantes?: { nombre: string; seleccion: string | null }[];
+  /** Se pulsó el avatar de la IA: hay que dar la bienvenida (ver `bienvenida-ia.ts`). */
+  saludoPendiente?: boolean;
+  /** Avisa de que ya se dio la bienvenida, para no repetirla al volver a abrir el panel. */
+  onSaludado?: () => void;
+  /** Si la IA está trabajando, para que el avatar «piense». */
+  onEstado?: (estado: 'reposo' | 'pensando') => void;
 }
 
 interface Turno {
@@ -144,6 +151,9 @@ export function ModoIA({
   seleccion,
   onVistaPrevia,
   participantes,
+  saludoPendiente,
+  onSaludado,
+  onEstado,
 }: Props): JSX.Element {
   const [turnos, setTurnos] = useState<Turno[]>([]);
   const [autoAplicar, setAutoAplicar] = useState(leerAutoAplicar);
@@ -226,6 +236,35 @@ export function ModoIA({
   // Qué `creadoEn` ya se pintó, para que el sondeo no duplique un turno que
   // ya llegó por la carga inicial o por una vuelta de sondeo anterior.
   const vistosRef = useRef<Set<string>>(new Set());
+
+  // La bienvenida del avatar: después de cargar el historial, para que quede al
+  // final de la conversación. No se guarda en el hilo; solo se pinta y se dice.
+  useEffect(() => {
+    if (!saludoPendiente || cargando) return;
+    const texto = textoDeBienvenida({ nombre: usuario.nombre, proyecto: proyecto.name });
+    setTurnos((previos) => [
+      ...previos,
+      {
+        id: idTurno(),
+        role: 'assistant',
+        texto,
+        autorId: null,
+        autorNombre: null,
+        creadoEn: null,
+        propuesta: [],
+        motor: null,
+        tipo: 'respuesta',
+      },
+    ]);
+    hablar(texto);
+    onSaludado?.();
+  }, [saludoPendiente, cargando, usuario.nombre, proyecto.name, onSaludado]);
+
+  useEffect(() => {
+    onEstado?.(enviando || ejecutando ? 'pensando' : 'reposo');
+  }, [enviando, ejecutando, onEstado]);
+  useEffect(() => () => onEstado?.('reposo'), [onEstado]);
+
 
   const fusionar = useCallback((remotos: TurnoAsistente[]) => {
     setTurnos((previos) => {

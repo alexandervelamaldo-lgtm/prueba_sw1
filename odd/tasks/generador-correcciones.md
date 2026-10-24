@@ -27,18 +27,18 @@ Out of scope (audit, not defects): UML business methods stay skeletons that thro
 
 | ID | Specs | Route | Status | Commit |
 |----|-------|-------|--------|--------|
-| T1 | S1 | inline | done (RED baseline, L3) | |
-| T2 | S2 | inline | done (RED/GREEN, L5) | |
-| T3 | S3 | inline | pending | |
-| T4 | S4, S5 | inline | pending | |
-| T5 | S6 | inline | done (RED/GREEN, L5) | |
-| T6 | S7 | delegated (Codex) | in progress | |
-| T7 | S8 | inline | pending | |
-| T8 | S9 | inline | pending | |
-| T9 | S10 | inline | pending | |
-| T10 | S11 | inline | pending | |
-| T11 | S12 | inline | pending | |
-| T12 | S13 | delegated (Codex, after T6) | pending | |
+| T1 | S1 | inline | done (RED baseline, L3) | 6960673 |
+| T2 | S2 | inline | done (RED/GREEN, L5) | 3c8bb5a |
+| T3 | S3 | inline | done (RED in L3, GREEN in L6) | 3c8bb5a |
+| T4 | S4, S5 | inline | done (RED in L3, GREEN in L6) | 3c8bb5a |
+| T5 | S6 | inline | done (RED/GREEN, L5) | 3c8bb5a |
+| T6 | S7 | delegated (Codex) | done (RED/GREEN, L7) | f202673 |
+| T7 | S8 | inline | done (RED/GREEN, L8) | 4e36d3e |
+| T8 | S9 | inline | done (RED/GREEN, L6) | 3c8bb5a |
+| T9 | S10 | inline | done (RED/GREEN, L8) | 4e36d3e |
+| T10 | S11 | inline | done (RED/GREEN, L6) | 3c8bb5a |
+| T11 | S12 | inline | done (RED/GREEN, L6) | 3c8bb5a |
+| T12 | S13 | delegated (Codex) | done (L9) | 768fbbd |
 
 Route evidence: every task is one generator behavior; no writer trigger (no parallel units launched together, no context backstop), so the parent writes inline.
 
@@ -49,3 +49,7 @@ Route evidence: every task is one generator behavior; no writer trigger (no para
 - **L3**: T1 RED baseline (`COMPILAR_GENERADO=1`, 146 s): 10 failed, 9 passed. Pass: Maven compile of postgres tienda/rrhh/minimo and mongodb tienda/minimo; boot + create with JOINED, Long and Integer ids, and the corpus. Fail: mongodb rrhh and the three Cassandra compiles (S12, S11), SINGLE_TABLE and TABLE_PER_CLASS boot (S4, S5), UUID compile and String create 500 (S3), Flutter analyze for postgres and mongodb (S13). Added S11-S13 and T10-T12.
 - **L4**: User: "recuerda que tienes a codex". T6 (Flutter, `generate-flutter.ts` + new `flutter.test.ts`) delegated to the open Codex session through `herdr agent prompt wA:p1`, disjoint from the parent's files; reason: parallel independent unit.
 - **L5**: T5 done inline: `DUPLICATE_ENUM_LITERAL` in `shared/src/validation/validate.ts`; RED (expected the error, got none) then GREEN; shared + generator 668 passed. T2 done inline: Cassandra `create` sets `java.util.UUID.randomUUID().toString()`; RED then GREEN (11 Cassandra tests).
+- **L6**: T3/T4: `resolverJerarquias` in `normalize.ts` sets `hierarchyStrategy`, `idGeneration` (IDENTITY / UUID for UUID and String ids / SEQUENCE for TABLE_PER_CLASS hierarchies, with `CREATE SEQUENCE <root>_seq`) and the SINGLE_TABLE `discriminatorColumn` (`dtype`, or `dtype_2`… on collision); `origenesDeColumnas` puts every subclass column (nullable) in the SINGLE_TABLE root table and repeats inherited columns in TABLE_PER_CLASS; subclasses get `@Table` only outside SINGLE_TABLE and `@PrimaryKeyJoinColumn` only with JOINED; the response DTO imports the identifier type. Seeds reset a named sequence with `setval(GREATEST(...))`. T10: Cassandra `WriteResult` import moved to `org.springframework.data.cassandra.core`. T11: MongoDB/Cassandra entities declare `implements`. T8: `GlobalExceptionHandler` maps `DataIntegrityViolationException` to 409 in the three targets (PostgreSQL used to answer 500 too); MongoDB `@Indexed(unique = true, sparse = true)` plus `auto-index-creation: true`; Cassandra services check `existsBy…`/`findBy…` before saving and throw `DuplicateKeyException` (a race between two simultaneous creates remains). RED then GREEN for T8, T10, T11; T3/T4 unit tests written after the code (their RED is the L3 boot failures). Compile/boot re-run: 17 passed (Flutter excluded, the 409 case added after that run started). Full suite: 2289 passed, 1 failed (a T2 test that sliced at the first `}`; fixed), then shared + generator 693 passed; typecheck clean.
+- **L7**: T6 by Codex: `idDT` uses `javaToDart(identifier.javaType)` and to-one ids take the target entity's id type; RED 4 failing tests, GREEN 7/7; generator 150 passed; parent re-ran `flutter.test.ts`: 7 passed. Codex saved its memory under another project ("restaurant"). T12 delegated to Codex the same way.
+- **L8**: T7: `buildEntityView` adds `toManyIdLists` for the owning side of each ManyToMany in MongoDB/Cassandra (`<field>Ids`, `List<String>`), in the entity, both DTOs and the mapper (copied to a new `ArrayList`, never null); the inverse side does not repeat it; PostgreSQL unchanged. Referenced ids in those lists are not checked for existence. T9: `SeedInsertIR` carries `className`, `fields` and the raw `values`; `CargaDatosIniciales` (MongoDB and Cassandra) is a `CommandLineRunner` that saves the rows only when `count() == 0`, converting each value to the field type (numbers, BigDecimal, PostgreSQL-style booleans plus «sí», dates with `parse`, `LocalDateTime` accepting a space, UUID, enums upper-cased); Cassandra rows without id get a random UUID. RED then GREEN (T7 2 failing, T9 3 failing). Compile check gained a seeded diagram for the three targets. T12: Codex fixed the analyzer errors (9/9 fast tests) but `flutter analyze` still exits 1 on 6 warnings (unnecessary casts, unused import); parent authorized fixing them in the same two files.
+- **L9**: T12 by Codex: analyzer errors and the 6 warnings fixed in `generate-flutter.ts` (+ fast tests in `flutter.test.ts`); Codex: generator 178 passed. Parent re-ran the Flutter check: 2 passed, no errors or warnings. Final evidence: `COMPILAR_GENERADO=1` Maven + PostgreSQL 21 passed (compile of 4 diagrams × 3 targets, boot for 3 strategies and 4 id types, duplicate → 409, corpus boot) and Flutter 2 passed, so 23/23 against the 10/19 baseline of L3; full suite 2301 passed, 0 failed; typecheck clean. Not verified: MongoDB and Cassandra apps were compiled but never booted against a real database. Pre-existing advisories noticed, not fixed: seeds of a SINGLE_TABLE subclass target the subclass table name, and JOINED subclass seeds lack the parent row.

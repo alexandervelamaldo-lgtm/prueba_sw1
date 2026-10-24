@@ -55,6 +55,8 @@ export interface ToOneView {
 export interface ToManyIdsView {
   /** `categoriasIds`. */
   name: string;
+  /** Entidad del otro extremo, cuyos ids lleva la lista. */
+  targetClass: string;
   getterName: string;
   setterName: string;
 }
@@ -191,7 +193,12 @@ export function buildEntityView(ir: GenerationIR, entity: EntityIR): EntityView 
         .filter((a) => a.kind === 'ManyToMany' && a.owning)
         .map((a) => {
           const name = `${a.fieldName}Ids`;
-          return { name, getterName: `get${capitalize(name)}`, setterName: `set${capitalize(name)}` };
+          return {
+            name,
+            targetClass: a.targetClass,
+            getterName: `get${capitalize(name)}`,
+            setterName: `set${capitalize(name)}`,
+          };
         })
     : [];
   const toManyComponents = toManyIdLists.map(

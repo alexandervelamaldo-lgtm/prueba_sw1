@@ -58,10 +58,19 @@ entre la migración y las entidades, no en la configuración.
 ## Probar en Postman
 
 El proyecto trae `postman_collection.json` en la raíz, listo para importar en
-Postman (`File > Import`). Una carpeta por entidad con las mismas cinco
-peticiones de la tabla de arriba, con cuerpos de ejemplo que ya pasan las
-validaciones del DTO. La variable de colección `baseUrl` apunta a
-`http://localhost:8080`; cámbiala ahí si el backend corre en otro puerto.
+Postman (`File > Import`). Una carpeta por entidad —listar, crear, buscar y
+actualizar—, ordenadas para que cada entidad se cree después de aquellas a las
+que apunta, y una carpeta final `Limpieza` con los borrados en orden inverso.
+La variable de colección `baseUrl` apunta a `http://localhost:8080`; cámbiala
+ahí si el backend corre en otro puerto.
+
+Pensada para ejecutarse entera con la base vacía (`Run collection` en Postman,
+o `npx newman run postman_collection.json`): cada alta guarda el id que
+devuelve la API en una variable de la colección (por ejemplo `clienteId`) que
+usan las peticiones siguientes y las claves ajenas, y cada petición comprueba
+su código de estado. Los valores únicos llevan la variable dinámica
+`$timestamp` para que una segunda ejecución no choque con la primera. Si lanzas
+una petición suelta, ejecuta antes el alta de las entidades de las que depende.
 
 ## Manifiesto del asistente
 

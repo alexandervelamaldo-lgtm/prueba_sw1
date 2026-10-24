@@ -619,26 +619,54 @@ describe('colección Postman', () => {
     });
   });
 
-  it('trae una carpeta con las 5 peticiones por cada entidad concreta', () => {
-    const nombres = ir.entities.filter((e) => !e.isAbstract).map((e) => e.className);
-    expect(collection.item.map((f: { name: string }) => f.name).sort()).toEqual(
-      [...nombres].sort(),
-    );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const carpeta = (nombre: string) => collection.item.find((f: any) => f.name === nombre);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const peticion = (nombre: string, item: string) => carpeta(nombre).item.find((r: any) => r.name === item);
 
-    const pedido = collection.item.find((f: { name: string }) => f.name === 'Pedido');
-    expect(pedido.item.map((r: { name: string }) => r.name)).toEqual([
+  it('ordena las carpetas por dependencia y deja los borrados para el final', () => {
+    const nombres = collection.item.map((f: { name: string }) => f.name);
+    const posicion = (n: string) => nombres.indexOf(n);
+    expect(posicion('Cliente')).toBeLessThan(posicion('Pedido'));
+    expect(posicion('Pedido')).toBeLessThan(posicion('LineaPedido'));
+    expect(posicion('Producto')).toBeLessThan(posicion('LineaPedido'));
+    expect(nombres.at(-1)).toBe('Limpieza');
+
+    expect(carpeta('Pedido').item.map((r: { name: string }) => r.name)).toEqual([
       'Listar Pedido',
-      'Buscar Pedido por id',
       'Crear Pedido',
+      'Buscar Pedido por id',
       'Actualizar Pedido',
-      'Eliminar Pedido',
     ]);
+
+    // Al revés que las altas: una línea se borra antes que su pedido.
+    const borrados = carpeta('Limpieza').item.map((r: { name: string }) => r.name);
+    expect(borrados.indexOf('Eliminar LineaPedido')).toBeLessThan(borrados.indexOf('Eliminar Pedido'));
+    expect(borrados.indexOf('Eliminar Pedido')).toBeLessThan(borrados.indexOf('Eliminar Cliente'));
+    expect(borrados).toHaveLength(ir.entities.filter((e) => !e.isAbstract).length);
   });
 
-  it('usa las rutas REST reales y un cuerpo de ejemplo que pasa las validaciones', () => {
-    const pedido = collection.item.find((f: { name: string }) => f.name === 'Pedido');
-    const crear = pedido.item.find((r: { name: string }) => r.name === 'Crear Pedido');
+  it('el alta guarda el id devuelto y las demás peticiones lo usan', () => {
+    const crear = peticion('Pedido', 'Crear Pedido');
+    const script = crear.event.find((e: { listen: string }) => e.listen === 'test').script.exec.join('\n');
+    expect(script).toContain('pm.response.to.have.status(201)');
+    expect(script).toContain("pm.collectionVariables.set('pedidoId', pm.response.json().id)");
+    expect(collection.variable).toContainEqual({ key: 'pedidoId', value: '', type: 'string' });
 
+    expect(peticion('Pedido', 'Buscar Pedido por id').request.url.raw).toBe(
+      '{{baseUrl}}/api/pedidos/{{pedidoId}}',
+    );
+    expect(peticion('Pedido', 'Actualizar Pedido').request.url.raw).toBe(
+      '{{baseUrl}}/api/pedidos/{{pedidoId}}',
+    );
+    const eliminar = peticion('Limpieza', 'Eliminar Pedido');
+    expect(eliminar.request.method).toBe('DELETE');
+    expect(eliminar.request.url.raw).toBe('{{baseUrl}}/api/pedidos/{{pedidoId}}');
+    expect(eliminar.request.body).toBeUndefined();
+  });
+
+  it('usa las rutas REST reales y un cuerpo que apunta a lo ya creado', () => {
+    const crear = peticion('Pedido', 'Crear Pedido');
     expect(crear.request.method).toBe('POST');
     expect(crear.request.url.raw).toBe('{{baseUrl}}/api/pedidos');
     expect(crear.request.header).toContainEqual({
@@ -646,19 +674,54 @@ describe('colección Postman', () => {
       value: 'application/json',
     });
 
-    const body = JSON.parse(crear.request.body.raw);
+    // Un id numérico va sin comillas: el cuerpo es JSON válido una vez que
+    // Postman sustituye la variable.
+    expect(crear.request.body.raw).toContain('"clienteId": {{clienteId}}');
+    const body = JSON.parse(crear.request.body.raw.replace('{{clienteId}}', '5'));
     // El enumerado usa su primer valor y no `null`: un `null` no pasaría el
     // `@NotNull` que `dto-request.java.hbs` pone en un campo obligatorio.
     expect(body.estado).toBe('BORRADOR');
     expect(typeof body.total).toBe('number');
-    expect(body.clienteId).toBe(1);
+    expect(body.clienteId).toBe(5);
 
-    const listar = pedido.item.find((r: { name: string }) => r.name === 'Listar Pedido');
+    const listar = peticion('Pedido', 'Listar Pedido');
     expect(listar.request.url.raw).toBe('{{baseUrl}}/api/pedidos?page=0&size=20');
+  });
 
-    const eliminar = pedido.item.find((r: { name: string }) => r.name === 'Eliminar Pedido');
-    expect(eliminar.request.url.raw).toBe('{{baseUrl}}/api/pedidos/1');
-    expect(eliminar.request.body).toBeUndefined();
+  it('un valor único cambia en cada ejecución para no chocar con la anterior', () => {
+    const raw = peticion('Cliente', 'Crear Cliente').request.body.raw;
+    expect(raw).toContain('"email": "email-{{$timestamp}}-{{$randomInt}}"');
+  });
+
+  it('con ids de texto la referencia va entre comillas y las N:M llevan el id creado', () => {
+    const mongo = JSON.parse(
+      fileNamed(generateProject(normalize(tiendaDiagram(), { databaseTarget: 'mongodb' })), 'postman_collection.json')
+        .content,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pedido = mongo.item.find((f: any) => f.name === 'Pedido');
+    expect(pedido.item[1].request.body.raw).toContain('"clienteId": "{{clienteId}}"');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const producto = mongo.item.find((f: any) => f.name === 'Producto');
+    expect(producto.item[1].request.body.raw).toContain('"categoriasIds": [\n    "{{categoriaId}}"\n  ]');
+  });
+
+  it('una auto-referencia opcional va a null: el registro aún no existe al crearlo', () => {
+    const rrhh = JSON.parse(
+      fileNamed(generateProject(normalize(rrhhDiagram())), 'postman_collection.json').content,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const empleado = rrhh.item.find((f: any) => f.name === 'Empleado');
+    expect(empleado.item[1].request.body.raw).toContain('"responsableId": null');
+  });
+
+  it('el README explica cómo ejecutar la colección', () => {
+    // Sin saltos de línea: el párrafo va ajustado a 79 columnas.
+    const readme = fileNamed(files, 'README.md').content.replace(/\s+/g, ' ');
+    expect(readme).toContain('una variable de la colección (por ejemplo `clienteId`)');
+    expect(readme).toContain('la variable dinámica `$timestamp`');
   });
 
   it('no incluye carpeta para las entidades abstractas', () => {

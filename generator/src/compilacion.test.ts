@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -372,6 +372,56 @@ describe.skipIf(!activa)('el código generado compila y arranca', () => {
         expect(repetido.status, await repetido.text()).toBe(409);
       } finally {
         parar(app);
+      }
+    }, 10 * MINUTOS);
+
+    it('la colección Postman se ejecuta entera sin editar nada', async () => {
+      for (const [nombre, diagrama] of [
+        ['postman_tienda', tiendaDiagram],
+        ['postman_rrhh', rrhhDiagram],
+      ] as const) {
+        const dir = await generarEn(diagrama(), { databaseTarget: 'postgres' });
+        const jar = empaquetar(dir);
+        crearBase(nombre);
+        const app = await arrancar(jar, nombre);
+        try {
+          // Dos pasadas: la segunda comprueba que los valores únicos no chocan
+          // con los de la primera.
+          for (let pasada = 0; pasada < 2; pasada++) {
+            const informe = join(dir, `newman-${pasada}.json`);
+            // Sin `--bail` ni confiar en el código de salida: newman solo
+            // falla por los `pm.test` que traiga la colección, y una colección
+            // sin ellos pasaría con todas las respuestas en 404. Se mira el
+            // estado de cada respuesta aquí.
+            spawnSync(
+              'npx',
+              [
+                '-y',
+                'newman@6.2.1',
+                'run',
+                'postman_collection.json',
+                '--env-var',
+                `baseUrl=http://127.0.0.1:${app.puerto}`,
+                '--reporters',
+                'json',
+                '--reporter-json-export',
+                informe,
+              ],
+              { cwd: dir, encoding: 'utf8' },
+            );
+            const run = JSON.parse(readFileSync(informe, 'utf8')).run as {
+              executions: { item: { name: string }; response?: { code: number } }[];
+            };
+            const respuestas = run.executions.map((e) => `${e.item.name}: ${e.response?.code ?? 'sin respuesta'}`);
+            expect(run.executions.length, nombre).toBeGreaterThan(0);
+            expect(
+              run.executions.filter((e) => !e.response || e.response.code >= 400).map((e) => e.item.name),
+              `${nombre}, pasada ${pasada + 1}:\n${respuestas.join('\n')}`,
+            ).toEqual([]);
+          }
+        } finally {
+          parar(app);
+        }
       }
     }, 10 * MINUTOS);
 

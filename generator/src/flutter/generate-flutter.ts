@@ -76,9 +76,9 @@ function cap(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** El ID de la entidad es String si su javaType es UUID, int si no. */
+/** Usa el tipo de identificador normalizado por el backend para el ID Dart. */
 function idDT(entity: EntityIR): DT {
-  return entity.identifier.javaType === 'UUID' ? 'String' : 'int';
+  return javaToDart(entity.identifier.javaType);
 }
 
 // ---------------------------------------------------------------------------
@@ -94,14 +94,15 @@ interface Campo {
   inRequest: boolean;
 }
 
-function campos(entity: EntityIR): Campo[] {
+function campos(entity: EntityIR, entities: EntityIR[]): Campo[] {
   const out: Campo[] = [];
   out.push({ name: entity.identifier.name, dt: idDT(entity), isNullable: false, isId: true, label: 'ID', inRequest: false });
   for (const f of entity.fields.filter(x => !x.isIdentifier)) {
     out.push({ name: f.name, dt: javaToDart(f.javaType), isNullable: f.nullable, isId: false, label: label(f.name), inRequest: true });
   }
   for (const a of entity.associations.filter(x => !x.collection && x.owning)) {
-    out.push({ name: `${a.fieldName}Id`, dt: 'int', isNullable: a.nullable, isId: false, label: label(`${a.fieldName}Id`), inRequest: true });
+    const target = entities.find(candidate => candidate.className === a.targetClass);
+    out.push({ name: `${a.fieldName}Id`, dt: target ? idDT(target) : 'int', isNullable: a.nullable, isId: false, label: label(`${a.fieldName}Id`), inRequest: true });
   }
   return out;
 }
@@ -403,8 +404,8 @@ class _CampoConVozState extends State<CampoConVoz> {
 // Modelo Dart
 // ---------------------------------------------------------------------------
 
-function modelo(entity: EntityIR): string {
-  const cs = campos(entity);
+function modelo(entity: EntityIR, entities: EntityIR[]): string {
+  const cs = campos(entity, entities);
   const name = entity.className;
 
   const decls = cs.map(c => `  final ${nullable(c.dt, c.isNullable)} ${c.name};`).join('\n');
@@ -434,11 +435,11 @@ ${tjLines}
 // Servicio REST
 // ---------------------------------------------------------------------------
 
-function servicio(entity: EntityIR): string {
+function servicio(entity: EntityIR, entities: EntityIR[]): string {
   const name = entity.className;
   const sn   = snake(name);
   const idt  = idDT(entity);
-  const req  = campos(entity).filter(c => c.inRequest);
+  const req  = campos(entity, entities).filter(c => c.inRequest);
   const ps   = req.map(c => `    required ${nullable(c.dt, c.isNullable)} ${c.name},`).join('\n');
   const bd   = req.map(c => `        '${c.name}': ${c.name},`).join('\n');
 
@@ -599,11 +600,11 @@ class _S extends State<${name}ListaPantalla> {
 // Formulario (campos String → CampoConVoz, otros → TextFormField)
 // ---------------------------------------------------------------------------
 
-function formulario(entity: EntityIR): string {
+function formulario(entity: EntityIR, entities: EntityIR[]): string {
   const name = entity.className;
   const sn   = snake(name);
   const idt  = idDT(entity);
-  const req  = campos(entity).filter(c => c.inRequest);
+  const req  = campos(entity, entities).filter(c => c.inRequest);
 
   const ctrls   = req.map(c => `  late TextEditingController _c${cap(c.name)};`).join('\n');
   const initC   = req.map(c => `    _c${cap(c.name)} = TextEditingController(text: widget.item?.${c.name} != null ? '\${widget.item!.${c.name}}' : '');`).join('\n');
@@ -812,6 +813,7 @@ class _ShellState extends State<_Shell> {
 
 export function generateFlutter(ir: GenerationIR): GeneratedFile[] {
   const files: GeneratedFile[] = [];
+  const allEntities = ir.entities;
   const entities = ir.entities.filter(e => !e.isAbstract);
 
   files.push({ path: 'pubspec.yaml',                   content: pubspec(ir) });
@@ -828,10 +830,10 @@ export function generateFlutter(ir: GenerationIR): GeneratedFile[] {
 
   for (const e of entities) {
     const sn = snake(e.className);
-    files.push({ path: `lib/modelos/${sn}.dart`,              content: modelo(e) });
-    files.push({ path: `lib/servicios/${sn}_servicio.dart`,   content: servicio(e) });
+    files.push({ path: `lib/modelos/${sn}.dart`,              content: modelo(e, allEntities) });
+    files.push({ path: `lib/servicios/${sn}_servicio.dart`,   content: servicio(e, allEntities) });
     files.push({ path: `lib/pantallas/${sn}_lista.dart`,      content: lista(e) });
-    files.push({ path: `lib/pantallas/${sn}_formulario.dart`, content: formulario(e) });
+    files.push({ path: `lib/pantallas/${sn}_formulario.dart`, content: formulario(e, allEntities) });
   }
 
   files.push({ path: 'lib/pantallas/inicio.dart', content: inicio(entities, ir) });

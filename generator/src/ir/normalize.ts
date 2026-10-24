@@ -1330,6 +1330,9 @@ function buildSeed(entityClasses: UmlClass[], entities: EntityIR[]): SeedInsertI
 
     inserts.push({
       tableName: entity.tableName,
+      className: entity.className,
+      fields: usadas,
+      values: cls.seedRows.map((row) => usadas.map((nombre) => row[nombre])),
       columns,
       rows,
       resetSequenceFor:

@@ -52,6 +52,13 @@ export interface ToOneView {
   idSetterName: string;
 }
 
+export interface ToManyIdsView {
+  /** `categoriasIds`. */
+  name: string;
+  getterName: string;
+  setterName: string;
+}
+
 export interface RepositoryDependency {
   className: string;
   varName: string;
@@ -108,6 +115,13 @@ export interface EntityView {
   requestComponents: DtoComponent[];
   responseComponents: DtoComponent[];
   toOneAssociations: ToOneView[];
+  /**
+   * MongoDB y Cassandra: el lado propietario de cada muchos-a-muchos guarda la
+   * lista de ids del otro extremo, igual que una a-uno guarda el id plano. El
+   * lado inverso no la repite: se deduce consultando al propietario.
+   */
+  toManyIdLists: ToManyIdsView[];
+  hasToManyIdLists: boolean;
   repositoryDependencies: RepositoryDependency[];
   /** Operaciones del diagrama, que se declaran en la capa 3. */
   serviceMethods: MethodIR[];
@@ -172,12 +186,34 @@ export function buildEntityView(ir: GenerationIR, entity: EntityIR): EntityView 
     };
   });
 
+  const toManyIdLists: ToManyIdsView[] = usaIdPlano
+    ? entity.associations
+        .filter((a) => a.kind === 'ManyToMany' && a.owning)
+        .map((a) => {
+          const name = `${a.fieldName}Ids`;
+          return { name, getterName: `get${capitalize(name)}`, setterName: `set${capitalize(name)}` };
+        })
+    : [];
+  const toManyComponents = toManyIdLists.map(
+    (lista): DtoComponent => ({
+      name: lista.name,
+      javaType: 'List<String>',
+      validations: [],
+      accessor: `entity.${lista.getterName}()`,
+    }),
+  );
+
   const uniqueFields = fields
     .filter((f) => f.unique)
     .map((f) => ({ ...f, pascalName: f.name.charAt(0).toUpperCase() + f.name.slice(1) }));
 
   const repositoryDependencies = dedupeByClassName(toOneAssociations, paquetes, ir.project);
-  const dtoImports = dtoImportsFor(ir, allFields, associationComponents, paquetes);
+  const dtoImports = [
+    ...new Set([
+      ...dtoImportsFor(ir, allFields, associationComponents, paquetes),
+      ...(toManyIdLists.length > 0 ? ['java.util.List'] : []),
+    ]),
+  ].sort();
   const realized = realizedInterfaces(ir, entity);
 
   return {
@@ -212,9 +248,16 @@ export function buildEntityView(ir: GenerationIR, entity: EntityIR): EntityView 
     responseImports: [
       ...new Set([...dtoImports, entity.identifier.javaImport].filter((i): i is string => !!i)),
     ].sort(),
-    requestComponents: [...fieldComponents, ...associationComponents],
-    responseComponents: [identifierComponent, ...fieldComponents, ...associationComponents],
+    requestComponents: [...fieldComponents, ...associationComponents, ...toManyComponents],
+    responseComponents: [
+      identifierComponent,
+      ...fieldComponents,
+      ...associationComponents,
+      ...toManyComponents,
+    ],
     toOneAssociations,
+    toManyIdLists,
+    hasToManyIdLists: toManyIdLists.length > 0,
     repositoryDependencies,
     serviceMethods: entity.methods,
     hasServiceMethods: entity.methods.length > 0,
@@ -451,6 +494,112 @@ function dtoImportsFor(
 // ---------------------------------------------------------------------------
 
 /** `com.tienda.ventas` → `src/main/java/com/tienda/ventas`. */
+/**
+ * Literal de cadena Java. `JSON.stringify` escapa comillas, barras y saltos de
+ * línea con secuencias que Java entiende igual; un byte nulo se rechaza como en
+ * `sqlLiteral`, porque tampoco tiene sentido como dato de ejemplo.
+ */
+function javaString(valor: string): string {
+  if (valor.includes('\0')) {
+    throw new Error('Un valor de datos iniciales contiene un byte nulo');
+  }
+  return JSON.stringify(valor);
+}
+
+/** Expresión Java que convierte el texto de una fila al tipo del campo. */
+function valorJava(field: FieldIR, valor: string, ir: GenerationIR): string {
+  const texto = javaString(valor.trim());
+  const enumeracion = ir.enums.find((e) => e.className === field.javaType);
+  if (enumeracion) {
+    return `${enumeracion.packageName}.domain.${enumeracion.className}.valueOf(${javaString(valor.trim().toUpperCase())})`;
+  }
+  switch (field.javaType) {
+    case 'String':
+      return javaString(valor);
+    case 'Integer':
+    case 'Long':
+    case 'Short':
+    case 'Double':
+    case 'Float':
+      return `${field.javaType}.valueOf(${texto})`;
+    case 'BigDecimal':
+      return `new java.math.BigDecimal(${texto})`;
+    case 'Boolean':
+      return `booleano(${texto})`;
+    case 'LocalDate':
+    case 'LocalTime':
+      return `java.time.${field.javaType}.parse(${texto})`;
+    case 'LocalDateTime':
+      // PostgreSQL acepta «2024-03-01 10:00»; `LocalDateTime.parse` exige la T.
+      return `java.time.LocalDateTime.parse(${javaString(valor.trim().replace(' ', 'T'))})`;
+    case 'Instant':
+      return `java.time.Instant.parse(${texto})`;
+    case 'UUID':
+      return `java.util.UUID.fromString(${texto})`;
+    default:
+      return javaString(valor);
+  }
+}
+
+interface CargaView {
+  entityClass: string;
+  repositoryClass: string;
+  repositoryVar: string;
+  filas: { variable: string; sentencias: string[] }[];
+}
+
+/**
+ * Cargas de datos iniciales para MongoDB y Cassandra, que no tienen Flyway.
+ * Cassandra no genera claves, así que una fila sin id recibe una al cargarse.
+ */
+function cargasIniciales(ir: GenerationIR): CargaView[] {
+  const cargas: CargaView[] = [];
+  for (const seed of ir.seed) {
+    const entity = ir.entities.find((e) => e.className === seed.className);
+    if (!entity) continue;
+    const porNombre = new Map(entity.fields.map((f) => [f.name, f]));
+    const filas = seed.values.map((valores, i) => {
+      const variable = `${entity.varName}${i + 1}`;
+      const sentencias: string[] = [];
+      seed.fields.forEach((nombre, j) => {
+        const valor = valores[j];
+        const field = porNombre.get(nombre);
+        if (valor === undefined || !field) return;
+        const expresion = field.isIdentifier ? javaString(valor) : valorJava(field, valor, ir);
+        const setter = field.isIdentifier ? entity.identifier.setterName : field.setterName;
+        sentencias.push(`${variable}.${setter}(${expresion});`);
+      });
+      const traeId = seed.fields.some(
+        (nombre, j) => porNombre.get(nombre)?.isIdentifier && valores[j] !== undefined,
+      );
+      if (!traeId && ir.project.databaseTarget === 'cassandra') {
+        sentencias.unshift(
+          `${variable}.${entity.identifier.setterName}(java.util.UUID.randomUUID().toString());`,
+        );
+      }
+      return { variable, sentencias };
+    });
+    cargas.push({
+      entityClass: `${entity.packageName}.domain.${entity.className}`,
+      repositoryClass: `${entity.packageName}.repository.${entity.className}Repository`,
+      repositoryVar: `${entity.varName}Repository`,
+      filas,
+    });
+  }
+  return cargas;
+}
+
+function cargaDatosIniciales(ir: GenerationIR, javaRoot: string): GeneratedFile[] {
+  const cargas = cargasIniciales(ir);
+  if (cargas.length === 0) return [];
+  return [
+    {
+      path: `${javaRoot}/infraestructura/CargaDatosIniciales.java`,
+      content: render('CargaDatosIniciales.java.hbs', { project: ir.project, cargas }),
+    },
+  ];
+}
+
 function raizDe(packageName: string): string {
   return `src/main/java/${packageName.split('.').join('/')}`;
 }
@@ -628,10 +777,9 @@ function generatePostgresProject(ir: GenerationIR): GeneratedFile[] {
  * Variante MongoDB.
  *
  * Mismo árbol de capas 2/3/4 que la variante PostgreSQL —misma `EntityView`,
- * mismos DTOs y controlador—, pero sin Flyway, sin JPA y sin datos iniciales:
- * `ir.seed` llega en forma de literales SQL (ver `SeedInsertIR`) y no hay
- * conversión a documentos Mongo todavía, así que un diagrama con filas de
- * ejemplo genera igual pero sin sembrarlas. La herencia tampoco se modela con
+ * mismos DTOs y controlador—, pero sin Flyway ni JPA: las filas de ejemplo
+ * las carga `CargaDatosIniciales` al arrancar, a partir de los valores sin
+ * convertir de `SeedInsertIR`. La herencia tampoco se modela con
  * `extends`: cada entidad concreta lleva sus campos ya aplanados (ver
  * `entity-mongo.java.hbs` y `allFields` en `buildEntityView`), así que las
  * clases abstractas no generan documento propio.
@@ -673,6 +821,7 @@ function generateMongoProject(ir: GenerationIR): GeneratedFile[] {
     path: `${javaRoot}/infraestructura/AlmacenIdempotencia.java`,
     content: render('AlmacenIdempotencia-mongo.java.hbs', context),
   });
+  files.push(...cargaDatosIniciales(ir, javaRoot));
   files.push({
     path: `${javaRoot}/infraestructura/FiltroIdempotencia.java`,
     content: render('FiltroIdempotencia.java.hbs', context),
@@ -812,6 +961,7 @@ function generateCassandraProject(ir: GenerationIR): GeneratedFile[] {
     path: `${javaRoot}/infraestructura/AlmacenIdempotencia.java`,
     content: render('AlmacenIdempotencia-cassandra.java.hbs', context),
   });
+  files.push(...cargaDatosIniciales(ir, javaRoot));
   files.push({
     path: `${javaRoot}/infraestructura/FiltroIdempotencia.java`,
     content: render('FiltroIdempotencia.java.hbs', context),

@@ -1488,3 +1488,98 @@ describe('valores únicos', () => {
     expect(servicio).not.toContain('DuplicateKeyException');
   });
 });
+
+describe('muchos-a-muchos en MongoDB y Cassandra', () => {
+  for (const databaseTarget of ['mongodb', 'cassandra'] as const) {
+    it(`${databaseTarget}: el lado propietario guarda la lista de ids y la expone en los DTOs`, () => {
+      const files = generateProject(normalize(tiendaDiagram(), { databaseTarget }));
+      const producto = fileNamed(files, 'domain/Producto.java').content;
+      expect(producto).toContain('private List<String> categoriasIds = new ArrayList<>();');
+      expect(producto).toContain('public List<String> getCategoriasIds()');
+      expect(producto).toContain('public void setCategoriasIds(List<String> categoriasIds)');
+
+      const peticion = fileNamed(files, 'dto/ProductoRequest.java').content;
+      expect(peticion).toContain('List<String> categoriasIds');
+      expect(peticion).toContain('import java.util.List;');
+      expect(fileNamed(files, 'dto/ProductoResponse.java').content).toContain(
+        'List<String> categoriasIds',
+      );
+
+      const mapeador = fileNamed(files, 'dto/mapper/ProductoMapper.java').content;
+      expect(mapeador).toContain('entity.getCategoriasIds()');
+      expect(mapeador).toContain(
+        'entity.setCategoriasIds(request.categoriasIds() == null ? new ArrayList<>() : new ArrayList<>(request.categoriasIds()));',
+      );
+
+      // El lado inverso no duplica la relación: se deduce del propietario.
+      expect(fileNamed(files, 'domain/Categoria.java').content).not.toContain('Ids');
+    });
+  }
+
+  it('postgres no cambia: la N:M sigue siendo una tabla de unión', () => {
+    const files = generateProject(normalize(tiendaDiagram()));
+    expect(fileNamed(files, 'domain/Producto.java').content).not.toContain('categoriasIds');
+  });
+});
+
+describe('datos iniciales en MongoDB y Cassandra', () => {
+  function conDatos(): ClassDiagram {
+    const estado = createClass({ id: 'E1', name: 'Estado', kind: 'enum', literals: ['ACTIVO', 'BAJA'] });
+    const empleado = createClass({
+      id: 'C1',
+      name: 'Empleado',
+      attributes: [
+        createAttribute({ id: 'A1', name: 'id', type: 'Long', isIdentifier: true }),
+        createAttribute({ id: 'A2', name: 'nombre', type: 'String' }),
+        createAttribute({ id: 'A3', name: 'salario', type: 'Decimal' }),
+        createAttribute({ id: 'A4', name: 'activo', type: 'Boolean' }),
+        createAttribute({ id: 'A5', name: 'alta', type: 'Date' }),
+        createAttribute({ id: 'A6', name: 'estado', type: 'Estado' }),
+      ],
+      seedRows: [
+        { id: '7', nombre: 'Ana "la jefa"', salario: '2500.50', activo: 'sí', alta: '2024-03-01', estado: 'activo' },
+        { nombre: 'Beto' },
+      ],
+    });
+    return createDiagram({ id: 'D1', name: 'Datos', classes: { E1: estado, C1: empleado } });
+  }
+
+  for (const databaseTarget of ['mongodb', 'cassandra'] as const) {
+    it(`${databaseTarget}: un cargador inserta las filas al arrancar si no hay ninguna`, () => {
+      const outcome = generate(conDatos(), { databaseTarget });
+      if (!outcome.ok) throw new Error(JSON.stringify(outcome.validation.errors));
+      const carga = fileNamed(outcome.files, 'infraestructura/CargaDatosIniciales.java').content;
+      expect(carga).toContain('implements CommandLineRunner');
+      expect(carga).toContain('if (empleadoRepository.count() == 0) {');
+      expect(carga).toContain('empleado1.setId("7");');
+      expect(carga).toContain('empleado1.setNombre("Ana \\"la jefa\\"");');
+      expect(carga).toContain('empleado1.setSalario(new java.math.BigDecimal("2500.50"));');
+      expect(carga).toContain('empleado1.setActivo(booleano("sí"));');
+      expect(carga).toContain('empleado1.setAlta(java.time.LocalDate.parse("2024-03-01"));');
+      expect(carga).toContain('empleado1.setEstado(com.ejemplo.proyecto.domain.Estado.valueOf("ACTIVO"));');
+      expect(carga).toContain('empleadoRepository.save(empleado2);');
+      expect(carga).not.toContain('empleado2.setSalario');
+    });
+  }
+
+  it('cassandra: una fila sin id recibe una clave al cargarse', () => {
+    const outcome = generate(conDatos(), { databaseTarget: 'cassandra' });
+    if (!outcome.ok) throw new Error('inválido');
+    const carga = fileNamed(outcome.files, 'infraestructura/CargaDatosIniciales.java').content;
+    expect(carga).toContain('empleado2.setId(java.util.UUID.randomUUID().toString());');
+  });
+
+  it('sin filas no se genera cargador', () => {
+    for (const databaseTarget of ['mongodb', 'cassandra'] as const) {
+      const files = generateProject(normalize(tiendaDiagram(), { databaseTarget }));
+      expect(files.some((f) => f.path.endsWith('CargaDatosIniciales.java'))).toBe(false);
+    }
+  });
+
+  it('postgres sigue usando la migración de datos y no el cargador', () => {
+    const outcome = generate(conDatos());
+    if (!outcome.ok) throw new Error('inválido');
+    expect(outcome.files.some((f) => f.path.endsWith('V2__datos_iniciales.sql'))).toBe(true);
+    expect(outcome.files.some((f) => f.path.endsWith('CargaDatosIniciales.java'))).toBe(false);
+  });
+});

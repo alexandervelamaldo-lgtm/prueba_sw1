@@ -235,6 +235,15 @@ export interface MigrationIR {
  */
 export interface SeedInsertIR {
   tableName: string;
+  /** Entidad dueña de las filas: MongoDB y Cassandra las cargan por su repositorio. */
+  className: string;
+  /** Atributos en el mismo orden que `columns`. */
+  fields: string[];
+  /**
+   * Los valores tal como llegaron, sin convertir a SQL (`undefined` si la fila
+   * no lo trae). MongoDB y Cassandra no pasan por SQL: los traducen a Java.
+   */
+  values: (string | undefined)[][];
   /** Columnas en el orden en que aparecen los valores de cada fila. */
   columns: string[];
   /** Literales SQL: `'Ana Torres'`, `'2500.50'`, `NULL`. Nunca valores crudos. */

@@ -104,6 +104,39 @@ function empaquetar(dir: string): string {
   return join(dir, 'target', jar);
 }
 
+/** Filas de ejemplo de todos los tipos que convierte el cargador de MongoDB y Cassandra. */
+function conDatos(): ClassDiagram {
+  const estado = createClass({ id: 'E1', name: 'Estado', kind: 'enum', literals: ['ACTIVO', 'BAJA'] });
+  const empleado = createClass({
+    id: 'C1',
+    name: 'Empleado',
+    attributes: [
+      createAttribute({ id: 'A1', name: 'id', type: 'Long', isIdentifier: true }),
+      createAttribute({ id: 'A2', name: 'nombre', type: 'String' }),
+      createAttribute({ id: 'A3', name: 'salario', type: 'Decimal' }),
+      createAttribute({ id: 'A4', name: 'activo', type: 'Boolean' }),
+      createAttribute({ id: 'A5', name: 'alta', type: 'Date' }),
+      createAttribute({ id: 'A6', name: 'ultimoAcceso', type: 'DateTime' }),
+      createAttribute({ id: 'A7', name: 'estado', type: 'Estado' }),
+      createAttribute({ id: 'A8', name: 'edad', type: 'Integer' }),
+    ],
+    seedRows: [
+      {
+        id: '7',
+        nombre: 'Ana "la jefa"',
+        salario: '2500.50',
+        activo: 'sí',
+        alta: '2024-03-01',
+        ultimoAcceso: '2024-03-01 10:00',
+        estado: 'activo',
+        edad: '41',
+      },
+      { nombre: 'Beto' },
+    ],
+  });
+  return createDiagram({ id: 'D1', name: 'Datos', classes: { E1: estado, C1: empleado } });
+}
+
 /** Un solo registro, sin asociaciones: lo justo para que el INSERT pruebe el identificador. */
 function claseSimple(tipoId: 'Long' | 'Integer' | 'UUID' | 'String'): ClassDiagram {
   const producto = createClass({
@@ -282,6 +315,7 @@ describe.skipIf(!activa)('el código generado compila y arranca', () => {
         ['tienda', tiendaDiagram],
         ['rrhh', rrhhDiagram],
         ['minimo', minimoDiagram],
+        ['datos', conDatos],
       ] as const) {
         it(`${databaseTarget}: ${nombre}`, async () => {
           const dir = await generarEn(diagrama(), { databaseTarget });

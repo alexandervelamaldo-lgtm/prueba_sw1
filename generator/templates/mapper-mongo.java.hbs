@@ -4,6 +4,9 @@ import {{{pkg}}}.domain.{{{entity.className}}};
 import {{{pkg}}}.dto.{{{entity.className}}}Request;
 import {{{pkg}}}.dto.{{{entity.className}}}Response;
 import org.springframework.stereotype.Component;
+{{#if hasToManyIdLists}}
+import java.util.ArrayList;
+{{/if}}
 {{#each dtoImports}}
 import {{{this}}};
 {{/each}}
@@ -44,6 +47,9 @@ public class {{{entity.className}}}Mapper {
 {{/each}}
 {{#each toOneAssociations}}
         entity.{{{idSetterName}}}(request.{{{idComponentName}}}());
+{{/each}}
+{{#each toManyIdLists}}
+        entity.{{{setterName}}}(request.{{{name}}}() == null ? new ArrayList<>() : new ArrayList<>(request.{{{name}}}()));
 {{/each}}
     }
 }

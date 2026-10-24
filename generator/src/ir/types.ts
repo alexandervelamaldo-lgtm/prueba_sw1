@@ -116,6 +116,28 @@ export interface EntityIR {
   inheritanceStrategy?: 'SINGLE_TABLE' | 'JOINED' | 'TABLE_PER_CLASS';
   /** true si otra entidad la extiende: necesita @Inheritance. */
   isSuperclass: boolean;
+  /**
+   * Estrategia de la jerarquía a la que pertenece, también en las subclases
+   * (`inheritanceStrategy` solo la lleva la raíz, que es quien la declara).
+   * Decide qué anotaciones admite cada subclase: `@Table` y
+   * `@PrimaryKeyJoinColumn` solo tienen sentido con JOINED, y Hibernate se
+   * niega a arrancar si aparecen en SINGLE_TABLE o TABLE_PER_CLASS.
+   */
+  hierarchyStrategy?: 'SINGLE_TABLE' | 'JOINED' | 'TABLE_PER_CLASS';
+  /**
+   * Cómo se genera la clave primaria. IDENTITY para Long e Integer; UUID para
+   * UUID y String, porque una columna de texto no puede ser autoincremental;
+   * SEQUENCE en una jerarquía TABLE_PER_CLASS, donde Hibernate no admite
+   * IDENTITY (las filas de varias tablas comparten el espacio de ids).
+   */
+  idGeneration: 'IDENTITY' | 'UUID' | 'SEQUENCE';
+  /** Secuencia compartida por la jerarquía cuando `idGeneration` es SEQUENCE. */
+  idSequence?: string;
+  /**
+   * Columna discriminadora de una raíz SINGLE_TABLE. `dtype` salvo que algún
+   * atributo de la jerarquía ya se llame así.
+   */
+  discriminatorColumn?: string;
   implementsInterfaces: string[];
   imports: string[];
   /**
@@ -199,6 +221,8 @@ export interface MigrationIR {
   description: string;
   /** Ordenadas por dependencias: una tabla nunca precede a aquella a la que referencia. */
   tables: TableDDL[];
+  /** Secuencias de las jerarquías TABLE_PER_CLASS (`idSequence`). */
+  sequences: string[];
 }
 
 /**
@@ -225,6 +249,11 @@ export interface SeedInsertIR {
    * la plantilla emite el `setval` que lo evita.
    */
   resetSequenceFor?: string;
+  /**
+   * Lo mismo para una secuencia con nombre (TABLE_PER_CLASS), que
+   * `pg_get_serial_sequence` no encuentra porque no pertenece a la columna.
+   */
+  resetNamedSequence?: { sequence: string; column: string };
 }
 
 export interface GenerationIR {

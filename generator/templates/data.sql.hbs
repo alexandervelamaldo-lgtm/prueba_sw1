@@ -25,4 +25,17 @@ SELECT setval(
 );
 
 {{/if}}
+{{#if this.resetNamedSequence}}
+-- Lo mismo con la secuencia que comparte la jerarquía (TABLE_PER_CLASS). Se
+-- toma el mayor de los dos valores porque otra tabla de la jerarquía puede
+-- haberla adelantado ya.
+SELECT setval(
+    '{{{this.resetNamedSequence.sequence}}}',
+    GREATEST(
+        COALESCE((SELECT MAX({{{this.resetNamedSequence.column}}}) FROM {{{this.tableName}}}), 1),
+        (SELECT last_value FROM {{{this.resetNamedSequence.sequence}}})
+    )
+);
+
+{{/if}}
 {{/each}}

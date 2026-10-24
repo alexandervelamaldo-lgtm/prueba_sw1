@@ -27,7 +27,7 @@ import java.util.Objects;
  * caer a un `ALLOW FILTERING` silencioso.
  */
 @Table("{{{entity.tableName}}}")
-public class {{{entity.className}}} {
+public class {{{entity.className}}}{{#if hasInterfaces}} implements {{{interfaceList}}}{{/if}} {
 
     @PrimaryKey
     private {{{entity.identifier.javaType}}} {{{entity.identifier.name}}};

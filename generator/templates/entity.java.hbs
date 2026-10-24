@@ -20,17 +20,29 @@ import java.util.Objects;
 @Table(name = "{{{entity.tableName}}}")
 {{/unless}}
 {{#if entity.superclass}}
+{{#unless (eq entity.hierarchyStrategy "SINGLE_TABLE")}}
 @Table(name = "{{{entity.tableName}}}")
+{{/unless}}
+{{#if (eq entity.hierarchyStrategy "JOINED")}}
 @PrimaryKeyJoinColumn(name = "{{{entity.identifier.columnName}}}")
+{{/if}}
 {{/if}}
 {{#if entity.inheritanceStrategy}}
 @Inheritance(strategy = InheritanceType.{{{entity.inheritanceStrategy}}})
+{{/if}}
+{{#if entity.discriminatorColumn}}
+@DiscriminatorColumn(name = "{{{entity.discriminatorColumn}}}")
 {{/if}}
 public {{#if entity.isAbstract}}abstract {{/if}}class {{{entity.className}}}{{#if entity.superclass}} extends {{{entity.superclass}}}{{/if}}{{#if hasInterfaces}} implements {{{interfaceList}}}{{/if}} {
 
 {{#unless entity.superclass}}
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+{{#if entity.idSequence}}
+    @SequenceGenerator(name = "{{{entity.idSequence}}}", sequenceName = "{{{entity.idSequence}}}", allocationSize = 1)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "{{{entity.idSequence}}}")
+{{else}}
+    @GeneratedValue(strategy = GenerationType.{{{entity.idGeneration}}})
+{{/if}}
     @Column(name = "{{{entity.identifier.columnName}}}", nullable = false, updatable = false)
     private {{{entity.identifier.javaType}}} {{{entity.identifier.name}}};
 

@@ -88,6 +88,8 @@ export interface EntityView {
   hasInterfaces: boolean;
   interfaceList: string;
   hasUniqueFields: boolean;
+  /** Como `hasUniqueFields` pero contando lo heredado: MongoDB y Cassandra lo aplanan. */
+  hasUniqueAllFields: boolean;
   uniqueFields: (FieldIR & { pascalName: string })[];
   /**
    * Solo lo que el repositorio nombra de verdad: el tipo del identificador y el
@@ -98,6 +100,11 @@ export interface EntityView {
   repositoryImports: string[];
   identifierImport?: string;
   dtoImports: string[];
+  /**
+   * Los de `dtoImports` más el del identificador, que solo lleva la respuesta:
+   * con un id UUID la petición no lo nombra y el import le sobraría.
+   */
+  responseImports: string[];
   requestComponents: DtoComponent[];
   responseComponents: DtoComponent[];
   toOneAssociations: ToOneView[];
@@ -170,6 +177,7 @@ export function buildEntityView(ir: GenerationIR, entity: EntityIR): EntityView 
     .map((f) => ({ ...f, pascalName: f.name.charAt(0).toUpperCase() + f.name.slice(1) }));
 
   const repositoryDependencies = dedupeByClassName(toOneAssociations, paquetes, ir.project);
+  const dtoImports = dtoImportsFor(ir, allFields, associationComponents, paquetes);
   const realized = realizedInterfaces(ir, entity);
 
   return {
@@ -190,6 +198,7 @@ export function buildEntityView(ir: GenerationIR, entity: EntityIR): EntityView 
     hasInterfaces: entity.implementsInterfaces.length > 0,
     interfaceList: entity.implementsInterfaces.join(', '),
     hasUniqueFields: uniqueFields.length > 0,
+    hasUniqueAllFields: allFields.some((f) => f.unique),
     uniqueFields,
     repositoryImports: [
       ...new Set(
@@ -199,7 +208,10 @@ export function buildEntityView(ir: GenerationIR, entity: EntityIR): EntityView 
       ),
     ].sort(),
     identifierImport: entity.identifier.javaImport,
-    dtoImports: dtoImportsFor(ir, allFields, associationComponents, paquetes),
+    dtoImports,
+    responseImports: [
+      ...new Set([...dtoImports, entity.identifier.javaImport].filter((i): i is string => !!i)),
+    ].sort(),
     requestComponents: [...fieldComponents, ...associationComponents],
     responseComponents: [identifierComponent, ...fieldComponents, ...associationComponents],
     toOneAssociations,

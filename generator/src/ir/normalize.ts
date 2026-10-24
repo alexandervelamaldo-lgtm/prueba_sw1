@@ -83,6 +83,8 @@ export function normalize(
     }),
   );
 
+  resolverJerarquias(entities, strategy);
+
   // Simplificación deliberada de las variantes MongoDB y Cassandra: todo
   // identificador pasa a String. El tipo por omisión (Long, pensado para una
   // secuencia de PostgreSQL) no se autogenera en ninguna de las dos, y forzar
@@ -732,6 +734,9 @@ function buildEntity(
     superclass: superclass ? toPascalCase(superclass.name) : undefined,
     inheritanceStrategy: isSuperclass ? context.strategy : undefined,
     isSuperclass,
+    // Provisional: depende de la jerarquía entera, que se resuelve después de
+    // construir todas las entidades (`resolverJerarquias`).
+    idGeneration: 'IDENTITY',
     implementsInterfaces,
     imports: [],
     methods,
@@ -925,6 +930,72 @@ function buildInterface(cls: UmlClass, packageName: string): InterfaceIR {
 }
 
 // ---------------------------------------------------------------------------
+// Jerarquías
+// ---------------------------------------------------------------------------
+
+/** Cadena de superclases, de la más cercana a la raíz. */
+function ancestrosDe(entity: EntityIR, todas: EntityIR[]): EntityIR[] {
+  const result: EntityIR[] = [];
+  const visitadas = new Set([entity.className]);
+  let actual = todas.find((e) => e.className === entity.superclass);
+  while (actual && !visitadas.has(actual.className)) {
+    visitadas.add(actual.className);
+    result.push(actual);
+    actual = todas.find((e) => e.className === actual!.superclass);
+  }
+  return result;
+}
+
+function descendientesDe(entity: EntityIR, todas: EntityIR[]): EntityIR[] {
+  return todas.filter((e) => ancestrosDe(e, todas).includes(entity));
+}
+
+/** Columnas que la propia entidad aporta: atributos y claves ajenas a-uno. */
+function columnasPropias(entity: EntityIR): string[] {
+  return [
+    ...entity.fields.filter((f) => !f.isIdentifier).map((f) => f.columnName),
+    ...entity.associations.filter((a) => a.owning && a.joinColumn).map((a) => a.joinColumn!),
+  ];
+}
+
+/**
+ * Decide lo que depende de la jerarquía completa y no de una clase suelta: la
+ * estrategia que ven las subclases, cómo se genera la clave y el nombre de la
+ * columna discriminadora.
+ */
+function resolverJerarquias(
+  entities: EntityIR[],
+  strategy: 'SINGLE_TABLE' | 'JOINED' | 'TABLE_PER_CLASS',
+): void {
+  for (const entity of entities) {
+    const ancestros = ancestrosDe(entity, entities);
+    const raiz = ancestros.at(-1) ?? entity;
+    const enJerarquia = entity.isSuperclass || ancestros.length > 0;
+
+    entity.hierarchyStrategy = enJerarquia ? strategy : undefined;
+
+    const tipoId = raiz.identifier.javaType;
+    if (tipoId === 'UUID' || tipoId === 'String') {
+      entity.idGeneration = 'UUID';
+    } else if (enJerarquia && strategy === 'TABLE_PER_CLASS') {
+      entity.idGeneration = 'SEQUENCE';
+      entity.idSequence = truncateIdentifier(`${raiz.tableName}_seq`);
+    } else {
+      entity.idGeneration = 'IDENTITY';
+    }
+
+    if (strategy === 'SINGLE_TABLE' && entity.isSuperclass && ancestros.length === 0) {
+      const ocupadas = new Set(
+        [entity, ...descendientesDe(entity, entities)].flatMap(columnasPropias),
+      );
+      let nombre = 'dtype';
+      for (let n = 2; ocupadas.has(nombre); n++) nombre = `dtype_${n}`;
+      entity.discriminatorColumn = nombre;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Migración SQL
 // ---------------------------------------------------------------------------
 
@@ -946,11 +1017,45 @@ function buildMigration(
     }
   }
 
+  const sequences = [
+    ...new Set(entities.map((e) => e.idSequence).filter((q): q is string => q !== undefined)),
+  ];
+
   return {
     version: '1',
     description: 'esquema inicial',
     tables: sortTablesByDependency(tables),
+    sequences,
   };
+}
+
+/**
+ * Entidades cuyas columnas acaban en la tabla de `entity`, y si llegan
+ * opcionales.
+ *
+ * JOINED reparte: cada tabla lleva solo lo suyo y la subclase se une a la del
+ * padre por la clave. SINGLE_TABLE junta toda la jerarquía en la tabla de la
+ * raíz, y las columnas de cada subclase admiten NULL porque las filas de las
+ * demás no las tienen. TABLE_PER_CLASS repite en cada tabla lo heredado.
+ */
+function origenesDeColumnas(
+  entity: EntityIR,
+  allEntities: EntityIR[],
+  strategy: 'SINGLE_TABLE' | 'JOINED' | 'TABLE_PER_CLASS',
+): { entity: EntityIR; opcional: boolean }[] {
+  if (strategy === 'SINGLE_TABLE' && entity.isSuperclass) {
+    return [
+      { entity, opcional: false },
+      ...descendientesDe(entity, allEntities).map((d) => ({ entity: d, opcional: true })),
+    ];
+  }
+  if (strategy === 'TABLE_PER_CLASS') {
+    return [...ancestrosDe(entity, allEntities).reverse(), entity].map((e) => ({
+      entity: e,
+      opcional: false,
+    }));
+  }
+  return [{ entity, opcional: false }];
 }
 
 function buildTable(
@@ -963,11 +1068,15 @@ function buildTable(
 
   const isChildJoined = strategy === 'JOINED' && entity.superclass !== undefined;
 
+  // La clave solo es SERIAL cuando la base la rellena: no en una subclase
+  // JOINED (copia la del padre) ni con una secuencia con nombre o un UUID, que
+  // los pone Hibernate.
   const idColumn: ColumnDDL = {
     name: entity.identifier.columnName,
-    type: isChildJoined
-      ? entity.identifier.postgresType
-      : serialTypeFor(entity.identifier.postgresType),
+    type:
+      isChildJoined || entity.idGeneration !== 'IDENTITY'
+        ? entity.identifier.postgresType
+        : serialTypeFor(entity.identifier.postgresType),
     nullable: false,
     unique: false,
     primaryKey: true,
@@ -989,24 +1098,30 @@ function buildTable(
     }
   }
 
-  if (strategy === 'SINGLE_TABLE' && entity.isSuperclass) {
+  if (strategy === 'SINGLE_TABLE' && entity.discriminatorColumn) {
+    const nombre = entity.discriminatorColumn;
     const discriminator: ColumnDDL = {
-      name: 'dtype',
+      name: nombre,
       type: 'VARCHAR(64)',
       nullable: false,
       unique: false,
       primaryKey: false,
-      definition: 'dtype VARCHAR(64) NOT NULL',
+      definition: `${nombre} VARCHAR(64) NOT NULL`,
     };
     columns.push(discriminator);
   }
 
-  for (const field of entity.fields) {
+  const origenes = origenesDeColumnas(entity, allEntities, strategy);
+
+  const campos = origenes.flatMap(({ entity: origen, opcional }) =>
+    origen.fields.map((field) => ({ field, opcional })),
+  );
+  for (const { field, opcional } of campos) {
     if (field.isIdentifier) continue;
     const column: ColumnDDL = {
       name: field.columnName,
       type: field.postgresType,
-      nullable: field.nullable,
+      nullable: field.nullable || opcional,
       unique: field.unique,
       primaryKey: false,
       definition: '',
@@ -1021,7 +1136,10 @@ function buildTable(
     columns.push(column);
   }
 
-  for (const assoc of entity.associations) {
+  const asociaciones = origenes.flatMap(({ entity: origen, opcional }) =>
+    origen.associations.map((assoc) => ({ assoc, opcional })),
+  );
+  for (const { assoc, opcional } of asociaciones) {
     if (!assoc.owning) continue;
     if (assoc.kind !== 'ManyToOne' && assoc.kind !== 'OneToOne') continue;
     if (!assoc.joinColumn) continue;
@@ -1031,7 +1149,7 @@ function buildTable(
     const column: ColumnDDL = {
       name: assoc.joinColumn,
       type: targetEntity?.identifier.postgresType ?? 'BIGINT',
-      nullable: assoc.nullable,
+      nullable: assoc.nullable || opcional,
       unique: assoc.kind === 'OneToOne',
       primaryKey: false,
       definition: '',
@@ -1215,8 +1333,15 @@ function buildSeed(entityClasses: UmlClass[], entities: EntityIR[]): SeedInsertI
       columns,
       rows,
       resetSequenceFor:
-        traeIdentificador && identificador.generated && conSecuencia
+        traeIdentificador &&
+        identificador.generated &&
+        conSecuencia &&
+        entity.idGeneration === 'IDENTITY'
           ? identificador.columnName
+          : undefined,
+      resetNamedSequence:
+        traeIdentificador && entity.idSequence
+          ? { sequence: entity.idSequence, column: identificador.columnName }
           : undefined,
     });
   }

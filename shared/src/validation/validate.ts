@@ -520,6 +520,10 @@ function validateEnums(diagram: ClassDiagram, issues: ValidationIssue[]): void {
       });
     }
 
+    // El generador emite cada literal en mayúsculas (`normalize.ts`), así que
+    // `activo` y `ACTIVO` son válidos por separado pero acaban en el mismo
+    // valor Java, y una enumeración con un valor repetido no compila.
+    const vistos = new Map<string, string>();
     for (const literal of cls.literals) {
       if (!isValidJavaIdentifier(literal)) {
         issues.push({
@@ -529,7 +533,23 @@ function validateEnums(diagram: ClassDiagram, issues: ValidationIssue[]): void {
           elementId: cls.id,
           elementName: cls.name,
         });
+        continue;
       }
+      const generado = literal.toUpperCase();
+      const anterior = vistos.get(generado);
+      if (anterior !== undefined) {
+        issues.push({
+          severity: 'error',
+          code: 'DUPLICATE_ENUM_LITERAL',
+          message:
+            `Los literales «${anterior}» y «${literal}» de «${cls.name}» generan el mismo ` +
+            `valor Java «${generado}».`,
+          elementId: cls.id,
+          elementName: cls.name,
+        });
+        continue;
+      }
+      vistos.set(generado, literal);
     }
   }
 }

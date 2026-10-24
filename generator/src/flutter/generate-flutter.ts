@@ -534,7 +534,8 @@ class _S extends State<${name}ListaPantalla> {
   Future<void> _load() async {
     setState(() { _cargando = true; _err = null; });
     try {
-      setState(() { _items = await ${name}Servicio.listar() as List<${name}>; _cargando = false; });
+      final items = await ${name}Servicio.listar();
+      setState(() { _items = items; _cargando = false; });
     } catch (e) {
       setState(() { _err = e.toString(); _cargando = false; });
     }
@@ -605,13 +606,23 @@ function formulario(entity: EntityIR, entities: EntityIR[]): string {
   const sn   = snake(name);
   const idt  = idDT(entity);
   const req  = campos(entity, entities).filter(c => c.inRequest);
+  const vozImport = req.some(c => c.dt === 'String') ? "import '../widgets/campo_con_voz.dart';" : '';
 
-  const ctrls   = req.map(c => `  late TextEditingController _c${cap(c.name)};`).join('\n');
-  const initC   = req.map(c => `    _c${cap(c.name)} = TextEditingController(text: widget.item?.${c.name} != null ? '\${widget.item!.${c.name}}' : '');`).join('\n');
-  const dispC   = req.map(c => `    _c${cap(c.name)}.dispose();`).join('\n');
+  const ctrls   = req.map(c => c.dt === 'bool'
+    ? `  bool${c.isNullable ? '?' : ''} _c${cap(c.name)} = ${c.isNullable ? 'null' : 'false'};`
+    : `  late TextEditingController _c${cap(c.name)};`).join('\n');
+  const initC   = req.map(c => c.dt === 'bool'
+    ? `    _c${cap(c.name)} = widget.item?.${c.name}${c.isNullable ? '' : ' ?? false'};`
+    : `    _c${cap(c.name)} = TextEditingController(text: widget.item?.${c.name} != null ? '\${widget.item!.${c.name}}' : '');`).join('\n');
+  const dispC   = req.filter(c => c.dt !== 'bool').map(c => `    _c${cap(c.name)}.dispose();`).join('\n');
 
   const fields  = req.map(c => {
     const ctrl = `_c${cap(c.name)}`;
+    if (c.dt === 'bool') {
+      const value = c.isNullable ? `${ctrl} ?? false` : ctrl;
+      return `          SwitchListTile(title: const Text('${c.label}'), value: ${value},
+            onChanged: (value) => setState(() => ${ctrl} = value)),`;
+    }
     if (c.dt === 'String') {
       return `          CampoConVoz(controller: ${ctrl}, label: '${c.label}', obligatorio: ${!c.isNullable}),\n          const SizedBox(height: 16),`;
     }
@@ -626,6 +637,7 @@ function formulario(entity: EntityIR, entities: EntityIR[]): string {
 
   const saveArgs = req.map(c => {
     const t = `_c${cap(c.name)}.text.trim()`;
+    if (c.dt === 'bool') return `          ${c.name}: _c${cap(c.name)},`;
     if (c.dt === 'int')    return c.isNullable ? `          ${c.name}: ${t}.isEmpty ? null : int.tryParse(${t}),`    : `          ${c.name}: int.parse(${t}),`;
     if (c.dt === 'double') return c.isNullable ? `          ${c.name}: ${t}.isEmpty ? null : double.tryParse(${t}),` : `          ${c.name}: double.parse(${t}),`;
     return c.isNullable ? `          ${c.name}: ${t}.isEmpty ? null : ${t},` : `          ${c.name}: ${t},`;
@@ -634,7 +646,7 @@ function formulario(entity: EntityIR, entities: EntityIR[]): string {
   return `import 'package:flutter/material.dart';
 import '../modelos/${sn}.dart';
 import '../servicios/${sn}_servicio.dart';
-import '../widgets/campo_con_voz.dart';
+${vozImport}
 
 class ${name}FormularioPantalla extends StatefulWidget {
   final ${name}? item;

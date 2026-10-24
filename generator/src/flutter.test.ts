@@ -119,3 +119,31 @@ describe('Flutter identifier types', () => {
     expect(file(files, 'lib/servicios/pedido_servicio.dart')).toContain('obtener(int id)');
   });
 });
+
+describe('generated Flutter compiles', () => {
+  const files = generateFlutter(normalize(tiendaDiagram()));
+
+  it('awaits list loading before the synchronous setState callback', () => {
+    const listFiles = files.filter((entry) => entry.path.startsWith('lib/pantallas/') && entry.path.endsWith('_lista.dart'));
+    expect(listFiles.length).toBeGreaterThan(0);
+    for (const entry of listFiles) {
+      expect(entry.content).toContain('final items = await ');
+      expect(entry.content).toContain('setState(() { _items = items;');
+      expect(entry.content).not.toContain('setState(() { _items = await ');
+      expect(entry.content).not.toContain('items as List<');
+    }
+  });
+
+  it('imports the voice widget only for forms that contain String fields', () => {
+    expect(file(files, 'lib/pantallas/producto_formulario.dart')).toContain("import '../widgets/campo_con_voz.dart';");
+    expect(file(files, 'lib/pantallas/linea_pedido_formulario.dart')).not.toContain("import '../widgets/campo_con_voz.dart';");
+  });
+
+  it('generates Boolean fields as Boolean state and switch controls', () => {
+    const form = file(files, 'lib/pantallas/producto_formulario.dart');
+    expect(form).toContain('bool _cActivo = false;');
+    expect(form).toContain('SwitchListTile(title: const Text(\'Activo\'), value: _cActivo,');
+    expect(form).toContain('activo: _cActivo,');
+    expect(form).not.toContain('_cActivo.text');
+  });
+});

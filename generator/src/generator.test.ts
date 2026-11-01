@@ -746,6 +746,16 @@ describe('colección Postman', () => {
     expect(reporte.item[3].request.body.raw).toBe('{}');
   });
 
+  it('una N:M de PostgreSQL con id numérico envía números, no texto', () => {
+    const pg = JSON.parse(
+      fileNamed(generateProject(normalize(tiendaDiagram())), 'postman_collection.json').content,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const producto = pg.item.find((f: any) => f.name === 'Producto');
+    expect(producto.item[1].request.body.raw).toContain('"categoriasIds": [\n    {{categoriaId}}\n  ]');
+  });
+
   it('el README explica cómo ejecutar la colección', () => {
     // Sin saltos de línea: el párrafo va ajustado a 79 columnas.
     const readme = fileNamed(files, 'README.md').content.replace(/\s+/g, ' ');
@@ -1673,5 +1683,30 @@ describe('datos iniciales en MongoDB y Cassandra', () => {
     if (!outcome.ok) throw new Error('inválido');
     expect(outcome.files.some((f) => f.path.endsWith('V2__datos_iniciales.sql'))).toBe(true);
     expect(outcome.files.some((f) => f.path.endsWith('CargaDatosIniciales.java'))).toBe(false);
+  });
+});
+
+describe('N:M en PostgreSQL', () => {
+  const files = generateProject(normalize(tiendaDiagram()));
+
+  it('los DTOs transportan la lista de ids del lado propietario', () => {
+    expect(fileNamed(files, 'dto/ProductoRequest.java').content).toContain('List<Long> categoriasIds');
+    expect(fileNamed(files, 'dto/ProductoResponse.java').content).toContain('List<Long> categoriasIds');
+    expect(fileNamed(files, 'dto/ProductoRequest.java').content).toContain('import java.util.List;');
+  });
+
+  it('el mapeador resuelve cada id contra su repositorio y responde con los ids', () => {
+    const mapper = fileNamed(files, 'dto/mapper/ProductoMapper.java').content;
+    expect(mapper).toContain('private final CategoriaRepository categoriaRepository;');
+    expect(mapper).toContain('entity.getCategorias().stream().map(Categoria::getId).toList()');
+    expect(mapper).toContain('if (request.categoriasIds() != null) {');
+    expect(mapper).toContain('entity.setCategorias(request.categoriasIds().stream()');
+    expect(mapper).toContain('new ResourceNotFoundException("Categoria", idDestino)');
+    expect(mapper).toContain('import java.util.HashSet;');
+    expect(mapper).toContain('import java.util.stream.Collectors;');
+  });
+
+  it('el lado inverso no repite la lista', () => {
+    expect(fileNamed(files, 'dto/CategoriaRequest.java').content).not.toContain('Ids');
   });
 });

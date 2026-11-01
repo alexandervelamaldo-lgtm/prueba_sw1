@@ -61,7 +61,10 @@ describe('manifiesto: campos', () => {
         const enManifiesto = manifiesto.entidades
           .find((e) => e.nombre === entidadIR.className)!
           .campos.map((c) => c.nombre);
-        const enDto = vista.requestComponents.map((c) => c.name);
+        // Las listas de una N:M son opcionales en el DTO y no se dictan: el
+        // manifiesto no tiene un tipo de campo para ellas.
+        const listas = new Set(vista.toManyIdLists.map((l) => l.name));
+        const enDto = vista.requestComponents.map((c) => c.name).filter((n) => !listas.has(n));
 
         expect(enManifiesto, `${entry.name}/${entidadIR.className}`).toEqual(enDto);
       }

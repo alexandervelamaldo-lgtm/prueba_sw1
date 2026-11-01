@@ -235,7 +235,14 @@ function requestBody(
       }
     } else if (lista) {
       const destino = porClase.get(lista.targetClass);
-      body[component.name] = destino ? [`{{${variableDe(destino)}}}`] : [];
+      if (lista.targetClass === view.entity.className || !destino) {
+        // Como una auto-referencia a-uno: el propio registro aún no existe.
+        body[component.name] = [];
+      } else if (lista.idJavaType === 'Long' || lista.idJavaType === 'Integer') {
+        body[component.name] = [`${NUMERO}${variableDe(destino)}`];
+      } else {
+        body[component.name] = [`{{${variableDe(destino)}}}`];
+      }
     } else if (unicos.has(component.name) && component.javaType === 'String') {
       // Ejecutar la colección dos veces no debe chocar con el alta anterior.
       body[component.name] = `${component.name}-{{$timestamp}}-{{$randomInt}}`;

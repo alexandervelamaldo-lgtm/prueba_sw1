@@ -93,6 +93,12 @@ interface Campo {
   isId: boolean;
   label: string;
   inRequest: boolean;
+  /** Lista de ids de una N:M: `dt` es el tipo de cada elemento. */
+  esLista?: boolean;
+}
+
+function tipoCampo(c: Campo): string {
+  return c.esLista ? `List<${c.dt}>` : nullable(c.dt, c.isNullable);
 }
 
 /** Campos propios más heredados: los DTOs del backend exponen ambos. */
@@ -110,6 +116,10 @@ function campos(entity: EntityIR, entities: EntityIR[]): Campo[] {
   for (const a of entity.associations.filter(x => !x.collection && x.owning)) {
     const target = entities.find(candidate => candidate.className === a.targetClass);
     out.push({ name: `${a.fieldName}Id`, dt: target ? idDT(target) : 'int', isNullable: a.nullable, isId: false, label: label(`${a.fieldName}Id`), inRequest: true });
+  }
+  for (const a of entity.associations.filter(x => x.kind === 'ManyToMany' && x.owning)) {
+    const target = entities.find(candidate => candidate.className === a.targetClass);
+    out.push({ name: `${a.fieldName}Ids`, dt: target ? idDT(target) : 'int', isNullable: false, isId: false, label: `${label(`${a.fieldName}Ids`)} (separados por coma)`, inRequest: true, esLista: true });
   }
   return out;
 }
@@ -411,13 +421,18 @@ class _CampoConVozState extends State<CampoConVoz> {
 // Modelo Dart
 // ---------------------------------------------------------------------------
 
+function listaFromJson(c: Campo): string {
+  const elemento = c.dt === 'int' ? '(e as num).toInt()' : 'e as String';
+  return `(json['${c.name}'] as List? ?? const []).map((e) => ${elemento}).toList()`;
+}
+
 function modelo(entity: EntityIR, entities: EntityIR[]): string {
   const cs = campos(entity, entities);
   const name = entity.className;
 
-  const decls = cs.map(c => `  final ${nullable(c.dt, c.isNullable)} ${c.name};`).join('\n');
+  const decls = cs.map(c => `  final ${tipoCampo(c)} ${c.name};`).join('\n');
   const params = cs.map(c => c.isNullable ? `    this.${c.name},` : `    required this.${c.name},`).join('\n');
-  const fjLines = cs.map(c => `      ${c.name}: ${fromJson(c.name, c.dt, c.isNullable)},`).join('\n');
+  const fjLines = cs.map(c => `      ${c.name}: ${c.esLista ? listaFromJson(c) : fromJson(c.name, c.dt, c.isNullable)},`).join('\n');
   const tjLines = cs.map(c => `      '${c.name}': ${c.name},`).join('\n');
 
   return `class ${name} {
@@ -447,7 +462,7 @@ function servicio(entity: EntityIR, entities: EntityIR[]): string {
   const sn   = snake(name);
   const idt  = idDT(entity);
   const req  = campos(entity, entities).filter(c => c.inRequest);
-  const ps   = req.map(c => `    required ${nullable(c.dt, c.isNullable)} ${c.name},`).join('\n');
+  const ps   = req.map(c => `    required ${tipoCampo(c)} ${c.name},`).join('\n');
   const bd   = req.map(c => `        '${c.name}': ${c.name},`).join('\n');
   // Dart no admite una lista de parámetros con nombre vacía: `crear({})` no compila.
   const crearParams = req.length > 0 ? `{\n${ps}\n  }` : '';
@@ -613,18 +628,24 @@ function formulario(entity: EntityIR, entities: EntityIR[]): string {
   const sn   = snake(name);
   const idt  = idDT(entity);
   const req  = campos(entity, entities).filter(c => c.inRequest);
-  const vozImport = req.some(c => c.dt === 'String') ? "import '../widgets/campo_con_voz.dart';" : '';
+  const vozImport = req.some(c => c.dt === 'String' && !c.esLista) ? "import '../widgets/campo_con_voz.dart';" : '';
 
   const ctrls   = req.map(c => c.dt === 'bool'
     ? `  bool${c.isNullable ? '?' : ''} _c${cap(c.name)} = ${c.isNullable ? 'null' : 'false'};`
     : `  late TextEditingController _c${cap(c.name)};`).join('\n');
-  const initC   = req.map(c => c.dt === 'bool'
+  const initC   = req.map(c => c.esLista
+    ? `    _c${cap(c.name)} = TextEditingController(text: widget.item?.${c.name}.join(', ') ?? '');`
+    : c.dt === 'bool'
     ? `    _c${cap(c.name)} = widget.item?.${c.name}${c.isNullable ? '' : ' ?? false'};`
     : `    _c${cap(c.name)} = TextEditingController(text: widget.item?.${c.name} != null ? '\${widget.item!.${c.name}}' : '');`).join('\n');
   const dispC   = req.filter(c => c.dt !== 'bool').map(c => `    _c${cap(c.name)}.dispose();`).join('\n');
 
   const fields  = req.map(c => {
     const ctrl = `_c${cap(c.name)}`;
+    if (c.esLista) {
+      return `          TextFormField(controller: ${ctrl},
+            decoration: const InputDecoration(labelText: '${c.label}', border: OutlineInputBorder())),\n          const SizedBox(height: 16),`;
+    }
     if (c.dt === 'bool') {
       const value = c.isNullable ? `${ctrl} ?? false` : ctrl;
       return `          SwitchListTile(title: const Text('${c.label}'), value: ${value},
@@ -644,6 +665,10 @@ function formulario(entity: EntityIR, entities: EntityIR[]): string {
 
   const saveArgs = req.map(c => {
     const t = `_c${cap(c.name)}.text.trim()`;
+    if (c.esLista) {
+      const aEntero = c.dt === 'int' ? '.map(int.parse)' : '';
+      return `          ${c.name}: _c${cap(c.name)}.text.split(',').map((v) => v.trim()).where((v) => v.isNotEmpty)${aEntero}.toList(),`;
+    }
     if (c.dt === 'bool') return `          ${c.name}: _c${cap(c.name)},`;
     if (c.dt === 'int')    return c.isNullable ? `          ${c.name}: ${t}.isEmpty ? null : int.tryParse(${t}),`    : `          ${c.name}: int.parse(${t}),`;
     if (c.dt === 'double') return c.isNullable ? `          ${c.name}: ${t}.isEmpty ? null : double.tryParse(${t}),` : `          ${c.name}: double.parse(${t}),`;

@@ -188,3 +188,26 @@ describe('Flutter with inheritance', () => {
     expect(file(files, 'lib/pantallas/empleado_lista.dart')).toContain('item.nombre');
   });
 });
+
+describe('Flutter with many-to-many relations', () => {
+  it('sends the list of target ids from model, service and form', () => {
+    const files = generateFlutter(normalize(tiendaDiagram()));
+    const model = file(files, 'lib/modelos/producto.dart');
+    expect(model).toContain('final List<int> categoriasIds;');
+    expect(model).toContain('required this.categoriasIds,');
+    expect(model).toContain("(json['categoriasIds'] as List? ?? const []).map((e) => (e as num).toInt()).toList()");
+    expect(model).toContain("'categoriasIds': categoriasIds,");
+    expect(file(files, 'lib/servicios/producto_servicio.dart')).toContain('required List<int> categoriasIds,');
+    const form = file(files, 'lib/pantallas/producto_formulario.dart');
+    expect(form).toContain("widget.item?.categoriasIds.join(', ') ?? ''");
+    expect(form).toContain("categoriasIds: _cCategoriasIds.text.split(',').map((v) => v.trim()).where((v) => v.isNotEmpty).map(int.parse).toList(),");
+  });
+
+  it.each(['mongodb', 'cassandra'] as const)('%s lists String ids', (databaseTarget) => {
+    const files = generateFlutter(normalize(tiendaDiagram(), { databaseTarget }));
+    expect(file(files, 'lib/modelos/producto.dart')).toContain('final List<String> categoriasIds;');
+    expect(file(files, 'lib/pantallas/producto_formulario.dart')).toContain(
+      "categoriasIds: _cCategoriasIds.text.split(',').map((v) => v.trim()).where((v) => v.isNotEmpty).toList(),",
+    );
+  });
+});

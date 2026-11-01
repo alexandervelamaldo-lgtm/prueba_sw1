@@ -59,6 +59,11 @@ export interface ToManyIdsView {
   targetClass: string;
   getterName: string;
   setterName: string;
+  /** Tipo del identificador del otro extremo: `String` en MongoDB y Cassandra. */
+  idJavaType: string;
+  targetVar: string;
+  /** Setter de la colección de entidades, la que la lista alimenta en PostgreSQL. */
+  associationSetterName: string;
 }
 
 export interface RepositoryDependency {
@@ -118,9 +123,10 @@ export interface EntityView {
   responseComponents: DtoComponent[];
   toOneAssociations: ToOneView[];
   /**
-   * MongoDB y Cassandra: el lado propietario de cada muchos-a-muchos guarda la
-   * lista de ids del otro extremo, igual que una a-uno guarda el id plano. El
-   * lado inverso no la repite: se deduce consultando al propietario.
+   * El lado propietario de cada muchos-a-muchos transporta la lista de ids del
+   * otro extremo. En MongoDB y Cassandra además la guarda, igual que una a-uno
+   * guarda el id plano; en PostgreSQL el mapeador la traduce a la colección de
+   * entidades. El lado inverso no la repite: se deduce consultando al propietario.
    */
   toManyIdLists: ToManyIdsView[];
   hasToManyIdLists: boolean;
@@ -188,36 +194,44 @@ export function buildEntityView(ir: GenerationIR, entity: EntityIR): EntityView 
     };
   });
 
-  const toManyIdLists: ToManyIdsView[] = usaIdPlano
-    ? entity.associations
-        .filter((a) => a.kind === 'ManyToMany' && a.owning)
-        .map((a) => {
-          const name = `${a.fieldName}Ids`;
-          return {
-            name,
-            targetClass: a.targetClass,
-            getterName: `get${capitalize(name)}`,
-            setterName: `set${capitalize(name)}`,
-          };
-        })
-    : [];
-  const toManyComponents = toManyIdLists.map(
-    (lista): DtoComponent => ({
+  const owningToMany = entity.associations.filter((a) => a.kind === 'ManyToMany' && a.owning);
+  const toManyIdLists = owningToMany.map((a): ToManyIdsView => {
+    const name = `${a.fieldName}Ids`;
+    return {
+      name,
+      targetClass: a.targetClass,
+      getterName: `get${capitalize(name)}`,
+      setterName: `set${capitalize(name)}`,
+      idJavaType: byName.get(a.targetClass)?.identifier?.javaType ?? 'Long',
+      targetVar: a.targetVar,
+      associationSetterName: a.setterName,
+    };
+  });
+  const toManyComponents = owningToMany.map((a, i): DtoComponent => {
+    const lista = toManyIdLists[i] as ToManyIdsView;
+    const idGetter = byName.get(a.targetClass)?.identifier?.getterName ?? 'getId';
+    return {
       name: lista.name,
-      javaType: 'List<String>',
+      javaType: `List<${lista.idJavaType}>`,
       validations: [],
-      accessor: `entity.${lista.getterName}()`,
-    }),
-  );
+      accessor: usaIdPlano
+        ? `entity.${lista.getterName}()`
+        : `entity.${a.getterName}().stream().map(${a.targetClass}::${idGetter}).toList()`,
+    };
+  });
 
   const uniqueFields = fields
     .filter((f) => f.unique)
     .map((f) => ({ ...f, pascalName: f.name.charAt(0).toUpperCase() + f.name.slice(1) }));
 
-  const repositoryDependencies = dedupeByClassName(toOneAssociations, paquetes, ir.project);
+  const repositoryDependencies = dedupeByClassName(
+    [...toOneAssociations, ...(usaIdPlano ? [] : toManyIdLists)],
+    paquetes,
+    ir.project,
+  );
   const dtoImports = [
     ...new Set([
-      ...dtoImportsFor(ir, allFields, associationComponents, paquetes),
+      ...dtoImportsFor(ir, allFields, [...associationComponents, ...toManyComponents], paquetes),
       ...(toManyIdLists.length > 0 ? ['java.util.List'] : []),
     ]),
   ].sort();
@@ -454,7 +468,7 @@ function realizedInterfaces(
 }
 
 function dedupeByClassName(
-  associations: ToOneView[],
+  associations: Pick<ToOneView, 'targetClass' | 'targetVar'>[],
   paquetes: Map<string, string>,
   project: ProjectIR,
 ): RepositoryDependency[] {
@@ -491,7 +505,9 @@ function dtoImportsFor(
     }
   }
   for (const component of associationComponents) {
-    if (component.javaType === 'UUID') imports.add('java.util.UUID');
+    if (component.javaType === 'UUID' || component.javaType === 'List<UUID>') {
+      imports.add('java.util.UUID');
+    }
   }
   return [...imports].sort();
 }

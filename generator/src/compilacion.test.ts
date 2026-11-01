@@ -454,5 +454,22 @@ describe.skipIf(!activa)('el código generado compila y arranca', () => {
         ejecutar(flutter(), ['analyze', '--no-fatal-infos'], dir);
       }, 10 * MINUTOS);
     }
+
+    // Lo que dice el README sobre un ZIP recién descargado. Se compila Linux y
+    // no el APK porque `whisper_flutter_new` exige un NDK concreto, cuya licencia
+    // no se puede dar por aceptada en cualquier máquina.
+    it('sigue el README: crea plataformas, pasa sus tests y compila', async () => {
+      const outcome = generate(mixtoDiagram(), { databaseTarget: 'postgres' });
+      if (!outcome.ok) throw new Error('El corpus debería ser válido');
+      const dir = mkdtempSync(join(tmpdir(), 'flutter-'));
+      directorios.push(dir);
+      await writeToDisk(generateFlutter(outcome.ir), dir);
+      ejecutar(flutter(), ['create', '--platforms=android,linux', '.'], dir);
+      ejecutar(flutter(), ['pub', 'get'], dir);
+      expect(readFileSync(join(dir, 'android/app/src/main/AndroidManifest.xml'), 'utf8')).toContain('RECORD_AUDIO');
+      ejecutar(flutter(), ['analyze', '--no-fatal-infos'], dir);
+      ejecutar(flutter(), ['test'], dir);
+      ejecutar(flutter(), ['build', 'linux', '--release'], dir);
+    }, 10 * MINUTOS);
   });
 });

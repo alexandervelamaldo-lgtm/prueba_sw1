@@ -217,3 +217,40 @@ describe('Flutter with many-to-many relations', () => {
     );
   });
 });
+
+describe('Flutter project handoff', () => {
+  const files = generateFlutter(normalize(tiendaDiagram()));
+
+  it('depends on a record version whose Linux plugin compiles', () => {
+    expect(file(files, 'pubspec.yaml')).toContain('record: ^6.0.0');
+  });
+
+  it('tells the reader to create the platform folders before running', () => {
+    const readme = file(files, 'README.md');
+    expect(readme).toContain('flutter create --platforms=android,linux .');
+    expect(readme.indexOf('flutter create')).toBeLessThan(readme.indexOf('flutter run'));
+    expect(readme).toContain('flutter doctor --android-licenses');
+  });
+
+  it('ships the Android manifest with the permissions the app needs', () => {
+    const manifest = file(files, 'android/app/src/main/AndroidManifest.xml');
+    expect(manifest).toContain('android.permission.INTERNET');
+    expect(manifest).toContain('android.permission.RECORD_AUDIO');
+    expect(manifest).toContain('android:name="${applicationName}"');
+  });
+
+  it('ships its own widget test, so flutter create does not add one for a missing MyApp', () => {
+    const test = file(files, 'test/widget_test.dart');
+    expect(test).toContain("package:tienda_flutter/pantallas/inicio.dart");
+    expect(test).not.toContain('MyApp');
+  });
+
+  it('escapes the project name in Dart and YAML', () => {
+    const diagram = tiendaDiagram();
+    const named = generateFlutter(normalize({ ...diagram, name: "Juan's: $tienda" }));
+    expect(file(named, 'lib/main.dart')).toContain("title: 'Juan\\'s: \\$tienda',");
+    expect(file(named, 'lib/pantallas/inicio.dart')).toContain("Text('Juan\\'s: \\$tienda')");
+    expect(file(named, 'pubspec.yaml')).toContain('description: "Frontend Flutter para Juan\'s: $tienda"');
+    expect(file(named, 'android/app/src/main/AndroidManifest.xml')).not.toContain("Juan's");
+  });
+});

@@ -35,6 +35,11 @@ function javaToDart(javaType: string): DT {
   }
 }
 
+/** Contenido de un literal Dart entre comillas simples. */
+function dartTexto(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\$/g, '\\$');
+}
+
 function nullable(dt: DT, isNullable: boolean): string {
   return isNullable ? `${dt}?` : dt;
 }
@@ -130,10 +135,13 @@ function campos(entity: EntityIR, entities: EntityIR[]): Campo[] {
 // pubspec.yaml
 // ---------------------------------------------------------------------------
 
+function nombrePaquete(ir: GenerationIR): string {
+  return `${snake(ir.project.artifactId.replace(/-/g, '_') || 'app')}_flutter`;
+}
+
 function pubspec(ir: GenerationIR): string {
-  const name = snake(ir.project.artifactId.replace(/-/g, '_') || 'app');
-  return `name: ${name}_flutter
-description: Frontend Flutter para ${ir.project.name}
+  return `name: ${nombrePaquete(ir)}
+description: ${JSON.stringify(`Frontend Flutter para ${ir.project.name}`)}
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -146,7 +154,8 @@ dependencies:
   http: ^1.2.1
   cupertino_icons: ^1.0.8
   path_provider: ^2.1.4
-  record: ^5.1.1
+  # 5.x resuelve un record_linux que no implementa su propia interfaz y no compila.
+  record: ^6.0.0
   # Bug 3 fix: version ^1.0.1 (^0.0.11 no existe en pub.dev).
   # API nueva: Whisper(model: WhisperModel.base, modelDir: '...')
   whisper_flutter_new: ^1.0.1
@@ -193,10 +202,85 @@ son instantáneos (el fichero ya existe).
 Los campos de texto tienen un botón 🎤: toca → graba (rojo) → toca → transcribe (~1-3 s) → rellena el campo.
 
 ## Arrancar
+El ZIP trae el código de la app, no las carpetas de cada plataforma: las crea
+\`flutter create\`, que respeta el manifiesto de Android y el test ya incluidos.
+
 \`\`\`
+flutter create --platforms=android,linux .
 flutter pub get
 flutter run
 \`\`\`
+
+Para compilar en Android, el plugin de dictado exige el NDK 27.0.11902837. Gradle
+lo instala solo la primera vez si aceptaste las licencias del SDK:
+
+\`\`\`
+flutter doctor --android-licenses
+flutter build apk
+\`\`\`
+
+El dictado solo funciona en Android, iOS y macOS; en Linux la app compila y
+arranca, pero sin voz. La web no está soportada: el plugin de dictado usa \`dart:ffi\`.
+`;
+}
+
+// ---------------------------------------------------------------------------
+// Ficheros que \`flutter create\` respeta porque ya existen
+// ---------------------------------------------------------------------------
+
+/** La plantilla de Flutter más los permisos: sin ellos no hay red en release ni micrófono. */
+function manifiestoAndroid(ir: GenerationIR): string {
+  return `<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <application
+        android:label="${nombrePaquete(ir)}"
+        android:name="\${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>
+`;
+}
+
+/** Sin este fichero, \`flutter create\` añade uno que busca un \`MyApp\` que no existe. */
+function testInicio(ir: GenerationIR): string {
+  return `import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:${nombrePaquete(ir)}/pantallas/inicio.dart';
+
+void main() {
+  testWidgets('la pantalla de inicio se muestra', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: InicioPantalla()));
+    expect(find.byType(InicioPantalla), findsOneWidget);
+  });
+}
 `;
 }
 
@@ -759,7 +843,7 @@ class InicioPantalla extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('${ir.project.name}')),
+      appBar: AppBar(title: const Text('${dartTexto(ir.project.name)}')),
       body: ListView(padding: const EdgeInsets.all(16), children: [
 ${cards}
       ]),
@@ -801,7 +885,7 @@ class App extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '${ir.project.name}',
+      title: '${dartTexto(ir.project.name)}',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue), useMaterial3: true),
       home: const _Shell(),
@@ -864,6 +948,8 @@ export function generateFlutter(ir: GenerationIR): GeneratedFile[] {
 
   files.push({ path: 'pubspec.yaml',                   content: pubspec(ir) });
   files.push({ path: 'README.md',                      content: readme(ir) });
+  files.push({ path: 'android/app/src/main/AndroidManifest.xml', content: manifiestoAndroid(ir) });
+  files.push({ path: 'test/widget_test.dart',          content: testInicio(ir) });
   // Carpeta de assets para el modelo Whisper. El fichero real (55 MB) lo
   // pone el desarrollador a mano; el .gitkeep garantiza que la ruta exista
   // en el ZIP y Flutter no falle al leer el directorio declarado en pubspec.

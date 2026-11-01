@@ -3,7 +3,6 @@ import type { Acoplado } from './paneles';
 import {
   accionEntradaModoIA,
   botonTemaModoIA,
-  debeIgnorarAtajoEnCampo,
   debeMostrarOrbe,
   debeRetenerBienvenida,
   debeSalirConEscape,
@@ -13,6 +12,8 @@ import {
   panelVisibleEnModoIA,
   siguientePasoOrbe,
   paddingDeEncuadre,
+  conexionConProblema,
+  veloVisible,
 } from './modo-ia-vista';
 
 describe('modo-ia-vista: visibilidad de paneles', () => {
@@ -85,26 +86,6 @@ describe('modo-ia-vista: salida con tecla Escape', () => {
   it('otra tecla no sale del modo', () => {
     expect(debeSalirConEscape({ key: 'Enter' }, false, true)).toBe(false);
     expect(debeSalirConEscape({ key: 'a' }, false, true)).toBe(false);
-  });
-});
-
-describe('modo-ia-vista: atajos en campos de texto (regla 2)', () => {
-  it('fuera de un campo de texto no se ignora ningún atajo', () => {
-    expect(debeIgnorarAtajoEnCampo(false, 'Escape', false)).toBe(false);
-    expect(debeIgnorarAtajoEnCampo(false, 'Escape', true)).toBe(false);
-    expect(debeIgnorarAtajoEnCampo(false, 'z', true)).toBe(false);
-  });
-
-  it('fuera del Modo IA se ignoran todos los atajos en campos de texto, incluido Escape', () => {
-    expect(debeIgnorarAtajoEnCampo(true, 'Escape', false)).toBe(true);
-    expect(debeIgnorarAtajoEnCampo(true, 'z', false)).toBe(true);
-    expect(debeIgnorarAtajoEnCampo(true, 'a', false)).toBe(true);
-  });
-
-  it('en Modo IA, Escape no se ignora en campos de texto pero otras teclas sí', () => {
-    expect(debeIgnorarAtajoEnCampo(true, 'Escape', true)).toBe(false);
-    expect(debeIgnorarAtajoEnCampo(true, 'z', true)).toBe(true);
-    expect(debeIgnorarAtajoEnCampo(true, 'Delete', true)).toBe(true);
   });
 });
 
@@ -204,5 +185,33 @@ describe('paddingDeEncuadre', () => {
       right: 0.18,
       bottom: '50%',
     });
+  });
+});
+
+describe('conexionConProblema', () => {
+  it('no avisa con la conexión al día', () => {
+    expect(conexionConProblema('conectado', true)).toBe(false);
+  });
+
+  it('avisa mientras hay cambios sin sincronizar', () => {
+    expect(conexionConProblema('conectado', false)).toBe(true);
+  });
+
+  it('avisa en cualquier otro estado de la conexión', () => {
+    for (const estado of ['conectando', 'desconectado', 'sin-permiso'] as const) {
+      expect(conexionConProblema(estado, true)).toBe(true);
+    }
+  });
+});
+
+describe('veloVisible', () => {
+  it('se ve con la bienvenida, con el globo o con los dos', () => {
+    expect(veloVisible(true, false)).toBe(true);
+    expect(veloVisible(false, true)).toBe(true);
+    expect(veloVisible(true, true)).toBe(true);
+  });
+
+  it('no se ve sin ninguno de los dos', () => {
+    expect(veloVisible(false, false)).toBe(false);
   });
 });

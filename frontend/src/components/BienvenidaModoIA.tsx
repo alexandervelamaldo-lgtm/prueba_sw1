@@ -24,16 +24,8 @@ const ESCALA_MAXIMA = 1;
 const TIEMPO_REUNION_MS = 2100;
 const FONT_STACK = "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif";
 
-const LIGHT: Palette = {
-  ink: [15, 23, 42],
-  page: [248, 250, 252],
-  blobs: [
-    { rgb: [176, 196, 214], a: 0.55, fx: 0.04, fy: 0.08, fw: 0.62, fh: 0.78 },
-    { rgb: [255, 255, 255], a: 0.85, fx: 0.44, fy: 0.22, fw: 0.54, fh: 0.7 },
-    { rgb: [226, 208, 196], a: 0.42, fx: 0.3, fy: 0.44, fw: 0.44, fh: 0.56 },
-  ],
-};
-
+// Siempre sobre el velo oscuro, también en el tema claro: el texto es claro en
+// los dos, y cambiar de tema no vuelve a armar las partículas.
 const DARK: Palette = {
   ink: [248, 250, 252],
   page: [2, 6, 23],
@@ -394,15 +386,12 @@ function iniciarLienzoParticulas(
   };
 }
 
-function leerEsClaro(): boolean {
-  if (typeof document === 'undefined') return false;
-  return document.documentElement.getAttribute('data-tema') === 'claro';
-}
-
 export interface BienvenidaModoIAProps {
   totalClases: number;
   texto?: string;
   oculta?: boolean;
+  /** Avisa de que empieza a irse: el velo que hay detrás se va con ella. */
+  onDesvanecer?: () => void;
   onTerminado?: () => void;
 }
 
@@ -410,26 +399,15 @@ export function BienvenidaModoIA({
   totalClases,
   texto = '¿Qué diseñamos hoy?',
   oculta = false,
+  onDesvanecer,
   onTerminado,
 }: BienvenidaModoIAProps): JSX.Element {
   const reducido = prefiereMenosMovimiento();
-  const [esClaro, setEsClaro] = useState(leerEsClaro);
-  const pal = esClaro ? LIGHT : DARK;
+  const pal = DARK;
 
   const [reunido, setReunido] = useState(reducido);
   const [desvaneciendo, setDesvaneciendo] = useState(false);
   const lienzoRef = useRef<HTMLCanvasElement | null>(null);
-
-  useEffect(() => {
-    const actualizar = () => setEsClaro(leerEsClaro());
-    actualizar();
-    const mo = new MutationObserver(actualizar);
-    mo.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['data-tema'],
-    });
-    return () => mo.disconnect();
-  }, []);
 
   useEffect(() => {
     const cv = lienzoRef.current;
@@ -478,12 +456,15 @@ export function BienvenidaModoIA({
 
     const temporizadorEspera = window.setTimeout(() => {
       setDesvaneciendo(true);
+      onDesvanecerRef.current?.();
     }, 1200);
 
     return () => window.clearTimeout(temporizadorEspera);
   }, [reunido, totalClases]);
 
   const onTerminadoRef = useRef(onTerminado);
+  const onDesvanecerRef = useRef(onDesvanecer);
+  onDesvanecerRef.current = onDesvanecer;
   useEffect(() => {
     onTerminadoRef.current = onTerminado;
   }, [onTerminado]);

@@ -297,6 +297,8 @@
   --ia-acento: #bd6eff;
   --ia-acento-2: #d49bfd;
   --ia-sobre-acento: #060411;
+  --ia-velo: color-mix(in srgb, #060411 50%, transparent);
+  --ia-sobre-velo: #e6e6f0;
 
   color-scheme: dark;
 }
@@ -376,6 +378,8 @@
   --ia-acento: #7022ba;
   --ia-acento-2: #581c87;
   --ia-sobre-acento: #ffffff;
+  --ia-velo: color-mix(in srgb, #060411 62%, transparent);
+  --ia-sobre-velo: #e6e6f0;
 }
 
 * {
@@ -7162,6 +7166,33 @@ select:focus {
   transition: opacity 0.7s ease;
 }
 
+/*
+  Desenfoca y oscurece el proyecto mientras se ven la bienvenida o el globo, para
+  que se lean sobre cualquier diagrama. Abarca también lo que tapa la barra
+  flotante: si acabara donde acaba el título, se vería un corte recto en mitad
+  del lienzo. Oculto con `visibility`, para no calcular el desenfoque sin verlo.
+*/
+.velo-ia {
+  position: absolute;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  background: var(--ia-velo);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.5s ease, visibility 0s linear 0.5s;
+}
+
+.velo-ia--visible {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.4s ease, visibility 0s;
+}
+
 .bienvenida-ia--oculta {
   opacity: 0;
   pointer-events: none;
@@ -7270,7 +7301,7 @@ select:focus {
   margin-top: 8px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--texto-2);
+  color: var(--ia-sobre-velo);
   display: inline-flex;
   align-items: center;
   pointer-events: none;

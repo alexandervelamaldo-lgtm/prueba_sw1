@@ -24,11 +24,13 @@ import { AvatarIA, type EstadoAvatarIA } from './AvatarIA';
 import { EfectoLuminaIA, type ManejadorEfectoLumina } from './EfectoLuminaIA';
 import { BienvenidaModoIA } from './BienvenidaModoIA';
 import { OrbeIA } from './OrbeIA';
+import { IndicadorSync } from './IndicadorSync';
 import { prefiereMenosMovimiento } from './cursor-ia';
 import {
   filtrarPanelesParaModoIA,
+  conexionConProblema,
+  veloVisible,
   debeSalirConEscape,
-  debeIgnorarAtajoEnCampo,
   accionEntradaModoIA,
   etiquetaAvatarIA,
   debeMostrarOrbe,
@@ -174,6 +176,8 @@ export function EditorDiagrama({
   }, []);
 
   const orbeActivo = debeMostrarOrbe(modoIAInmersivo, estadoIA);
+  const [bienvenidaSaliendo, setBienvenidaSaliendo] = useState(false);
+  const alDesvanecerBienvenida = useCallback(() => setBienvenidaSaliendo(true), []);
   const [orbeMontado, setOrbeMontado] = useState(false);
 
   useEffect(() => {
@@ -195,6 +199,7 @@ export function EditorDiagrama({
   }, [panelIAAbierto]);
 
   useEffect(() => {
+    setBienvenidaSaliendo(false);
     if (!modoIAInmersivo) {
       setBienvenidaMontada(false);
       return;
@@ -386,17 +391,19 @@ export function EditorDiagrama({
     [aplicar, avisar, tipoRelacion, claseAsociacionActiva, estado.diagrama.classes],
   );
 
-  const hayModalAbierto = Boolean(
-    importando ||
-    importandoXmi ||
-    generando ||
-    modulos ||
-    comunicacion ||
-    comunicacionImportada ||
-    revisando ||
-    (typeof document !== 'undefined' &&
-      document.querySelector('dialog[open], [role="dialog"], .modal, .modal__caja'))
-  );
+  // `Esc` en el Modo IA, antes de que nadie más atienda la tecla: en la fase de
+  // burbuja un diálogo ya se habría cerrado con ella, y se saldría también del modo.
+  useEffect(() => {
+    if (!modoIAInmersivo) return;
+    const alPulsar = (evento: KeyboardEvent): void => {
+      const hayModalAbierto = Boolean(
+        document.querySelector('dialog[open], [role="dialog"], .modal, .modal__caja'),
+      );
+      if (debeSalirConEscape(evento, hayModalAbierto, true)) salirModoIA();
+    };
+    window.addEventListener('keydown', alPulsar, true);
+    return () => window.removeEventListener('keydown', alPulsar, true);
+  }, [modoIAInmersivo, salirModoIA]);
 
   // Atajos. Se ignoran mientras se escribe en un campo: si no, teclear el nombre
   // de una clase con una «s» dispararía el atajo en vez de escribir la letra.
@@ -405,7 +412,8 @@ export function EditorDiagrama({
       const destino = evento.target as HTMLElement | null;
       const esCampo = Boolean(destino && /^(INPUT|TEXTAREA|SELECT)$/.test(destino.tagName));
 
-      if (debeIgnorarAtajoEnCampo(esCampo, evento.key, modoIAInmersivo)) return;
+      if (modoIAInmersivo && evento.key === 'Escape') return;
+      if (esCampo) return;
 
       if ((evento.ctrlKey || evento.metaKey) && evento.key.toLowerCase() === 'z') {
         evento.preventDefault();
@@ -414,10 +422,6 @@ export function EditorDiagrama({
         return;
       }
       if (evento.key === 'Escape') {
-        if (modoIAInmersivo && debeSalirConEscape(evento, hayModalAbierto, modoIAInmersivo)) {
-          salirModoIA();
-          return;
-        }
         setHerramienta('seleccion');
         setClaseAsociacionActiva(false);
         setSeleccion(null);
@@ -430,7 +434,7 @@ export function EditorDiagrama({
 
     window.addEventListener('keydown', alPulsar);
     return () => window.removeEventListener('keydown', alPulsar);
-  }, [estado, seleccion, soloLectura, aplicar, modoIAInmersivo, hayModalAbierto, salirModoIA]);
+  }, [estado, seleccion, soloLectura, aplicar, modoIAInmersivo]);
 
   /*
     Aquí estaba `descargar`, que bajaba el ZIP en cuanto se pulsaba la orden del
@@ -804,6 +808,14 @@ export function EditorDiagrama({
 
         {modoIAInmersivo && (
           <div className="barra__acciones-ia">
+            {conexionConProblema(estado.conexion, estado.sincronizado) && (
+              <IndicadorSync
+                estado={estado.conexion}
+                detalle={estado.detalleConexion}
+                sincronizado={estado.sincronizado}
+                participantes={[]}
+              />
+            )}
             <button
               type="button"
               className="barra__boton barra__boton--tema-ia"
@@ -1036,10 +1048,22 @@ export function EditorDiagrama({
           aBorrar={aBorrar}
         />
 
+        {modoIAInmersivo && (
+          <div
+            className={`velo-ia${
+              veloVisible(bienvenidaMontada && !bienvenidaSaliendo, orbeActivo)
+                ? ' velo-ia--visible'
+                : ''
+            }`}
+            aria-hidden="true"
+          />
+        )}
+
         {modoIAInmersivo && bienvenidaMontada && (
           <BienvenidaModoIA
             totalClases={Object.keys(estado.diagrama.classes).length}
             oculta={orbeMontado}
+            onDesvanecer={alDesvanecerBienvenida}
             onTerminado={alTerminarBienvenida}
           />
         )}
@@ -1047,7 +1071,6 @@ export function EditorDiagrama({
         {modoIAInmersivo && orbeMontado && (
           <OrbeIA
             activo={orbeActivo}
-            tema={tema}
             onTerminado={alTerminarOrbe}
           />
         )}

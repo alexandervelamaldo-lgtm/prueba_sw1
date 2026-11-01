@@ -86,8 +86,9 @@ function cubicBezier(p1x: number, p1y: number, p2x: number, p2y: number): (t: nu
 const easeOut = cubicBezier(0.22, 1, 0.36, 1);
 
 const A_STEPS = 48;
-function crearColores(tema: 'claro' | 'oscuro'): string[] {
-  const [r, g, b] = tema === 'claro' ? [31, 16, 60] : [235, 235, 245];
+// Puntos siempre claros: el globo va sobre el velo oscuro también en el tema claro.
+function crearColores(): string[] {
+  const [r, g, b] = [235, 235, 245];
   const out: string[] = [];
   for (let ai = 0; ai <= A_STEPS; ai++) {
     out.push(`rgba(${r},${g},${b},${(ai / A_STEPS).toFixed(3)})`);
@@ -95,12 +96,10 @@ function crearColores(tema: 'claro' | 'oscuro'): string[] {
   return out;
 }
 
-const COLORES_OSCURO = crearColores('oscuro');
-const COLORES_CLARO = crearColores('claro');
+const COLORES = crearColores();
 
 export interface OrbeIAProps {
   activo: boolean;
-  tema: 'claro' | 'oscuro';
   onTerminado?: () => void;
 }
 
@@ -110,7 +109,7 @@ export interface OrbeIAProps {
  * Muestra una esfera tridimensional de partículas con rotación y pulsos
  * de luz coordinados con las fases de razonamiento de la IA.
  */
-export function OrbeIA({ activo, tema, onTerminado }: OrbeIAProps): JSX.Element {
+export function OrbeIA({ activo, onTerminado }: OrbeIAProps): JSX.Element {
   const lienzoRef = useRef<HTMLCanvasElement | null>(null);
   const onTerminadoRef = useRef(onTerminado);
   useEffect(() => {
@@ -293,13 +292,12 @@ export function OrbeIA({ activo, tema, onTerminado }: OrbeIAProps): JSX.Element 
         SC[n] = ai <= 0 ? -1 : Math.min(A_STEPS, ai);
       }
 
-      const colores = tema === 'claro' ? COLORES_CLARO : COLORES_OSCURO;
       for (let pass = 0; pass < 2; pass++) {
         for (let n = 0; n < N; n++) {
           const c = SC[n] ?? -1;
           if (c < 0) continue;
           if (((SD[n] ?? 0) >= 0.5) !== (pass === 1)) continue;
-          ctx.fillStyle = colores[c] ?? '';
+          ctx.fillStyle = COLORES[c] ?? '';
           ctx.beginPath();
           ctx.arc(SX[n] ?? 0, SY[n] ?? 0, Math.max(0.2, SR[n] ?? 0.5), 0, TAU);
           ctx.fill();
@@ -371,7 +369,7 @@ export function OrbeIA({ activo, tema, onTerminado }: OrbeIAProps): JSX.Element 
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
     };
-  }, [reducido, tema]);
+  }, [reducido]);
 
   // Manejo de salida en modo reducido
   useEffect(() => {

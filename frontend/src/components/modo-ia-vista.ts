@@ -1,3 +1,4 @@
+import type { EstadoConexion } from '@app/shared';
 import type { FitViewOptions } from '@xyflow/react';
 import type { Acoplado } from './paneles';
 import type { EstadoAvatarIA } from './AvatarIA';
@@ -59,24 +60,6 @@ export function debeSalirConEscape(
   if (evento.key !== 'Escape') return false;
   if (!enModoIA) return false;
   return !hayModalAbierto;
-}
-
-/**
- * Decide si un atajo de teclado debe ignorarse cuando el foco está en un campo
- * de entrada (`input`, `textarea`, `select`).
- *
- * Fuera del Modo IA, todos los atajos se ignoran mientras se escribe en un campo.
- * En Modo IA, la tecla Escape NO se ignora (permite abandonar el modo desde el chat),
- * pero las demás teclas siguen ignorándose para poder escribir normalmente.
- */
-export function debeIgnorarAtajoEnCampo(
-  esCampo: boolean,
-  tecla: string,
-  enModoIA: boolean,
-): boolean {
-  if (!esCampo) return false;
-  if (enModoIA && tecla === 'Escape') return false;
-  return true;
 }
 
 /**
@@ -206,4 +189,24 @@ export function siguientePasoOrbe(pasoActual: number): {
 export function paddingDeEncuadre(padding: number, enModoIA: boolean): FitViewOptions['padding'] {
   if (!enModoIA) return padding;
   return { top: padding, left: padding, right: padding, bottom: '50%' };
+}
+
+/**
+ * Si hay que avisar del estado de la conexión en el Modo IA.
+ *
+ * El modo oculta la barra de estado: sin este aviso, quien sigue trabajando con
+ * la conexión caída creería que sus cambios ya están en el servidor.
+ */
+export function conexionConProblema(estado: EstadoConexion, sincronizado: boolean): boolean {
+  return estado !== 'conectado' || !sincronizado;
+}
+
+/**
+ * Si el proyecto se desenfoca: con la bienvenida y mientras se ve el globo.
+ *
+ * Un solo velo para los dos: si cada uno llevara el suyo, al pasar de uno a otro
+ * el fondo se oscurecería el doble durante el cruce.
+ */
+export function veloVisible(bienvenida: boolean, orbe: boolean): boolean {
+  return bienvenida || orbe;
 }

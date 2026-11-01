@@ -7,7 +7,7 @@ import {
   createMethod,
   createRelation,
 } from '@app/shared';
-import { CORPUS, minimoDiagram, rrhhDiagram, tiendaDiagram } from './fixtures/corpus.js';
+import { CORPUS, minimoDiagram, mixtoDiagram, rrhhDiagram, tiendaDiagram } from './fixtures/corpus.js';
 import { normalize } from './ir/normalize.js';
 import { buildEntityView, generateProject } from './render/generate.js';
 import { validateDiagram } from '@app/shared';
@@ -1708,5 +1708,59 @@ describe('N:M en PostgreSQL', () => {
 
   it('el lado inverso no repite la lista', () => {
     expect(fileNamed(files, 'dto/CategoriaRequest.java').content).not.toContain('Ids');
+  });
+});
+
+describe('asociaciones heredadas', () => {
+  const files = generateProject(normalize(mixtoDiagram()));
+
+  it('el DTO de la subclase las transporta y el mapeador las resuelve', () => {
+    expect(fileNamed(files, 'dto/ClienteRequest.java').content).toContain('Long direccionId');
+    expect(fileNamed(files, 'dto/ClienteResponse.java').content).toContain('Long direccionId');
+    expect(fileNamed(files, 'dto/mapper/ClienteMapper.java').content).toContain('entity.setDireccion(');
+  });
+
+  it('una clase abstracta referenciada tiene repositorio; sin referencias, no', () => {
+    expect(fileNamed(files, 'repository/PersonaRepository.java').content).toContain('PersonaRepository');
+    expect(fileNamed(files, 'dto/mapper/ArticuloMapper.java').content).toContain('personaRepository.findById');
+    const rrhh = generateProject(normalize(rrhhDiagram()));
+    expect(rrhh.some((f) => f.path.endsWith('repository/PersonaRepository.java'))).toBe(false);
+  });
+
+  it('una asociación propia con el mismo nombre gana a la heredada', () => {
+    const ir = normalize(mixtoDiagram());
+    const cliente = ir.entities.find((e) => e.className === 'Cliente')!;
+    const heredada = ir.entities.find((e) => e.className === 'Persona')!.associations[0]!;
+    const vista = buildEntityView(ir, { ...cliente, associations: [...cliente.associations, heredada] });
+    expect(vista.requestComponents.filter((c) => c.name === 'direccionId')).toHaveLength(1);
+  });
+
+  it.each(['mongodb', 'cassandra'] as const)('%s guarda el id plano en la subclase', (databaseTarget) => {
+    const nosql = generateProject(normalize(mixtoDiagram(), { databaseTarget }));
+    expect(fileNamed(nosql, 'domain/Cliente.java').content).toContain('private String direccionId;');
+  });
+});
+
+describe('colección Postman con destinos abstractos', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const carpeta = (nombre: string): any =>
+    JSON.parse(fileNamed(generateProject(normalize(mixtoDiagram())), 'postman_collection.json').content).item.find(
+      (f: { name: string }) => f.name === nombre,
+    );
+
+  it('una referencia a una clase abstracta usa el id de una subclase concreta', () => {
+    expect(carpeta('Articulo').item[1].request.body.raw).toContain('"personaId": {{clienteId}}');
+  });
+
+  it('una N:M reflexiva empieza vacía: el registro aún no existe', () => {
+    expect(carpeta('Articulo').item[1].request.body.raw).toMatch(/"targetsIds": \[\]/);
+  });
+
+  it('la subclase concreta se crea antes que quien la referencia', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const orden = JSON.parse(
+      fileNamed(generateProject(normalize(mixtoDiagram())), 'postman_collection.json').content,
+    ).item.map((f: { name: string }) => f.name);
+    expect(orden.indexOf('Cliente')).toBeLessThan(orden.indexOf('Articulo'));
   });
 });

@@ -4,7 +4,7 @@ import {
   createClass,
   createDiagram,
 } from '@app/shared';
-import { rrhhDiagram, tiendaDiagram } from './fixtures/corpus.js';
+import { mixtoDiagram, rrhhDiagram, tiendaDiagram } from './fixtures/corpus.js';
 import { generateFlutter } from './flutter/generate-flutter.js';
 import { normalize } from './ir/normalize.js';
 import type { DatabaseTarget } from './ir/types.js';
@@ -182,6 +182,12 @@ describe('Flutter with inheritance', () => {
     expect(model).toContain("'nombre': nombre,");
     expect(file(files, 'lib/servicios/empleado_servicio.dart')).toContain('required String nombre,');
     expect(file(files, 'lib/pantallas/empleado_formulario.dart')).toContain('nombre: _cNombre.text.trim(),');
+  });
+
+  it('sends inherited to-one associations', () => {
+    const mixto = generateFlutter(normalize(mixtoDiagram()));
+    expect(file(mixto, 'lib/modelos/cliente.dart')).toContain('final int direccionId;');
+    expect(file(mixto, 'lib/servicios/cliente_servicio.dart')).toContain('required int direccionId,');
   });
 
   it('titles the list with an inherited text field rather than the identifier', () => {

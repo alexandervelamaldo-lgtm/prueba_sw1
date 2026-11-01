@@ -111,7 +111,7 @@ function buildEntidad(
 
   const campos: CampoManifiesto[] = [
     ...propios.map((field) => buildCampo(field, enumValues)),
-    ...owningToOne(entity).map((assoc) => buildCampoReferencia(assoc, byName)),
+    ...owningToOne(entity, byName).map((assoc) => buildCampoReferencia(assoc, byName)),
   ];
 
   const identificador = entity.identifier;
@@ -235,8 +235,21 @@ function maxLongitud(field: FieldIR): number | undefined {
   return declarada ? Number(declarada) : undefined;
 }
 
-function owningToOne(entity: EntityIR): AssociationIR[] {
-  return entity.associations.filter((a) => !a.collection && a.owning);
+/** Igual que los campos: heredadas primero, y una propia oculta a la heredada. */
+function owningToOne(entity: EntityIR, byName: Map<string, EntityIR>): AssociationIR[] {
+  const heredadas: AssociationIR[] = [];
+  const nombres = new Set(entity.associations.map((a) => a.fieldName));
+  const visitados = new Set<string>([entity.className]);
+  let actual = entity.superclass ? byName.get(entity.superclass) : undefined;
+
+  while (actual && !visitados.has(actual.className)) {
+    visitados.add(actual.className);
+    const nuevas = actual.associations.filter((a) => !nombres.has(a.fieldName));
+    for (const a of nuevas) nombres.add(a.fieldName);
+    heredadas.unshift(...nuevas);
+    actual = actual.superclass ? byName.get(actual.superclass) : undefined;
+  }
+  return [...heredadas, ...entity.associations].filter((a) => !a.collection && a.owning);
 }
 
 /**

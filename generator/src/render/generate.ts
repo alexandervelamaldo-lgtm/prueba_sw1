@@ -151,7 +151,8 @@ export function buildEntityView(ir: GenerationIR, entity: EntityIR): EntityView 
 
   // Solo el lado propietario: es el que lleva la clave ajena. Fijar el extremo
   // inverso desde el DTO no escribiría nada en la base de datos.
-  const owningToOne = entity.associations.filter((a) => !a.collection && a.owning);
+  const asociaciones = [...inheritedAssociations(entity, byName), ...entity.associations];
+  const owningToOne = asociaciones.filter((a) => !a.collection && a.owning);
   const toOneAssociations = owningToOne.map((a) =>
     toOneView(a, byName.get(a.targetClass)?.identifier?.javaType ?? 'Long'),
   );
@@ -194,7 +195,7 @@ export function buildEntityView(ir: GenerationIR, entity: EntityIR): EntityView 
     };
   });
 
-  const owningToMany = entity.associations.filter((a) => a.kind === 'ManyToMany' && a.owning);
+  const owningToMany = asociaciones.filter((a) => a.kind === 'ManyToMany' && a.owning);
   const toManyIdLists = owningToMany.map((a): ToManyIdsView => {
     const name = `${a.fieldName}Ids`;
     return {
@@ -412,6 +413,31 @@ function toOneView(association: AssociationIR, targetIdJavaType: string): ToOneV
  * DTO sí debe transportarlos: un cliente de la API no sabe ni le importa que
  * `nombre` esté declarado en la clase padre.
  */
+/**
+ * Asociaciones que la entidad hereda por la cadena de superclases, por el mismo
+ * motivo que los campos: sin ellas, una asociación obligatoria de la clase padre
+ * no se puede rellenar al crear la subclase y la base de datos rechaza la fila.
+ * Una propia con el mismo nombre oculta a la heredada.
+ */
+export function inheritedAssociations(
+  entity: EntityIR,
+  byName: Map<string, EntityIR>,
+): AssociationIR[] {
+  const result: AssociationIR[] = [];
+  const visited = new Set<string>([entity.className]);
+  const nombres = new Set(entity.associations.map((a) => a.fieldName));
+
+  let current = entity.superclass ? byName.get(entity.superclass) : undefined;
+  while (current && !visited.has(current.className)) {
+    visited.add(current.className);
+    const nuevas = current.associations.filter((a) => !nombres.has(a.fieldName));
+    for (const a of nuevas) nombres.add(a.fieldName);
+    result.unshift(...nuevas);
+    current = current.superclass ? byName.get(current.superclass) : undefined;
+  }
+  return result;
+}
+
 export function inheritedFields(entity: EntityIR, byName: Map<string, EntityIR>): FieldIR[] {
   const result: FieldIR[] = [];
   const visited = new Set<string>([entity.className]);
@@ -750,15 +776,22 @@ function generatePostgresProject(ir: GenerationIR): GeneratedFile[] {
     });
 
     // Una entidad abstracta no se instancia: no tiene sentido darle un CRUD.
-    // Sus subclases exponen el suyo y arrastran los campos heredados.
+    // Sus subclases exponen el suyo y arrastran los campos heredados. El
+    // repositorio sí hace falta si alguien la referencia: el mapeador resuelve
+    // ahí el id, sea cual sea la subclase concreta de ese registro.
+    const referenciada = ir.entities.some((e) =>
+      e.associations.some((a) => a.owning && a.targetClass === name),
+    );
+    if (!entity.isAbstract || referenciada) {
+      files.push({
+        path: `${raiz}/repository/${name}Repository.java`,
+        content: render('repository.java.hbs', view),
+      });
+    }
     if (entity.isAbstract) continue;
 
     entityViews.push(view);
 
-    files.push({
-      path: `${raiz}/repository/${name}Repository.java`,
-      content: render('repository.java.hbs', view),
-    });
     files.push({
       path: `${raiz}/dto/${name}Request.java`,
       content: render('dto-request.java.hbs', view),

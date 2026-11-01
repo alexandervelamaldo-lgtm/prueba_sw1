@@ -64,7 +64,7 @@ export function buildPostmanCollection(ir: GenerationIR, entityViews: EntityView
     ir.enums.filter((e) => e.values.length > 0).map((e) => [e.className, e.values[0] as string]),
   );
   const porClase = new Map(ir.entities.map((e) => [e.className, e]));
-  const ordenadas = ordenarPorDependencia(entityViews);
+  const ordenadas = ordenarPorDependencia(entityViews, porClase);
 
   const collection = {
     info: {
@@ -106,13 +106,17 @@ export function buildPostmanCollection(ir: GenerationIR, entityViews: EntityView
  * cuenta (se envía `null`, ver `requestBody`), y si hubiera un ciclo las que
  * queden se añaden en su orden original en vez de perderse.
  */
-function ordenarPorDependencia(views: EntityView[]): EntityView[] {
+function ordenarPorDependencia(
+  views: EntityView[],
+  porClase: Map<string, EntityIR>,
+): EntityView[] {
   const clases = new Set(views.map((v) => v.entity.className));
   const dependencias = new Map(
     views.map((v) => [
       v.entity.className,
       new Set(
         [...v.toOneAssociations.map((a) => a.targetClass), ...v.toManyIdLists.map((l) => l.targetClass)]
+          .map((c) => destinoConcreto(c, porClase)?.className ?? c)
           .filter((c) => c !== v.entity.className && clases.has(c)),
       ),
     ]),
@@ -133,6 +137,21 @@ function ordenarPorDependencia(views: EntityView[]): EntityView[] {
     pendientes = pendientes.filter((v) => !colocadas.has(v.entity.className));
   }
   return resultado;
+}
+
+/**
+ * La entidad cuyo id sirve para una referencia a `clase`. Una clase abstracta no
+ * tiene carpeta ni variable en la colección, así que vale su primera subclase
+ * concreta: es un registro de esa clase a todos los efectos.
+ */
+function destinoConcreto(clase: string, porClase: Map<string, EntityIR>): EntityIR | undefined {
+  const entidad = porClase.get(clase);
+  if (!entidad?.isAbstract) return entidad;
+  const desciende = (e: EntityIR): boolean => {
+    const padre = e.superclass ? porClase.get(e.superclass) : undefined;
+    return padre !== undefined && (padre.className === clase || desciende(padre));
+  };
+  return [...porClase.values()].find((e) => !e.isAbstract && desciende(e));
 }
 
 function folderForEntity(
@@ -225,8 +244,8 @@ function requestBody(
     const referencia = aUno.get(component.name);
     const lista = aMuchos.get(component.name);
     if (referencia) {
-      const destino = porClase.get(referencia.targetClass);
-      if (referencia.targetClass === view.entity.className || !destino) {
+      const destino = destinoConcreto(referencia.targetClass, porClase);
+      if (destino?.className === view.entity.className || !destino) {
         body[component.name] = null;
       } else if (referencia.idJavaType === 'Long' || referencia.idJavaType === 'Integer') {
         body[component.name] = `${NUMERO}${variableDe(destino)}`;
@@ -234,8 +253,8 @@ function requestBody(
         body[component.name] = `{{${variableDe(destino)}}}`;
       }
     } else if (lista) {
-      const destino = porClase.get(lista.targetClass);
-      if (lista.targetClass === view.entity.className || !destino) {
+      const destino = destinoConcreto(lista.targetClass, porClase);
+      if (destino?.className === view.entity.className || !destino) {
         // Como una auto-referencia a-uno: el propio registro aún no existe.
         body[component.name] = [];
       } else if (lista.idJavaType === 'Long' || lista.idJavaType === 'Integer') {

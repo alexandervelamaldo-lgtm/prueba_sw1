@@ -10,7 +10,7 @@ import {
   createDiagram,
   createRelation,
 } from '@app/shared';
-import { minimoDiagram, rrhhDiagram, tiendaDiagram } from './fixtures/corpus.js';
+import { minimoDiagram, rrhhDiagram, mixtoDiagram, tiendaDiagram } from './fixtures/corpus.js';
 import { generate, type NormalizeOptions } from './index.js';
 import { generateFlutter } from './flutter/generate-flutter.js';
 import { writeToDisk } from './package/zip.js';
@@ -316,6 +316,7 @@ describe.skipIf(!activa)('el código generado compila y arranca', () => {
         ['rrhh', rrhhDiagram],
         ['minimo', minimoDiagram],
         ['datos', conDatos],
+        ['mixto', mixtoDiagram],
       ] as const) {
         it(`${databaseTarget}: ${nombre}`, async () => {
           const dir = await generarEn(diagrama(), { databaseTarget });
@@ -379,6 +380,7 @@ describe.skipIf(!activa)('el código generado compila y arranca', () => {
       for (const [nombre, diagrama] of [
         ['postman_tienda', tiendaDiagram],
         ['postman_rrhh', rrhhDiagram],
+        ['postman_mixto', mixtoDiagram],
       ] as const) {
         const dir = await generarEn(diagrama(), { databaseTarget: 'postgres' });
         const jar = empaquetar(dir);
@@ -436,9 +438,14 @@ describe.skipIf(!activa)('el código generado compila y arranca', () => {
   });
 
   describe('Flutter pasa el analizador', () => {
-    for (const databaseTarget of ['postgres', 'mongodb'] as const) {
-      it(databaseTarget, async () => {
-        const outcome = generate(tiendaDiagram(), { databaseTarget });
+    for (const [databaseTarget, diagrama] of [
+      ['postgres', tiendaDiagram],
+      ['mongodb', tiendaDiagram],
+      ['postgres', mixtoDiagram],
+      ['cassandra', mixtoDiagram],
+    ] as const) {
+      it(`${databaseTarget}: ${diagrama.name}`, async () => {
+        const outcome = generate(diagrama(), { databaseTarget });
         if (!outcome.ok) throw new Error('El corpus debería ser válido');
         const dir = mkdtempSync(join(tmpdir(), 'flutter-'));
         directorios.push(dir);

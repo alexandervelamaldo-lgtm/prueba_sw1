@@ -1,5 +1,5 @@
 import type { EntityIR, FieldIR, GeneratedFile, GenerationIR } from '../ir/types.js';
-import { inheritedFields } from '../render/generate.js';
+import { inheritedAssociations, inheritedFields } from '../render/generate.js';
 
 /**
  * Generador de frontend Flutter.
@@ -113,11 +113,13 @@ function campos(entity: EntityIR, entities: EntityIR[]): Campo[] {
   for (const f of camposDeEntidad(entity, entities)) {
     out.push({ name: f.name, dt: javaToDart(f.javaType), isNullable: f.nullable, isId: false, label: label(f.name), inRequest: true });
   }
-  for (const a of entity.associations.filter(x => !x.collection && x.owning)) {
+  const byName = new Map(entities.map(e => [e.className, e]));
+  const asociaciones = [...inheritedAssociations(entity, byName), ...entity.associations];
+  for (const a of asociaciones.filter(x => !x.collection && x.owning)) {
     const target = entities.find(candidate => candidate.className === a.targetClass);
     out.push({ name: `${a.fieldName}Id`, dt: target ? idDT(target) : 'int', isNullable: a.nullable, isId: false, label: label(`${a.fieldName}Id`), inRequest: true });
   }
-  for (const a of entity.associations.filter(x => x.kind === 'ManyToMany' && x.owning)) {
+  for (const a of asociaciones.filter(x => x.kind === 'ManyToMany' && x.owning)) {
     const target = entities.find(candidate => candidate.className === a.targetClass);
     out.push({ name: `${a.fieldName}Ids`, dt: target ? idDT(target) : 'int', isNullable: false, isId: false, label: `${label(`${a.fieldName}Ids`)} (separados por coma)`, inRequest: true, esLista: true });
   }

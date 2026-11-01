@@ -1378,6 +1378,42 @@ describe('literales de enumeración', () => {
     ]);
   });
 
+  it('avisa de que un literal en minúsculas se genera en mayúsculas', () => {
+    const result = validateDiagram(enumCon(['pendiente', 'PAGADA']));
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([
+      expect.objectContaining({
+        code: 'ENUM_LITERAL_UPPERCASED',
+        elementId: 'E1',
+        message: 'El literal «pendiente» de «Estado» se generará como «PENDIENTE».',
+      }),
+    ]);
+  });
+
+  it('no avisa de un literal que ya está en mayúsculas', () => {
+    expect(validateDiagram(enumCon(['PAGADA'])).warnings).toEqual([]);
+  });
+
+  it('avisa de que una dependencia no genera código', () => {
+    const a = createClass({ id: 'A', name: 'Pedido' });
+    const b = createClass({ id: 'B', name: 'Reporte' });
+    const result = validateDiagram(
+      createDiagram({
+        id: 'D2',
+        name: 'Dependencias',
+        classes: { A: a, B: b },
+        relations: { R1: createRelation({ id: 'R1', kind: 'dependency', sourceId: 'A', targetId: 'B' }) },
+      }),
+    );
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({
+        code: 'DEPENDENCY_NOT_GENERATED',
+        elementId: 'R1',
+        message: 'La dependencia de «Pedido» a «Reporte» es solo documental: no genera código.',
+      }),
+    );
+  });
+
   it('sigue aceptando literales distintos', () => {
     const result = validateDiagram(enumCon(['activo', 'inactivo']));
     expect(result.errors).toEqual([]);

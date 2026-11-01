@@ -550,6 +550,15 @@ function validateEnums(diagram: ClassDiagram, issues: ValidationIssue[]): void {
         continue;
       }
       vistos.set(generado, literal);
+      if (generado !== literal) {
+        issues.push({
+          severity: 'warning',
+          code: 'ENUM_LITERAL_UPPERCASED',
+          message: `El literal «${literal}» de «${cls.name}» se generará como «${generado}».`,
+          elementId: cls.id,
+          elementName: cls.name,
+        });
+      }
     }
   }
 }
@@ -589,6 +598,16 @@ function validateRelationEndpoints(diagram: ClassDiagram, issues: ValidationIssu
         message:
           `«${source.name}» realiza «${target.name}», que no es una interfaz. ` +
           `Use herencia en su lugar.`,
+        elementId: relation.id,
+        elementName: source.name,
+      });
+    }
+
+    if (relation.kind === 'dependency') {
+      issues.push({
+        severity: 'warning',
+        code: 'DEPENDENCY_NOT_GENERATED',
+        message: `La dependencia de «${source.name}» a «${target.name}» es solo documental: no genera código.`,
         elementId: relation.id,
         elementName: source.name,
       });

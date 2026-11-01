@@ -467,7 +467,8 @@ describe.skipIf(!activa)('el código generado compila y arranca', () => {
       ejecutar(flutter(), ['create', '--platforms=android,linux', '.'], dir);
       ejecutar(flutter(), ['pub', 'get'], dir);
       expect(readFileSync(join(dir, 'android/app/src/main/AndroidManifest.xml'), 'utf8')).toContain('RECORD_AUDIO');
-      ejecutar(flutter(), ['analyze', '--no-fatal-infos'], dir);
+      // Sin `--no-fatal-infos`: `flutter create` añade las reglas de flutter_lints.
+      ejecutar(flutter(), ['analyze'], dir);
       ejecutar(flutter(), ['test'], dir);
       ejecutar(flutter(), ['build', 'linux', '--release'], dir);
     }, 10 * MINUTOS);

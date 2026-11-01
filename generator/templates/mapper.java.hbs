@@ -24,10 +24,13 @@ import {{{this}}};
 /**
  * Traducción entre {{{entity.className}}} y sus DTOs.
  *
- * Las asociaciones a-uno y las listas de una N:M se resuelven contra su
- * repositorio: el DTO transporta identificadores y el mapeador recupera las
- * entidades, fallando con 404 si alguna no existe. Se hace aquí y no en el servicio para que la capa 3 no dependa de los
+ * Las asociaciones a-uno se resuelven contra su repositorio: el DTO transporta
+ * un identificador y el mapeador recupera la entidad, fallando con 404 si no
+ * existe. Se hace aquí y no en el servicio para que la capa 3 no dependa de los
  * repositorios de otras entidades.
+{{#if hasToManyIdLists}}
+ * Las listas de una N:M siguen la misma regla, id por id.
+{{/if}}
  *
  * Generado a partir del diagrama «{{{project.name}}}». No editar a mano.
  */

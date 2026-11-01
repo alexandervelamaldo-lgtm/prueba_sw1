@@ -447,9 +447,11 @@ class _CampoConVozState extends State<CampoConVoz> {
   Future<void> _tap() async {
     if (_e == _E.inactivo) {
       if (!await _g.iniciar()) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Permiso de micrófono denegado.')),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Permiso de micrófono denegado.')),
+          );
+        }
         return;
       }
       if (mounted) setState(() => _e = _E.grabando);
@@ -579,7 +581,7 @@ class ${name}Servicio {
   static Future<${name}> crear(${crearParams}) async {
     final r = await http.post(Uri.parse(_b),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(<String, dynamic>{
+      body: jsonEncode({
 ${bd}
       }),
     );
@@ -590,7 +592,7 @@ ${bd}
   static Future<${name}> actualizar(${idt} id${actualizarParams}) async {
     final r = await http.put(Uri.parse('\$_b/\$id'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(<String, dynamic>{
+      body: jsonEncode({
 ${bd}
       }),
     );
@@ -677,7 +679,7 @@ class _S extends State<${name}ListaPantalla> {
                 itemBuilder: (_, i) {
                   final item = _items[i];
                   return ListTile(
-                    title: Text('\${item.${df.name}}'),
+                    title: Text(item.${df.name}${df.nullable ? '?' : ''}.toString()${df.nullable ? " ?? ''" : ''}),
                     subtitle: Text('ID: \${item.${entity.identifier.name}}'),
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                       IconButton(icon: const Icon(Icons.edit), onPressed: () async {
@@ -723,7 +725,7 @@ function formulario(entity: EntityIR, entities: EntityIR[]): string {
     ? `    _c${cap(c.name)} = TextEditingController(text: widget.item?.${c.name}.join(', ') ?? '');`
     : c.dt === 'bool'
     ? `    _c${cap(c.name)} = widget.item?.${c.name}${c.isNullable ? '' : ' ?? false'};`
-    : `    _c${cap(c.name)} = TextEditingController(text: widget.item?.${c.name} != null ? '\${widget.item!.${c.name}}' : '');`).join('\n');
+    : `    _c${cap(c.name)} = TextEditingController(text: widget.item?.${c.name}${c.isNullable ? '?' : ''}.toString() ?? '');`).join('\n');
   const dispC   = req.filter(c => c.dt !== 'bool').map(c => `    _c${cap(c.name)}.dispose();`).join('\n');
 
   const fields  = req.map(c => {

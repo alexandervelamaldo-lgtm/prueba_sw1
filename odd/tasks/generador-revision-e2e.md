@@ -28,7 +28,7 @@ Out of scope (reported, not changed): enum and foreign-key form fields stay free
 | T3 | S4, S10 | inline | done (RED/GREEN) | 3e692c9, 7202676 |
 | T4 | S5, S6, S11 | inline | done except APK (L4) | b421062 |
 | T5 | S7, S8 | inline | done (RED/GREEN) | b30accd |
-| T6 | all | Codex verifier (Risk item 5: dependencies) | pending | |
+| T6 | all | Codex verifier (Risk item 5: dependencies) | done, S6 APK not verified (L4, L6) | |
 
 Route evidence: no Writer trigger reason; units share `generate-flutter.ts`, so the parent writes inline.
 
@@ -39,3 +39,5 @@ Route evidence: no Writer trigger reason; units share `generate-flutter.ts`, so 
 - **L3** RED/GREEN observed per task. Suite: 738 passed. `COMPILAR_GENERADO=1`: 29/29 on 7202676; Flutter block 5/5 on b421062 (`flutter create`, `analyze`, `test`, `build linux`).
 - **L4** `flutter build apk` NOT verified: `whisper_flutter_new` forces `ndk;27.0.11902837`, not installed here, whose licence is not accepted ("LicenceNotAcceptedException"). Setting the app's `ndkVersion` to the installed 28.2 does not help, the plugin still asks for 27. Accepting a licence is the user's decision.
 - **L5** Known and left as is: in MongoDB/Cassandra a request without the N:M list empties it (pre-existing, pinned by a test), whereas PostgreSQL leaves it untouched.
+- **L6** Codex verifier on 38ca99f: all specs met on the three targets (Newman, real Dart services) except two blockers, both reproduced: `flutter analyze` failed on the infos from the lints `flutter create` adds, and unrelated output changed (mapper comment, typed `jsonEncode`). One correction batch fixed both; recheck by the parent, not Codex: strict `analyze` clean on the three targets, backend output of `minimo` and `rrhh` identical to the baseline, `COMPILAR_GENERADO=1` 30/30.
+- **L7** Still not exercised: Flutter screens in a running app, APK and device, voice dictation, dragging relations on the canvas, accepting an AI-mode proposal in the browser.

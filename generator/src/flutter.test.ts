@@ -168,7 +168,7 @@ describe('Flutter with an entity that only has an identifier', () => {
   });
 
   it('sends an empty JSON object, which the backend requires as body', () => {
-    expect(file(files, 'lib/servicios/reporte_servicio.dart')).toContain('body: jsonEncode(<String, dynamic>{');
+    expect(file(files, 'lib/servicios/reporte_servicio.dart')).toMatch(/body: jsonEncode\(\{\s*\}\),/);
   });
 });
 
@@ -252,5 +252,16 @@ describe('Flutter project handoff', () => {
     expect(file(named, 'lib/pantallas/inicio.dart')).toContain("Text('Juan\\'s: \\$tienda')");
     expect(file(named, 'pubspec.yaml')).toContain('description: "Frontend Flutter para Juan\'s: $tienda"');
     expect(file(named, 'android/app/src/main/AndroidManifest.xml')).not.toContain("Juan's");
+  });
+});
+
+describe('Flutter passes the lints flutter create adds', () => {
+  const files = generateFlutter(normalize(tiendaDiagram()));
+
+  it('fills form controllers and list titles without string interpolation', () => {
+    expect(file(files, 'lib/pantallas/producto_formulario.dart')).toContain(
+      "_cNombre = TextEditingController(text: widget.item?.nombre.toString() ?? '');",
+    );
+    expect(file(files, 'lib/pantallas/producto_lista.dart')).toContain('title: Text(item.nombre.toString()),');
   });
 });

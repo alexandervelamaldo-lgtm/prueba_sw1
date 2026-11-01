@@ -4,7 +4,7 @@ import {
   createClass,
   createDiagram,
 } from '@app/shared';
-import { tiendaDiagram } from './fixtures/corpus.js';
+import { rrhhDiagram, tiendaDiagram } from './fixtures/corpus.js';
 import { generateFlutter } from './flutter/generate-flutter.js';
 import { normalize } from './ir/normalize.js';
 import type { DatabaseTarget } from './ir/types.js';
@@ -169,5 +169,22 @@ describe('Flutter with an entity that only has an identifier', () => {
 
   it('sends an empty JSON object, which the backend requires as body', () => {
     expect(file(files, 'lib/servicios/reporte_servicio.dart')).toContain('body: jsonEncode(<String, dynamic>{');
+  });
+});
+
+describe('Flutter with inheritance', () => {
+  const files = generateFlutter(normalize(rrhhDiagram()));
+
+  it('carries inherited fields through model, service and form', () => {
+    const model = file(files, 'lib/modelos/empleado.dart');
+    expect(model).toContain('final String nombre;');
+    expect(model).toContain("nombre: json['nombre'] as String,");
+    expect(model).toContain("'nombre': nombre,");
+    expect(file(files, 'lib/servicios/empleado_servicio.dart')).toContain('required String nombre,');
+    expect(file(files, 'lib/pantallas/empleado_formulario.dart')).toContain('nombre: _cNombre.text.trim(),');
+  });
+
+  it('titles the list with an inherited text field rather than the identifier', () => {
+    expect(file(files, 'lib/pantallas/empleado_lista.dart')).toContain('item.nombre');
   });
 });

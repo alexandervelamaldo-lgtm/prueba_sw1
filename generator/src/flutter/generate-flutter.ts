@@ -1,4 +1,5 @@
-import type { EntityIR, GeneratedFile, GenerationIR } from '../ir/types.js';
+import type { EntityIR, FieldIR, GeneratedFile, GenerationIR } from '../ir/types.js';
+import { inheritedFields } from '../render/generate.js';
 
 /**
  * Generador de frontend Flutter.
@@ -94,10 +95,16 @@ interface Campo {
   inRequest: boolean;
 }
 
+/** Campos propios más heredados: los DTOs del backend exponen ambos. */
+function camposDeEntidad(entity: EntityIR, entities: EntityIR[]): FieldIR[] {
+  const byName = new Map(entities.map(e => [e.className, e]));
+  return [...inheritedFields(entity, byName), ...entity.fields.filter(x => !x.isIdentifier)];
+}
+
 function campos(entity: EntityIR, entities: EntityIR[]): Campo[] {
   const out: Campo[] = [];
   out.push({ name: entity.identifier.name, dt: idDT(entity), isNullable: false, isId: true, label: 'ID', inRequest: false });
-  for (const f of entity.fields.filter(x => !x.isIdentifier)) {
+  for (const f of camposDeEntidad(entity, entities)) {
     out.push({ name: f.name, dt: javaToDart(f.javaType), isNullable: f.nullable, isId: false, label: label(f.name), inRequest: true });
   }
   for (const a of entity.associations.filter(x => !x.collection && x.owning)) {
@@ -505,12 +512,13 @@ ${bd}
 // Pantalla lista
 // ---------------------------------------------------------------------------
 
-function lista(entity: EntityIR): string {
+function lista(entity: EntityIR, entities: EntityIR[]): string {
   const name = entity.className;
   const sn   = snake(name);
   const idt  = idDT(entity);
-  const df   = entity.fields.find(f => !f.isIdentifier && javaToDart(f.javaType) === 'String')
-             ?? entity.fields.find(f => !f.isIdentifier)
+  const todos = camposDeEntidad(entity, entities);
+  const df   = todos.find(f => javaToDart(f.javaType) === 'String')
+             ?? todos[0]
              ?? entity.identifier;
 
   return `import 'package:flutter/material.dart';
@@ -843,7 +851,7 @@ export function generateFlutter(ir: GenerationIR): GeneratedFile[] {
     const sn = snake(e.className);
     files.push({ path: `lib/modelos/${sn}.dart`,              content: modelo(e, allEntities) });
     files.push({ path: `lib/servicios/${sn}_servicio.dart`,   content: servicio(e, allEntities) });
-    files.push({ path: `lib/pantallas/${sn}_lista.dart`,      content: lista(e) });
+    files.push({ path: `lib/pantallas/${sn}_lista.dart`,      content: lista(e, allEntities) });
     files.push({ path: `lib/pantallas/${sn}_formulario.dart`, content: formulario(e, allEntities) });
   }
 

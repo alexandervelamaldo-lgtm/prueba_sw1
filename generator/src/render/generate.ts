@@ -398,7 +398,7 @@ function toOneView(association: AssociationIR, targetIdJavaType: string): ToOneV
  * DTO sí debe transportarlos: un cliente de la API no sabe ni le importa que
  * `nombre` esté declarado en la clase padre.
  */
-function inheritedFields(entity: EntityIR, byName: Map<string, EntityIR>): FieldIR[] {
+export function inheritedFields(entity: EntityIR, byName: Map<string, EntityIR>): FieldIR[] {
   const result: FieldIR[] = [];
   const visited = new Set<string>([entity.className]);
 

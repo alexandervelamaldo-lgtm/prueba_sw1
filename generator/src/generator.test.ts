@@ -717,6 +717,35 @@ describe('colección Postman', () => {
     expect(empleado.item[1].request.body.raw).toContain('"responsableId": null');
   });
 
+  it('una entidad solo con id envía un objeto vacío: el controlador exige cuerpo', () => {
+    const soloId = JSON.parse(
+      fileNamed(
+        generateProject(
+          normalize(
+            createDiagram({
+              id: 'solo-id',
+              name: 'SoloId',
+              meta: { basePackage: 'com.ejemplo.soloid', artifactId: 'solo-id', description: '' },
+              classes: {
+                C1: createClass({
+                  id: 'C1',
+                  name: 'Reporte',
+                  attributes: [createAttribute({ id: 'A1', name: 'id', type: 'Long', isIdentifier: true })],
+                }),
+              },
+            }),
+          ),
+        ),
+        'postman_collection.json',
+      ).content,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const reporte = soloId.item.find((f: any) => f.name === 'Reporte');
+    expect(reporte.item[1].request.body.raw).toBe('{}');
+    expect(reporte.item[3].request.body.raw).toBe('{}');
+  });
+
   it('el README explica cómo ejecutar la colección', () => {
     // Sin saltos de línea: el párrafo va ajustado a 79 columnas.
     const readme = fileNamed(files, 'README.md').content.replace(/\s+/g, ' ');

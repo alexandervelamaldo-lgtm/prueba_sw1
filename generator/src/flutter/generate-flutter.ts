@@ -442,6 +442,9 @@ function servicio(entity: EntityIR, entities: EntityIR[]): string {
   const req  = campos(entity, entities).filter(c => c.inRequest);
   const ps   = req.map(c => `    required ${nullable(c.dt, c.isNullable)} ${c.name},`).join('\n');
   const bd   = req.map(c => `        '${c.name}': ${c.name},`).join('\n');
+  // Dart no admite una lista de parámetros con nombre vacía: `crear({})` no compila.
+  const crearParams = req.length > 0 ? `{\n${ps}\n  }` : '';
+  const actualizarParams = req.length > 0 ? `, {\n${ps}\n  }` : '';
 
   return `import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -465,12 +468,10 @@ class ${name}Servicio {
     return ${name}.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
   }
 
-  static Future<${name}> crear({
-${ps}
-  }) async {
+  static Future<${name}> crear(${crearParams}) async {
     final r = await http.post(Uri.parse(_b),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
+      body: jsonEncode(<String, dynamic>{
 ${bd}
       }),
     );
@@ -478,12 +479,10 @@ ${bd}
     return ${name}.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
   }
 
-  static Future<${name}> actualizar(${idt} id, {
-${ps}
-  }) async {
+  static Future<${name}> actualizar(${idt} id${actualizarParams}) async {
     final r = await http.put(Uri.parse('\$_b/\$id'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
+      body: jsonEncode(<String, dynamic>{
 ${bd}
       }),
     );

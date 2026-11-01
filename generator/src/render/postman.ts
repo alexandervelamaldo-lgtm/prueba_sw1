@@ -143,8 +143,8 @@ function folderForEntity(
   const { entity } = view;
   const path = `/api/${entity.restPath}`;
   const conId = `${path}/{{${variableDe(entity)}}}`;
-  const body =
-    view.requestComponents.length > 0 ? requestBody(view, porClase, enumFirstValue) : undefined;
+  // También sin campos: el controlador exige `@RequestBody`, y sin cuerpo responde 400.
+  const body = requestBody(view, porClase, enumFirstValue);
 
   return {
     name: entity.className,

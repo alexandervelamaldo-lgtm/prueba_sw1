@@ -147,3 +147,27 @@ describe('generated Flutter compiles', () => {
     expect(form).not.toContain('_cActivo.text');
   });
 });
+
+describe('Flutter with an entity that only has an identifier', () => {
+  const files = generateFlutter(normalize(createDiagram({
+    id: 'solo-id', name: 'SoloId',
+    meta: { basePackage: 'com.example.soloid', artifactId: 'solo-id' },
+    classes: {
+      reporte: createClass({
+        id: 'reporte', name: 'Reporte',
+        attributes: [createAttribute({ id: 'reporte-id', name: 'id', type: 'Long', isIdentifier: true })],
+      }),
+    },
+  })));
+
+  it('emits service signatures without an empty named-parameter list', () => {
+    const service = file(files, 'lib/servicios/reporte_servicio.dart');
+    expect(service).toContain('static Future<Reporte> crear() async {');
+    expect(service).toContain('static Future<Reporte> actualizar(int id) async {');
+    expect(service).not.toMatch(/\{\s*\}\) async/);
+  });
+
+  it('sends an empty JSON object, which the backend requires as body', () => {
+    expect(file(files, 'lib/servicios/reporte_servicio.dart')).toContain('body: jsonEncode(<String, dynamic>{');
+  });
+});

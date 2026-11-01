@@ -856,6 +856,7 @@ export function EditorDiagrama({
         active={conversacion}
         size="md"
         colorVariant="colorful"
+        staticColors
         theme={tema === 'claro' ? 'light' : 'dark'}
         borderRadius={0}
       >

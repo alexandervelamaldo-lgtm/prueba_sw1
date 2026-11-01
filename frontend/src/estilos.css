@@ -903,6 +903,22 @@ select:focus {
   `1fr` a secas, abrir dos paneles con un diagrama grande empujaba las columnas
   fuera de la ventana en vez de encoger el lienzo.
 */
+/*
+  Envoltorio del borde animado del Modo IA (`border-beam`). Ocupa el sitio que
+  antes tenía el cuerpo dentro de `.editor`, y el cuerpo lo llena entero.
+*/
+.editor__borde-ia {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.editor__borde-ia > .editor__cuerpo {
+  flex: 1;
+  min-height: 0;
+}
+
 .editor__cuerpo {
   display: grid;
   grid-template-columns: var(--ancho-izquierda, auto) minmax(0, 1fr) var(--ancho-derecha, auto);

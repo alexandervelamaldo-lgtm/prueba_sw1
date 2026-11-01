@@ -53,7 +53,7 @@ const PRESETS: Record<ColorAvatarIA, Preset> = {
 };
 
 interface Props {
-  onClick: () => void;
+  onClick: (evento?: React.MouseEvent<HTMLButtonElement>) => void;
   estado?: EstadoAvatarIA;
   /** Modo conversación activo: el avatar lleva un anillo y pulsarlo lo apaga. */
   activo?: boolean;

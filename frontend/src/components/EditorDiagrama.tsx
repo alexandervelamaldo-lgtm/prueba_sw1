@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { BorderBeam } from 'border-beam';
 import {
   writeComunicacion,
   type ClassKind,
@@ -20,6 +21,7 @@ import { PanelPropiedades } from './PanelPropiedades';
 import { Asistente } from './Asistente';
 import { ModoIA } from './ModoIA';
 import { AvatarIA, type EstadoAvatarIA } from './AvatarIA';
+import { EfectoLuminaIA, type ManejadorEfectoLumina } from './EfectoLuminaIA';
 import type { MarcasDeBorrado } from './ia-ejecucion';
 import { ImportarDiagrama } from './ImportarDiagrama';
 import { ImportarXmi } from './ImportarXmi';
@@ -115,6 +117,7 @@ export function EditorDiagrama({
   const [saludoPendiente, setSaludoPendiente] = useState(false);
   const [estadoIA, setEstadoIA] = useState<EstadoAvatarIA>('reposo');
   const alSaludar = useCallback(() => setSaludoPendiente(false), []);
+  const efectoLuminaRef = useRef<ManejadorEfectoLumina | null>(null);
   const [herramienta, setHerramienta] = useState<'seleccion' | 'relacion'>('seleccion');
   const [tipoRelacion, setTipoRelacion] = useState<RelationKind>('association');
   // Herramienta "asociación de clase": no es un séptimo `RelationKind`, es un
@@ -553,6 +556,9 @@ export function EditorDiagrama({
 
   const ejecutar = useCallback(
     (id: string) => {
+      if (id === 'ver:ia') {
+        efectoLuminaRef.current?.disparar();
+      }
       if (id.startsWith('ver:')) {
         paneles.alternar(id.slice(4) as Acoplado);
         return;
@@ -677,13 +683,15 @@ export function EditorDiagrama({
 
   return (
     <div className="editor">
+      <EfectoLuminaIA ref={efectoLuminaRef} />
       <header className="barra">
         <BarraMenu menus={menus} onComando={ejecutar} />
         {autor && (
           <AvatarIA
             estado={estadoIA}
             activo={conversacion}
-            onClick={() => {
+            onClick={(evento) => {
+              efectoLuminaRef.current?.disparar(evento?.clientX, evento?.clientY);
               if (conversacion) {
                 setConversacion(false);
                 return;
@@ -838,6 +846,19 @@ export function EditorDiagrama({
         con la plantilla escrita en el `style` no habría forma de que la
         cambiara.
       */}
+      {/*
+        El borde de la IA queda siempre montado y solo cambia `active`: envolver
+        el cuerpo de forma condicional remontaría el lienzo y todos los paneles
+        cada vez que el modo conversación entra o sale.
+      */}
+      <BorderBeam
+        className="editor__borde-ia"
+        active={conversacion}
+        size="md"
+        colorVariant="colorful"
+        theme={tema === 'claro' ? 'light' : 'dark'}
+        borderRadius={0}
+      >
       <main
         className="editor__cuerpo"
         ref={paneles.cuerpo}
@@ -974,6 +995,7 @@ export function EditorDiagrama({
           ]}
         />
       </main>
+      </BorderBeam>
 
       <BarraEstado
         escala={escala}

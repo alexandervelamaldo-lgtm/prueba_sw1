@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Background,
   BackgroundVariant,
@@ -43,6 +43,7 @@ import {
   type Punto,
 } from './geometria-lienzo';
 import type { LienzoProps } from './Lienzo';
+import { paddingDeEncuadre } from './modo-ia-vista';
 import { usePantallaEstrecha } from '../hooks/useDispositivo';
 
 /**
@@ -532,6 +533,7 @@ function LienzoInterno({
   onRelacionar,
   herramienta,
   orden,
+  enModoIA = false,
   onEscala,
   aBorrar,
 }: LienzoProps): JSX.Element {
@@ -743,6 +745,9 @@ function LienzoInterno({
     estado: pulsar «Ajustar» dos veces tiene que encuadrar dos veces, y un objeto
     igual al anterior no dispararía el efecto.
   */
+  // Por referencia: cambiar de modo no debe repetir la última orden recibida.
+  const enModoIARef = useRef(enModoIA);
+  enModoIARef.current = enModoIA;
   useEffect(() => {
     if (!orden) return;
     switch (orden.tipo) {
@@ -753,12 +758,12 @@ function LienzoInterno({
         void flow.zoomOut({ duration: 180 });
         return;
       case 'ajustar':
-        void flow.fitView({ duration: 220, padding: 0.18 });
+        void flow.fitView({ duration: 220, padding: paddingDeEncuadre(0.18, enModoIARef.current) });
         return;
       case 'centrar':
         void flow.fitView({
           duration: 220,
-          padding: 0.35,
+          padding: paddingDeEncuadre(0.35, enModoIARef.current),
           maxZoom: zoomMaximoAlCentrar(flow.getZoom()),
           nodes: orden.ids.map((id) => ({ id })),
         });

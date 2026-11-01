@@ -281,6 +281,23 @@
   */
   --mono: 'Fira Code', ui-monospace, 'Cascadia Mono', Consolas, monospace;
 
+  /*
+    Paleta propia del Modo IA inmersivo.
+    -----------------------------------
+    Atmósfera diferenciada con tonos noche, índigo y violeta, con contraste AA.
+  */
+  --ia-fondo: #060411;
+  --ia-fondo-2: #0e0b20;
+  --ia-fondo-3: #181334;
+  --ia-borde: #2c2554;
+  --ia-borde-fuerte: #443b78;
+  --ia-realce: #211c42;
+  --ia-texto: #fbfaff;
+  --ia-texto-2: #b2a8eb;
+  --ia-acento: #bd6eff;
+  --ia-acento-2: #d49bfd;
+  --ia-sobre-acento: #060411;
+
   color-scheme: dark;
 }
 
@@ -343,6 +360,22 @@
     elevación y empieza a leerse como suciedad.
   */
   --sombra-color: color-mix(in srgb, var(--texto) 16%, transparent);
+  /*
+    Paleta propia del Modo IA inmersivo en tema claro.
+    --------------------------------------------------
+    Fondo lavanda frío con acento violeta profundo y texto de alto contraste.
+  */
+  --ia-fondo: #fbf9ff;
+  --ia-fondo-2: #f3effc;
+  --ia-fondo-3: #eae2f8;
+  --ia-borde: #cdc0ea;
+  --ia-borde-fuerte: #9a86cf;
+  --ia-realce: #e3d7f7;
+  --ia-texto: #1f103c;
+  --ia-texto-2: #574878;
+  --ia-acento: #7022ba;
+  --ia-acento-2: #581c87;
+  --ia-sobre-acento: #ffffff;
 }
 
 * {
@@ -6933,3 +6966,349 @@ select:focus {
     animation: none;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Modo IA inmersivo
+   -------------------------------------------------------------------------- */
+
+/*
+  Pantalla inmersiva del Modo IA: el diagrama y la conversación son los protagonistas.
+  Remapeo de la paleta propia a los tokens base del editor.
+*/
+.editor--ia {
+  --fondo: var(--ia-fondo);
+  --fondo-2: var(--ia-fondo-2);
+  --fondo-3: var(--ia-fondo-3);
+  --borde: var(--ia-borde);
+  --borde-fuerte: var(--ia-borde-fuerte);
+  --realce: var(--ia-realce);
+  --texto: var(--ia-texto);
+  --texto-2: var(--ia-texto-2);
+  --acento: var(--ia-acento);
+  --acento-2: var(--ia-acento-2);
+  --sobre-acento: var(--ia-sobre-acento);
+}
+
+.editor--ia .barra {
+  justify-content: space-between;
+}
+
+/* La barra flotante taparía el minimapa, y un minimapa a medias no orienta. */
+.editor--ia .react-flow__minimap {
+  display: none;
+}
+
+.editor--ia .editor__cuerpo {
+  position: relative;
+  grid-template-columns: var(--ancho-izquierda, auto) minmax(0, 1fr);
+}
+
+.editor--ia .canaleta--derecha,
+.editor--ia .columna--derecha .canaleta,
+.editor--ia .columna--derecha .acoplado__cabecera {
+  display: none;
+}
+
+.editor--ia .columna--derecha {
+  position: absolute;
+  grid-column: 2;
+  grid-row: 1;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, calc(100% - 32px));
+  max-height: 45%;
+  height: 45%;
+  border-radius: var(--radio);
+  box-shadow: var(--sombra);
+  border: 1px solid var(--borde);
+  background: var(--fondo-2);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editor--ia .columna--derecha .acoplado {
+  border-bottom: none;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editor--ia .columna--derecha .acoplado__cuerpo {
+  padding: 10px 12px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editor--ia .columna--derecha .modo-ia {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.editor--ia .columna--derecha .modo-ia__transcripcion {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.editor--ia .columna--derecha .modo-ia__entrada {
+  flex-shrink: 0;
+}
+
+.barra__acciones-ia {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.barra__boton--tema-ia {
+  background: var(--fondo-3);
+  color: var(--texto);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio-ajustado);
+  padding: 4px 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.barra__boton--tema-ia:hover {
+  background: var(--borde);
+}
+
+.barra__boton--salir-ia {
+  background: var(--fondo-3);
+  color: var(--texto);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio-ajustado);
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.barra__boton--salir-ia:hover {
+  background: var(--borde);
+}
+
+@media (max-width: 900px) {
+  .editor--ia .barra {
+    width: 100%;
+  }
+
+  .editor--ia .editor__cuerpo {
+    position: relative;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  /* Abierta taparía casi todo el lienzo que este modo quiere dejar a la vista. */
+  .editor--ia .columna--izquierda {
+    display: none;
+  }
+
+  .editor--ia .columna--derecha {
+    top: auto;
+    left: 0;
+    right: 0;
+    transform: none;
+    width: 100%;
+    bottom: 0;
+    max-height: 45%;
+    height: 45%;
+    border-radius: var(--radio) var(--radio) 0 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    z-index: 10;
+  }
+
+  .editor--ia .bienvenida-ia,
+  .editor--ia .orbe-ia {
+    grid-column: 1 / -1;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Bienvenida del Modo IA
+   -------------------------------------------------------------------------- */
+
+.bienvenida-ia {
+  position: absolute;
+  grid-column: 2;
+  grid-row: 1;
+  /* Centrada en lo que deja libre la barra flotante, que mide un 45 % del alto. */
+  inset: 0 0 calc(45% + 16px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 5;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity 0.7s ease;
+}
+
+.bienvenida-ia--oculta {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.bienvenida-ia--desvaneciendo {
+  opacity: 0;
+}
+
+.bienvenida-ia__halo {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  -webkit-mask-image: radial-gradient(closest-side, black 55%, transparent 100%);
+  mask-image: radial-gradient(closest-side, black 55%, transparent 100%);
+}
+
+.bienvenida-ia__blob {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.bienvenida-ia__blob--0 {
+  left: 4%;
+  top: 8%;
+  width: 62%;
+  height: 78%;
+}
+
+.bienvenida-ia__blob--1 {
+  left: 44%;
+  top: 22%;
+  width: 54%;
+  height: 70%;
+}
+
+.bienvenida-ia__blob--2 {
+  left: 30%;
+  top: 44%;
+  width: 44%;
+  height: 56%;
+}
+
+.bienvenida-ia__lienzo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.bienvenida-ia__titulo {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  text-align: center;
+  font-family: var(--fuente);
+}
+
+.bienvenida-ia__titulo-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Orbe IA (pensando)
+   -------------------------------------------------------------------------- */
+
+.orbe-ia {
+  position: absolute;
+  grid-column: 2;
+  grid-row: 1;
+  inset: 0 0 calc(45% + 16px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 6;
+  opacity: 1;
+  transition: opacity 0.2s ease;
+}
+
+.orbe-ia--saliendo {
+  opacity: 0;
+}
+
+.orbe-ia__lienzo {
+  width: 220px;
+  height: 220px;
+  pointer-events: none;
+}
+
+.orbe-ia__etiqueta {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--texto-2);
+  display: inline-flex;
+  align-items: center;
+  pointer-events: none;
+}
+
+.orbe-ia__puntos::after {
+  content: '';
+  display: inline-block;
+  width: 16px;
+  text-align: left;
+  animation: orbe-puntos 1.4s infinite steps(4, start);
+}
+
+.orbe-ia__puntos--estatico::after {
+  animation: none;
+  content: '...';
+}
+
+@keyframes orbe-puntos {
+  0% {
+    content: '';
+  }
+  25% {
+    content: '.';
+  }
+  50% {
+    content: '..';
+  }
+  75% {
+    content: '...';
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orbe-ia__puntos::after {
+    animation: none;
+    content: '...';
+  }
+}
+
+

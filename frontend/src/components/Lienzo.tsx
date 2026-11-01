@@ -74,6 +74,8 @@ export interface LienzoProps {
   herramienta: 'seleccion' | 'relacion';
   /** Encuadres pedidos desde la barra de estado o el árbol del proyecto. */
   orden?: OrdenVista | null;
+  /** Modo IA: los encuadres dejan libre el espacio de la barra flotante. */
+  enModoIA?: boolean;
   /** Avisa del aumento actual para que la barra de estado lo muestre. */
   onEscala?: (escala: number) => void;
   /** Lo que se perdería si se acepta un borrado propuesto (vista previa fantasma del Modo IA). */

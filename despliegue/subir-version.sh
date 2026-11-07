@@ -29,9 +29,9 @@ if [ -z "$ETIQUETA" ]; then
 fi
 
 REGION=us-east-1
-INSTANCIA=i-06ef7760638b99c50
-DISTRIBUCION=E327A9J4D9M7OA
-SITIO=https://d3dpubw4ihutm1.cloudfront.net
+INSTANCIA=i-06a55ec56a5bdde65
+DISTRIBUCION=E3STT8GNT4N7V3
+SITIO=https://d2kpdlaikoc7bc.cloudfront.net
 
 # El numero de cuenta se pregunta, no se escribe. Un identificador de cuenta
 # pegado en un fichero del repositorio es lo que hace que el guion funcione solo

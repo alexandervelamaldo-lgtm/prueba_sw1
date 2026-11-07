@@ -10,7 +10,7 @@
     "Items": [
       {
         "Id": "ec2-uml",
-        "DomainName": "ec2-13-220-255-222.compute-1.amazonaws.com",
+        "DomainName": "ec2-54-227-169-166.compute-1.amazonaws.com",
         "OriginPath": "",
         "CustomHeaders": { "Quantity": 0 },
         "CustomOriginConfig": {

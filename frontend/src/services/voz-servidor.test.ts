@@ -6,7 +6,7 @@ import { crearVozDelServidor, type ReproductorAudio } from './voz-servidor';
  * el reproductor de mentira: lo que se sujeta es cuándo avisa del final,
  * cuándo cae a la voz del navegador y que callar de verdad corte.
  */
-function preparar(opciones: { falla?: 'red' | 'sin-voz' } = {}) {
+function preparar(opciones: { falla?: 'red' | 'sin-voz' | 'reproduccion' } = {}) {
   const reproductores: (ReproductorAudio & { terminar(): void; pausado: boolean })[] = [];
   const pedidos: string[] = [];
   const voz = crearVozDelServidor({
@@ -18,9 +18,15 @@ function preparar(opciones: { falla?: 'red' | 'sin-voz' } = {}) {
     },
     crearReproductor: () => {
       let alTerminar: (() => void) | null = null;
-      const reproductor = {
+      const reproductor: ReproductorAudio & { terminar(): void; pausado: boolean } = {
         pausado: false,
-        play: async () => {},
+        // Como un navegador que no puede cargar el audio: avisa por `onerror`
+        // y además rechaza la promesa de `play()`.
+        play: async () => {
+          if (opciones.falla !== 'reproduccion') return;
+          reproductor.onerror?.();
+          throw new Error('NotSupportedError');
+        },
         pause() {
           reproductor.pausado = true;
         },
@@ -68,6 +74,17 @@ describe('crearVozDelServidor', () => {
 
     expect(finales).toEqual(['navegador']);
     expect(voz.activa).toBe(true);
+  });
+
+  it('si el navegador no puede reproducir el audio, cae a su voz una sola vez', async () => {
+    const { voz } = preparar({ falla: 'reproduccion' });
+    const finales: string[] = [];
+
+    voz.hablar('Hola.', () => finales.push('fin'), () => finales.push('navegador'));
+    await tick();
+    await tick();
+
+    expect(finales).toEqual(['navegador']);
   });
 
   it('si el servidor dice que no hay voz (503), deja de intentarlo en la sesión', async () => {

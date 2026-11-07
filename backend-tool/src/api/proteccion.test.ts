@@ -156,6 +156,16 @@ describe('cabeceras de seguridad', () => {
     expect(cabeceras['Content-Security-Policy']).toContain("style-src 'self' 'unsafe-inline'");
   });
 
+  /**
+   * La voz de ElevenLabs llega como un `Blob` y se reproduce desde una URL
+   * `blob:`. Sin `media-src`, la política cae en `default-src 'self'`, el audio
+   * no carga y el Modo IA habla con la voz del navegador.
+   */
+  it('deja reproducir el audio de la voz del servidor', () => {
+    const { cabeceras } = ejecutar(cabecerasDeSeguridad());
+    expect(cabeceras['Content-Security-Policy']).toContain("media-src 'self' blob:");
+  });
+
   it('deja hablar con Ollama, que corre en la máquina del usuario', () => {
     const { cabeceras } = ejecutar(cabecerasDeSeguridad());
     expect(cabeceras['Content-Security-Policy']).toContain('http://localhost:11434');

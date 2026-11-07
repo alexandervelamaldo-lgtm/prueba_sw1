@@ -65,7 +65,9 @@ export function crearVozDelServidor(deps: DependenciasVozServidor): VozDelServid
       enCurso = actual;
 
       const fallar = (error?: unknown): void => {
-        if (mia !== generacion) return;
+        // `onerror` y el rechazo de `play()` llegan los dos por el mismo fallo:
+        // el primero ya cayó a la voz del navegador y soltó `actual`.
+        if (mia !== generacion || enCurso !== actual) return;
         if ((error as { status?: number } | undefined)?.status === 503) activa = false;
         soltar();
         alFallar();

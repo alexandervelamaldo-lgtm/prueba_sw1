@@ -12,6 +12,9 @@ import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+{{#if hasUniqueFields}}
+import org.springframework.dao.DuplicateKeyException;
+{{/if}}
 import org.springframework.stereotype.Service;
 {{#if identifierImport}}
 import {{{identifierImport}}};
@@ -73,7 +76,18 @@ public class {{{entity.className}}}ServiceImpl implements {{{entity.className}}}
 
     @Override
     public {{{entity.className}}}Response create({{{entity.className}}}Request request) {
+{{#each uniqueFields}}
+        // Cassandra no tiene restricción de unicidad: se comprueba aquí. Dos
+        // altas simultáneas con el mismo valor aún podrían colarse; cerrarlo
+        // del todo exigiría una tabla de búsqueda con `IF NOT EXISTS`.
+        if (request.{{{name}}}() != null && repository.existsBy{{{pascalName}}}(request.{{{name}}}())) {
+            throw new DuplicateKeyException("Ya existe {{{../entity.className}}} con ese {{{name}}}");
+        }
+{{/each}}
         {{{entity.className}}} entity = mapper.toEntity(request);
+        // Cassandra no genera claves: sin esto la fila se guardaría con la
+        // clave primaria a null y `save` fallaría.
+        entity.{{{entity.identifier.setterName}}}(java.util.UUID.randomUUID().toString());
         return mapper.toResponse(repository.save(entity));
     }
 
@@ -81,6 +95,12 @@ public class {{{entity.className}}}ServiceImpl implements {{{entity.className}}}
     public {{{entity.className}}}Response update({{{entity.identifier.javaType}}} id, {{{entity.className}}}Request request) {
         {{{entity.className}}} entity = repository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("{{{entity.className}}}", id));
+{{#each uniqueFields}}
+        if (request.{{{name}}}() != null
+                && repository.findBy{{{pascalName}}}(request.{{{name}}}()).filter(otro -> !otro.{{{../entity.identifier.getterName}}}().equals(id)).isPresent()) {
+            throw new DuplicateKeyException("Ya existe {{{../entity.className}}} con ese {{{name}}}");
+        }
+{{/each}}
         mapper.update(entity, request);
         return mapper.toResponse(repository.save(entity));
     }

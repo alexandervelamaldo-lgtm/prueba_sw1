@@ -7,7 +7,7 @@ import {
   createMethod,
   createRelation,
 } from '@app/shared';
-import { CORPUS, minimoDiagram, rrhhDiagram, tiendaDiagram } from './fixtures/corpus.js';
+import { CORPUS, minimoDiagram, mixtoDiagram, rrhhDiagram, tiendaDiagram } from './fixtures/corpus.js';
 import { normalize } from './ir/normalize.js';
 import { buildEntityView, generateProject } from './render/generate.js';
 import { validateDiagram } from '@app/shared';
@@ -619,26 +619,54 @@ describe('colección Postman', () => {
     });
   });
 
-  it('trae una carpeta con las 5 peticiones por cada entidad concreta', () => {
-    const nombres = ir.entities.filter((e) => !e.isAbstract).map((e) => e.className);
-    expect(collection.item.map((f: { name: string }) => f.name).sort()).toEqual(
-      [...nombres].sort(),
-    );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const carpeta = (nombre: string) => collection.item.find((f: any) => f.name === nombre);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const peticion = (nombre: string, item: string) => carpeta(nombre).item.find((r: any) => r.name === item);
 
-    const pedido = collection.item.find((f: { name: string }) => f.name === 'Pedido');
-    expect(pedido.item.map((r: { name: string }) => r.name)).toEqual([
+  it('ordena las carpetas por dependencia y deja los borrados para el final', () => {
+    const nombres = collection.item.map((f: { name: string }) => f.name);
+    const posicion = (n: string) => nombres.indexOf(n);
+    expect(posicion('Cliente')).toBeLessThan(posicion('Pedido'));
+    expect(posicion('Pedido')).toBeLessThan(posicion('LineaPedido'));
+    expect(posicion('Producto')).toBeLessThan(posicion('LineaPedido'));
+    expect(nombres.at(-1)).toBe('Limpieza');
+
+    expect(carpeta('Pedido').item.map((r: { name: string }) => r.name)).toEqual([
       'Listar Pedido',
-      'Buscar Pedido por id',
       'Crear Pedido',
+      'Buscar Pedido por id',
       'Actualizar Pedido',
-      'Eliminar Pedido',
     ]);
+
+    // Al revés que las altas: una línea se borra antes que su pedido.
+    const borrados = carpeta('Limpieza').item.map((r: { name: string }) => r.name);
+    expect(borrados.indexOf('Eliminar LineaPedido')).toBeLessThan(borrados.indexOf('Eliminar Pedido'));
+    expect(borrados.indexOf('Eliminar Pedido')).toBeLessThan(borrados.indexOf('Eliminar Cliente'));
+    expect(borrados).toHaveLength(ir.entities.filter((e) => !e.isAbstract).length);
   });
 
-  it('usa las rutas REST reales y un cuerpo de ejemplo que pasa las validaciones', () => {
-    const pedido = collection.item.find((f: { name: string }) => f.name === 'Pedido');
-    const crear = pedido.item.find((r: { name: string }) => r.name === 'Crear Pedido');
+  it('el alta guarda el id devuelto y las demás peticiones lo usan', () => {
+    const crear = peticion('Pedido', 'Crear Pedido');
+    const script = crear.event.find((e: { listen: string }) => e.listen === 'test').script.exec.join('\n');
+    expect(script).toContain('pm.response.to.have.status(201)');
+    expect(script).toContain("pm.collectionVariables.set('pedidoId', pm.response.json().id)");
+    expect(collection.variable).toContainEqual({ key: 'pedidoId', value: '', type: 'string' });
 
+    expect(peticion('Pedido', 'Buscar Pedido por id').request.url.raw).toBe(
+      '{{baseUrl}}/api/pedidos/{{pedidoId}}',
+    );
+    expect(peticion('Pedido', 'Actualizar Pedido').request.url.raw).toBe(
+      '{{baseUrl}}/api/pedidos/{{pedidoId}}',
+    );
+    const eliminar = peticion('Limpieza', 'Eliminar Pedido');
+    expect(eliminar.request.method).toBe('DELETE');
+    expect(eliminar.request.url.raw).toBe('{{baseUrl}}/api/pedidos/{{pedidoId}}');
+    expect(eliminar.request.body).toBeUndefined();
+  });
+
+  it('usa las rutas REST reales y un cuerpo que apunta a lo ya creado', () => {
+    const crear = peticion('Pedido', 'Crear Pedido');
     expect(crear.request.method).toBe('POST');
     expect(crear.request.url.raw).toBe('{{baseUrl}}/api/pedidos');
     expect(crear.request.header).toContainEqual({
@@ -646,19 +674,93 @@ describe('colección Postman', () => {
       value: 'application/json',
     });
 
-    const body = JSON.parse(crear.request.body.raw);
+    // Un id numérico va sin comillas: el cuerpo es JSON válido una vez que
+    // Postman sustituye la variable.
+    expect(crear.request.body.raw).toContain('"clienteId": {{clienteId}}');
+    const body = JSON.parse(crear.request.body.raw.replace('{{clienteId}}', '5'));
     // El enumerado usa su primer valor y no `null`: un `null` no pasaría el
     // `@NotNull` que `dto-request.java.hbs` pone en un campo obligatorio.
     expect(body.estado).toBe('BORRADOR');
     expect(typeof body.total).toBe('number');
-    expect(body.clienteId).toBe(1);
+    expect(body.clienteId).toBe(5);
 
-    const listar = pedido.item.find((r: { name: string }) => r.name === 'Listar Pedido');
+    const listar = peticion('Pedido', 'Listar Pedido');
     expect(listar.request.url.raw).toBe('{{baseUrl}}/api/pedidos?page=0&size=20');
+  });
 
-    const eliminar = pedido.item.find((r: { name: string }) => r.name === 'Eliminar Pedido');
-    expect(eliminar.request.url.raw).toBe('{{baseUrl}}/api/pedidos/1');
-    expect(eliminar.request.body).toBeUndefined();
+  it('un valor único cambia en cada ejecución para no chocar con la anterior', () => {
+    const raw = peticion('Cliente', 'Crear Cliente').request.body.raw;
+    expect(raw).toContain('"email": "email-{{$timestamp}}-{{$randomInt}}"');
+  });
+
+  it('con ids de texto la referencia va entre comillas y las N:M llevan el id creado', () => {
+    const mongo = JSON.parse(
+      fileNamed(generateProject(normalize(tiendaDiagram(), { databaseTarget: 'mongodb' })), 'postman_collection.json')
+        .content,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pedido = mongo.item.find((f: any) => f.name === 'Pedido');
+    expect(pedido.item[1].request.body.raw).toContain('"clienteId": "{{clienteId}}"');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const producto = mongo.item.find((f: any) => f.name === 'Producto');
+    expect(producto.item[1].request.body.raw).toContain('"categoriasIds": [\n    "{{categoriaId}}"\n  ]');
+  });
+
+  it('una auto-referencia opcional va a null: el registro aún no existe al crearlo', () => {
+    const rrhh = JSON.parse(
+      fileNamed(generateProject(normalize(rrhhDiagram())), 'postman_collection.json').content,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const empleado = rrhh.item.find((f: any) => f.name === 'Empleado');
+    expect(empleado.item[1].request.body.raw).toContain('"responsableId": null');
+  });
+
+  it('una entidad solo con id envía un objeto vacío: el controlador exige cuerpo', () => {
+    const soloId = JSON.parse(
+      fileNamed(
+        generateProject(
+          normalize(
+            createDiagram({
+              id: 'solo-id',
+              name: 'SoloId',
+              meta: { basePackage: 'com.ejemplo.soloid', artifactId: 'solo-id', description: '' },
+              classes: {
+                C1: createClass({
+                  id: 'C1',
+                  name: 'Reporte',
+                  attributes: [createAttribute({ id: 'A1', name: 'id', type: 'Long', isIdentifier: true })],
+                }),
+              },
+            }),
+          ),
+        ),
+        'postman_collection.json',
+      ).content,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const reporte = soloId.item.find((f: any) => f.name === 'Reporte');
+    expect(reporte.item[1].request.body.raw).toBe('{}');
+    expect(reporte.item[3].request.body.raw).toBe('{}');
+  });
+
+  it('una N:M de PostgreSQL con id numérico envía números, no texto', () => {
+    const pg = JSON.parse(
+      fileNamed(generateProject(normalize(tiendaDiagram())), 'postman_collection.json').content,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const producto = pg.item.find((f: any) => f.name === 'Producto');
+    expect(producto.item[1].request.body.raw).toContain('"categoriasIds": [\n    {{categoriaId}}\n  ]');
+  });
+
+  it('el README explica cómo ejecutar la colección', () => {
+    // Sin saltos de línea: el párrafo va ajustado a 79 columnas.
+    const readme = fileNamed(files, 'README.md').content.replace(/\s+/g, ' ');
+    expect(readme).toContain('una variable de la colección (por ejemplo `clienteId`)');
+    expect(readme).toContain('la variable dinámica `$timestamp`');
   });
 
   it('no incluye carpeta para las entidades abstractas', () => {
@@ -1220,6 +1322,20 @@ describe('generación con Cassandra', () => {
     }
   });
 
+  it('importa WriteResult del paquete donde Spring Data Cassandra lo publica', () => {
+    const almacen = fileNamed(files, 'infraestructura/AlmacenIdempotencia.java').content;
+    expect(almacen).toContain('import org.springframework.data.cassandra.core.WriteResult;');
+    expect(almacen).not.toContain('core.cql.WriteResult');
+  });
+
+  it('asigna la clave primaria al crear, porque Cassandra no la genera', () => {
+    const servicio = fileNamed(files, 'service/impl/ClienteServiceImpl.java').content;
+    const crear = servicio.slice(servicio.indexOf('create(ClienteRequest request)'));
+    expect(crear.slice(0, crear.indexOf('repository.save(entity)') + 40)).toMatch(
+      /Cliente entity = mapper\.toEntity\(request\);[^}]*?entity\.setId\(java\.util\.UUID\.randomUUID\(\)\.toString\(\)\);\s+return mapper\.toResponse\(repository\.save\(entity\)\);/,
+    );
+  });
+
   it('no genera fila ni CRUD para una superclase abstracta', () => {
     const rrhhFiles = generateProject(normalize(rrhhDiagram(), { databaseTarget: 'cassandra' }));
     expect(rrhhFiles.some((f) => f.path.endsWith('domain/Persona.java'))).toBe(false);
@@ -1232,5 +1348,455 @@ describe('generación con Cassandra', () => {
     expect(empleado).not.toContain('extends Persona');
     expect(empleado).toContain('private String nombre;');
     expect(empleado).toContain('private String documento;');
+  });
+});
+
+describe('literales de enumeración', () => {
+  function enumCon(literales: string[]): ClassDiagram {
+    const estado = createClass({ id: 'E1', name: 'Estado', kind: 'enum', literals: literales });
+    const tarea = createClass({
+      id: 'C1',
+      name: 'Tarea',
+      attributes: [
+        createAttribute({ id: 'A1', name: 'id', type: 'Long', isIdentifier: true }),
+        createAttribute({ id: 'A2', name: 'estado', type: 'Estado' }),
+      ],
+    });
+    return createDiagram({ id: 'D1', name: 'Tareas', classes: { E1: estado, C1: tarea } });
+  }
+
+  it('rechaza dos literales que coinciden al pasarlos a mayúsculas', () => {
+    const result = validateDiagram(enumCon(['activo', 'ACTIVO', 'inactivo']));
+    expect(result.ok).toBe(false);
+    expect(result.errors).toEqual([
+      expect.objectContaining({
+        code: 'DUPLICATE_ENUM_LITERAL',
+        elementId: 'E1',
+        message:
+          'Los literales «activo» y «ACTIVO» de «Estado» generan el mismo valor Java «ACTIVO».',
+      }),
+    ]);
+  });
+
+  it('avisa de que un literal en minúsculas se genera en mayúsculas', () => {
+    const result = validateDiagram(enumCon(['pendiente', 'PAGADA']));
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([
+      expect.objectContaining({
+        code: 'ENUM_LITERAL_UPPERCASED',
+        elementId: 'E1',
+        message: 'El literal «pendiente» de «Estado» se generará como «PENDIENTE».',
+      }),
+    ]);
+  });
+
+  it('no avisa de un literal que ya está en mayúsculas', () => {
+    expect(validateDiagram(enumCon(['PAGADA'])).warnings).toEqual([]);
+  });
+
+  it('avisa de que una dependencia no genera código', () => {
+    const a = createClass({ id: 'A', name: 'Pedido' });
+    const b = createClass({ id: 'B', name: 'Reporte' });
+    const result = validateDiagram(
+      createDiagram({
+        id: 'D2',
+        name: 'Dependencias',
+        classes: { A: a, B: b },
+        relations: { R1: createRelation({ id: 'R1', kind: 'dependency', sourceId: 'A', targetId: 'B' }) },
+      }),
+    );
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({
+        code: 'DEPENDENCY_NOT_GENERATED',
+        elementId: 'R1',
+        message: 'La dependencia de «Pedido» a «Reporte» es solo documental: no genera código.',
+      }),
+    );
+  });
+
+  it('sigue aceptando literales distintos', () => {
+    const result = validateDiagram(enumCon(['activo', 'inactivo']));
+    expect(result.errors).toEqual([]);
+  });
+});
+
+describe('identificadores y herencia en PostgreSQL', () => {
+  function conId(tipo: 'Long' | 'UUID' | 'String'): ClassDiagram {
+    const producto = createClass({
+      id: 'C1',
+      name: 'Producto',
+      attributes: [
+        createAttribute({ id: 'A1', name: 'id', type: tipo, isIdentifier: true }),
+        createAttribute({ id: 'A2', name: 'nombre', type: 'String' }),
+      ],
+    });
+    return createDiagram({ id: 'D1', name: 'Catalogo', classes: { C1: producto } });
+  }
+
+  /** Persona (abstracta) ← Empleado (salario, * → 0..1 Sede), ← Cliente (atributo `dtype`). */
+  function jerarquia(): ClassDiagram {
+    const persona = createClass({
+      id: 'C1',
+      name: 'Persona',
+      kind: 'abstract',
+      attributes: [
+        createAttribute({ id: 'A1', name: 'id', type: 'Long', isIdentifier: true }),
+        createAttribute({ id: 'A2', name: 'nombre', type: 'String', isNullable: false }),
+      ],
+    });
+    const empleado = createClass({
+      id: 'C2',
+      name: 'Empleado',
+      attributes: [
+        createAttribute({ id: 'A3', name: 'salario', type: 'Decimal', isNullable: false }),
+      ],
+    });
+    const cliente = createClass({
+      id: 'C3',
+      name: 'Cliente',
+      attributes: [createAttribute({ id: 'A4', name: 'dtype', type: 'String' })],
+    });
+    const sede = createClass({
+      id: 'C4',
+      name: 'Sede',
+      attributes: [createAttribute({ id: 'A5', name: 'id', type: 'Long', isIdentifier: true })],
+    });
+    const diagram = createDiagram({
+      id: 'D1',
+      name: 'Personas',
+      classes: { C1: persona, C2: empleado, C3: cliente, C4: sede },
+    });
+    return {
+      ...diagram,
+      relations: {
+        R1: createRelation({ id: 'R1', kind: 'inheritance', sourceId: 'C2', targetId: 'C1' }),
+        R2: createRelation({ id: 'R2', kind: 'inheritance', sourceId: 'C3', targetId: 'C1' }),
+        R3: createRelation({
+          id: 'R3',
+          kind: 'association',
+          sourceId: 'C2',
+          targetId: 'C4',
+          sourceMultiplicity: '*',
+          targetMultiplicity: '0..1',
+          targetRole: 'sede',
+        }),
+      },
+    };
+  }
+
+  function generado(diagram: ClassDiagram, options: Parameters<typeof normalize>[1] = {}) {
+    const outcome = generate(diagram, options);
+    if (!outcome.ok) throw new Error(JSON.stringify(outcome.validation.errors));
+    return outcome.files;
+  }
+
+  /** El `CREATE TABLE` de una tabla, hasta su cierre. */
+  function tabla(files: GeneratedFile[], nombre: string): string {
+    const sql = fileNamed(files, 'V1__esquema_inicial.sql').content;
+    const desde = sql.indexOf(`CREATE TABLE ${nombre} (`);
+    if (desde < 0) throw new Error(`No hay tabla ${nombre}:\n${sql}`);
+    return sql.slice(desde, sql.indexOf(');', desde));
+  }
+
+  it('Long sigue siendo IDENTITY sobre BIGSERIAL', () => {
+    const files = generado(conId('Long'));
+    expect(fileNamed(files, 'domain/Producto.java').content).toContain(
+      '@GeneratedValue(strategy = GenerationType.IDENTITY)',
+    );
+    expect(tabla(files, 'productos')).toContain('id BIGSERIAL NOT NULL');
+  });
+
+  for (const tipo of ['UUID', 'String'] as const) {
+    it(`un id ${tipo} lo genera Hibernate y la columna no es SERIAL`, () => {
+      const files = generado(conId(tipo));
+      const entidad = fileNamed(files, 'domain/Producto.java').content;
+      expect(entidad).toContain('@GeneratedValue(strategy = GenerationType.UUID)');
+      expect(entidad).not.toContain('GenerationType.IDENTITY');
+      expect(tabla(files, 'productos')).not.toContain('SERIAL');
+    });
+  }
+
+  it('la respuesta importa UUID cuando el id lo es, y la petición no', () => {
+    const files = generado(conId('UUID'));
+    expect(fileNamed(files, 'dto/ProductoResponse.java').content).toContain(
+      'import java.util.UUID;',
+    );
+    expect(fileNamed(files, 'dto/ProductoRequest.java').content).not.toContain('java.util.UUID');
+  });
+
+  it('JOINED: cada tabla con lo suyo y la subclase unida por la clave', () => {
+    const files = generado(jerarquia(), { inheritanceStrategy: 'JOINED' });
+    const empleado = fileNamed(files, 'domain/Empleado.java').content;
+    expect(empleado).toContain('@Table(name = "empleados")');
+    expect(empleado).toContain('@PrimaryKeyJoinColumn(name = "id")');
+    expect(tabla(files, 'empleados')).not.toContain('nombre');
+    expect(tabla(files, 'personas')).not.toContain('salario');
+  });
+
+  it('SINGLE_TABLE: una sola tabla con las columnas de todas las subclases', () => {
+    const files = generado(jerarquia(), { inheritanceStrategy: 'SINGLE_TABLE' });
+    const personas = tabla(files, 'personas');
+    expect(personas).toContain('nombre VARCHAR(255) NOT NULL');
+    // De una subclase: admite NULL porque los clientes no tienen salario.
+    expect(personas).toContain('salario NUMERIC(19,2) NULL');
+    expect(personas).toContain('sede_id BIGINT NULL');
+    expect(() => tabla(files, 'empleados')).toThrow();
+
+    const empleado = fileNamed(files, 'domain/Empleado.java').content;
+    expect(empleado).not.toContain('@Table(');
+    expect(empleado).not.toContain('@PrimaryKeyJoinColumn');
+  });
+
+  it('SINGLE_TABLE: el discriminador no choca con un atributo que se llame dtype', () => {
+    const files = generado(jerarquia(), { inheritanceStrategy: 'SINGLE_TABLE' });
+    const personas = tabla(files, 'personas');
+    expect(personas).toContain('dtype_2 VARCHAR(64) NOT NULL');
+    expect(personas).toContain('dtype VARCHAR(255) NULL');
+    expect(fileNamed(files, 'domain/Persona.java').content).toContain(
+      '@DiscriminatorColumn(name = "dtype_2")',
+    );
+  });
+
+  it('TABLE_PER_CLASS: cada tabla repite lo heredado y la clave sale de una secuencia', () => {
+    const files = generado(jerarquia(), { inheritanceStrategy: 'TABLE_PER_CLASS' });
+    const empleados = tabla(files, 'empleados');
+    expect(empleados).toContain('id BIGINT NOT NULL');
+    expect(empleados).toContain('nombre VARCHAR(255) NOT NULL');
+    expect(empleados).toContain('salario NUMERIC(19,2) NOT NULL');
+    expect(fileNamed(files, 'V1__esquema_inicial.sql').content).toContain(
+      'CREATE SEQUENCE personas_seq START WITH 1 INCREMENT BY 1;',
+    );
+
+    const persona = fileNamed(files, 'domain/Persona.java').content;
+    expect(persona).toContain(
+      '@GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "personas_seq")',
+    );
+    const empleado = fileNamed(files, 'domain/Empleado.java').content;
+    expect(empleado).toContain('@Table(name = "empleados")');
+    expect(empleado).not.toContain('@PrimaryKeyJoinColumn');
+  });
+});
+
+describe('interfaces realizadas en MongoDB y Cassandra', () => {
+  for (const databaseTarget of ['mongodb', 'cassandra'] as const) {
+    it(`${databaseTarget}: la entidad declara la interfaz cuyos métodos sobrescribe`, () => {
+      const files = generateProject(normalize(rrhhDiagram(), { databaseTarget }));
+      const empleado = fileNamed(files, 'domain/Empleado.java').content;
+      expect(empleado).toContain('@Override');
+      expect(empleado).toMatch(/public class Empleado implements Auditable \{/);
+    });
+  }
+});
+
+describe('valores únicos', () => {
+  for (const databaseTarget of ['postgres', 'mongodb', 'cassandra'] as const) {
+    it(`${databaseTarget}: un duplicado responde 409 y no 500`, () => {
+      const files = generateProject(normalize(tiendaDiagram(), { databaseTarget }));
+      const manejador = fileNamed(files, 'exception/GlobalExceptionHandler.java').content;
+      expect(manejador).toContain('@ExceptionHandler(DataIntegrityViolationException.class)');
+      expect(manejador).toContain('HttpStatus.CONFLICT');
+    });
+  }
+
+  it('mongodb: el campo único lleva un índice único que Spring crea al arrancar', () => {
+    const files = generateProject(normalize(tiendaDiagram(), { databaseTarget: 'mongodb' }));
+    const cliente = fileNamed(files, 'domain/Cliente.java').content;
+    expect(cliente).toMatch(/@Indexed\(unique = true, sparse = true\)\s+private String email;/);
+    expect(cliente).toContain('import org.springframework.data.mongodb.core.index.Indexed;');
+    expect(fileNamed(files, 'application.yml').content).toContain('auto-index-creation: true');
+  });
+
+  it('cassandra: el servicio comprueba el valor único antes de guardar', () => {
+    const files = generateProject(normalize(tiendaDiagram(), { databaseTarget: 'cassandra' }));
+    const servicio = fileNamed(files, 'service/impl/ClienteServiceImpl.java').content;
+    const crear = servicio.slice(servicio.indexOf('create(ClienteRequest request)'));
+    expect(crear.slice(0, crear.indexOf('repository.save'))).toContain(
+      'repository.existsByEmail(request.email())',
+    );
+    const actualizar = servicio.slice(servicio.indexOf('update(String id, ClienteRequest request)'));
+    expect(actualizar.slice(0, actualizar.indexOf('repository.save'))).toContain(
+      'repository.findByEmail(request.email()).filter(otro -> !otro.getId().equals(id)).isPresent()',
+    );
+    expect(servicio).toContain('throw new DuplicateKeyException(');
+  });
+
+  it('una entidad sin campos únicos no cambia su servicio Cassandra', () => {
+    const files = generateProject(normalize(tiendaDiagram(), { databaseTarget: 'cassandra' }));
+    const servicio = fileNamed(files, 'service/impl/PedidoServiceImpl.java').content;
+    expect(servicio).not.toContain('DuplicateKeyException');
+  });
+});
+
+describe('muchos-a-muchos en MongoDB y Cassandra', () => {
+  for (const databaseTarget of ['mongodb', 'cassandra'] as const) {
+    it(`${databaseTarget}: el lado propietario guarda la lista de ids y la expone en los DTOs`, () => {
+      const files = generateProject(normalize(tiendaDiagram(), { databaseTarget }));
+      const producto = fileNamed(files, 'domain/Producto.java').content;
+      expect(producto).toContain('private List<String> categoriasIds = new ArrayList<>();');
+      expect(producto).toContain('public List<String> getCategoriasIds()');
+      expect(producto).toContain('public void setCategoriasIds(List<String> categoriasIds)');
+
+      const peticion = fileNamed(files, 'dto/ProductoRequest.java').content;
+      expect(peticion).toContain('List<String> categoriasIds');
+      expect(peticion).toContain('import java.util.List;');
+      expect(fileNamed(files, 'dto/ProductoResponse.java').content).toContain(
+        'List<String> categoriasIds',
+      );
+
+      const mapeador = fileNamed(files, 'dto/mapper/ProductoMapper.java').content;
+      expect(mapeador).toContain('entity.getCategoriasIds()');
+      expect(mapeador).toContain(
+        'entity.setCategoriasIds(request.categoriasIds() == null ? new ArrayList<>() : new ArrayList<>(request.categoriasIds()));',
+      );
+
+      // El lado inverso no duplica la relación: se deduce del propietario.
+      expect(fileNamed(files, 'domain/Categoria.java').content).not.toContain('Ids');
+    });
+  }
+
+  it('postgres no cambia: la N:M sigue siendo una tabla de unión', () => {
+    const files = generateProject(normalize(tiendaDiagram()));
+    expect(fileNamed(files, 'domain/Producto.java').content).not.toContain('categoriasIds');
+  });
+});
+
+describe('datos iniciales en MongoDB y Cassandra', () => {
+  function conDatos(): ClassDiagram {
+    const estado = createClass({ id: 'E1', name: 'Estado', kind: 'enum', literals: ['ACTIVO', 'BAJA'] });
+    const empleado = createClass({
+      id: 'C1',
+      name: 'Empleado',
+      attributes: [
+        createAttribute({ id: 'A1', name: 'id', type: 'Long', isIdentifier: true }),
+        createAttribute({ id: 'A2', name: 'nombre', type: 'String' }),
+        createAttribute({ id: 'A3', name: 'salario', type: 'Decimal' }),
+        createAttribute({ id: 'A4', name: 'activo', type: 'Boolean' }),
+        createAttribute({ id: 'A5', name: 'alta', type: 'Date' }),
+        createAttribute({ id: 'A6', name: 'estado', type: 'Estado' }),
+      ],
+      seedRows: [
+        { id: '7', nombre: 'Ana "la jefa"', salario: '2500.50', activo: 'sí', alta: '2024-03-01', estado: 'activo' },
+        { nombre: 'Beto' },
+      ],
+    });
+    return createDiagram({ id: 'D1', name: 'Datos', classes: { E1: estado, C1: empleado } });
+  }
+
+  for (const databaseTarget of ['mongodb', 'cassandra'] as const) {
+    it(`${databaseTarget}: un cargador inserta las filas al arrancar si no hay ninguna`, () => {
+      const outcome = generate(conDatos(), { databaseTarget });
+      if (!outcome.ok) throw new Error(JSON.stringify(outcome.validation.errors));
+      const carga = fileNamed(outcome.files, 'infraestructura/CargaDatosIniciales.java').content;
+      expect(carga).toContain('implements CommandLineRunner');
+      expect(carga).toContain('if (empleadoRepository.count() == 0) {');
+      expect(carga).toContain('empleado1.setId("7");');
+      expect(carga).toContain('empleado1.setNombre("Ana \\"la jefa\\"");');
+      expect(carga).toContain('empleado1.setSalario(new java.math.BigDecimal("2500.50"));');
+      expect(carga).toContain('empleado1.setActivo(booleano("sí"));');
+      expect(carga).toContain('empleado1.setAlta(java.time.LocalDate.parse("2024-03-01"));');
+      expect(carga).toContain('empleado1.setEstado(com.ejemplo.proyecto.domain.Estado.valueOf("ACTIVO"));');
+      expect(carga).toContain('empleadoRepository.save(empleado2);');
+      expect(carga).not.toContain('empleado2.setSalario');
+    });
+  }
+
+  it('cassandra: una fila sin id recibe una clave al cargarse', () => {
+    const outcome = generate(conDatos(), { databaseTarget: 'cassandra' });
+    if (!outcome.ok) throw new Error('inválido');
+    const carga = fileNamed(outcome.files, 'infraestructura/CargaDatosIniciales.java').content;
+    expect(carga).toContain('empleado2.setId(java.util.UUID.randomUUID().toString());');
+  });
+
+  it('sin filas no se genera cargador', () => {
+    for (const databaseTarget of ['mongodb', 'cassandra'] as const) {
+      const files = generateProject(normalize(tiendaDiagram(), { databaseTarget }));
+      expect(files.some((f) => f.path.endsWith('CargaDatosIniciales.java'))).toBe(false);
+    }
+  });
+
+  it('postgres sigue usando la migración de datos y no el cargador', () => {
+    const outcome = generate(conDatos());
+    if (!outcome.ok) throw new Error('inválido');
+    expect(outcome.files.some((f) => f.path.endsWith('V2__datos_iniciales.sql'))).toBe(true);
+    expect(outcome.files.some((f) => f.path.endsWith('CargaDatosIniciales.java'))).toBe(false);
+  });
+});
+
+describe('N:M en PostgreSQL', () => {
+  const files = generateProject(normalize(tiendaDiagram()));
+
+  it('los DTOs transportan la lista de ids del lado propietario', () => {
+    expect(fileNamed(files, 'dto/ProductoRequest.java').content).toContain('List<Long> categoriasIds');
+    expect(fileNamed(files, 'dto/ProductoResponse.java').content).toContain('List<Long> categoriasIds');
+    expect(fileNamed(files, 'dto/ProductoRequest.java').content).toContain('import java.util.List;');
+  });
+
+  it('el mapeador resuelve cada id contra su repositorio y responde con los ids', () => {
+    const mapper = fileNamed(files, 'dto/mapper/ProductoMapper.java').content;
+    expect(mapper).toContain('private final CategoriaRepository categoriaRepository;');
+    expect(mapper).toContain('entity.getCategorias().stream().map(Categoria::getId).toList()');
+    expect(mapper).toContain('if (request.categoriasIds() != null) {');
+    expect(mapper).toContain('entity.setCategorias(request.categoriasIds().stream()');
+    expect(mapper).toContain('new ResourceNotFoundException("Categoria", idDestino)');
+    expect(mapper).toContain('import java.util.HashSet;');
+    expect(mapper).toContain('import java.util.stream.Collectors;');
+  });
+
+  it('el lado inverso no repite la lista', () => {
+    expect(fileNamed(files, 'dto/CategoriaRequest.java').content).not.toContain('Ids');
+  });
+});
+
+describe('asociaciones heredadas', () => {
+  const files = generateProject(normalize(mixtoDiagram()));
+
+  it('el DTO de la subclase las transporta y el mapeador las resuelve', () => {
+    expect(fileNamed(files, 'dto/ClienteRequest.java').content).toContain('Long direccionId');
+    expect(fileNamed(files, 'dto/ClienteResponse.java').content).toContain('Long direccionId');
+    expect(fileNamed(files, 'dto/mapper/ClienteMapper.java').content).toContain('entity.setDireccion(');
+  });
+
+  it('una clase abstracta referenciada tiene repositorio; sin referencias, no', () => {
+    expect(fileNamed(files, 'repository/PersonaRepository.java').content).toContain('PersonaRepository');
+    expect(fileNamed(files, 'dto/mapper/ArticuloMapper.java').content).toContain('personaRepository.findById');
+    const rrhh = generateProject(normalize(rrhhDiagram()));
+    expect(rrhh.some((f) => f.path.endsWith('repository/PersonaRepository.java'))).toBe(false);
+  });
+
+  it('una asociación propia con el mismo nombre gana a la heredada', () => {
+    const ir = normalize(mixtoDiagram());
+    const cliente = ir.entities.find((e) => e.className === 'Cliente')!;
+    const heredada = ir.entities.find((e) => e.className === 'Persona')!.associations[0]!;
+    const vista = buildEntityView(ir, { ...cliente, associations: [...cliente.associations, heredada] });
+    expect(vista.requestComponents.filter((c) => c.name === 'direccionId')).toHaveLength(1);
+  });
+
+  it.each(['mongodb', 'cassandra'] as const)('%s guarda el id plano en la subclase', (databaseTarget) => {
+    const nosql = generateProject(normalize(mixtoDiagram(), { databaseTarget }));
+    expect(fileNamed(nosql, 'domain/Cliente.java').content).toContain('private String direccionId;');
+  });
+});
+
+describe('colección Postman con destinos abstractos', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const carpeta = (nombre: string): any =>
+    JSON.parse(fileNamed(generateProject(normalize(mixtoDiagram())), 'postman_collection.json').content).item.find(
+      (f: { name: string }) => f.name === nombre,
+    );
+
+  it('una referencia a una clase abstracta usa el id de una subclase concreta', () => {
+    expect(carpeta('Articulo').item[1].request.body.raw).toContain('"personaId": {{clienteId}}');
+  });
+
+  it('una N:M reflexiva empieza vacía: el registro aún no existe', () => {
+    expect(carpeta('Articulo').item[1].request.body.raw).toMatch(/"targetsIds": \[\]/);
+  });
+
+  it('la subclase concreta se crea antes que quien la referencia', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const orden = JSON.parse(
+      fileNamed(generateProject(normalize(mixtoDiagram())), 'postman_collection.json').content,
+    ).item.map((f: { name: string }) => f.name);
+    expect(orden.indexOf('Cliente')).toBeLessThan(orden.indexOf('Articulo'));
   });
 });

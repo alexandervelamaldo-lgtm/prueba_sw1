@@ -5,6 +5,12 @@
 -- nueva con versión superior en lugar de editar esta: reescribir una migración
 -- ya aplicada deja la checksum inconsistente y el arranque falla.
 
+{{#each migration.sequences}}
+-- Secuencia compartida por la jerarquía: con TABLE_PER_CLASS las filas de
+-- varias tablas comparten el espacio de ids, así que no puede ser SERIAL.
+CREATE SEQUENCE {{{this}}} START WITH 1 INCREMENT BY 1;
+
+{{/each}}
 {{#each migration.tables}}
 CREATE TABLE {{{this.name}}} (
 {{#each this.columns}}

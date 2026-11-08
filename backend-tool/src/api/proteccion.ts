@@ -48,6 +48,9 @@ const POLITICA_DE_CONTENIDO = [
   // enseña antes de subirla y la referencia con una de esas dos formas.
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
+  // La voz de ElevenLabs se reproduce desde una URL `blob:`; sin esto el audio
+  // no carga y el Modo IA cae a la voz del navegador.
+  "media-src 'self' blob:",
   "worker-src 'self' blob:",
   `connect-src 'self' ${CONEXIONES_LOCALES.join(' ')}`,
 ].join('; ');

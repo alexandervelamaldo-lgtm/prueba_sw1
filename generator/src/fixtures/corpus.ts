@@ -327,8 +327,105 @@ export function minimoDiagram(): ClassDiagram {
   });
 }
 
+/**
+ * Lo que la revisión del 2026-11-01 encontró sin cubrir: una entidad solo con
+ * identificador, una herencia cuya raíz tiene una asociación obligatoria, una
+ * asociación hacia una clase abstracta, y una N:M reflexiva junto a una corriente.
+ */
+export function mixtoDiagram(): ClassDiagram {
+  const pk = (n: number) =>
+    createAttribute({ id: id('X', n), name: 'id', type: 'Long', isIdentifier: true });
+  const reporte = createClass({ id: id('M', 1), name: 'Reporte', attributes: [pk(1)] });
+  const direccion = createClass({
+    id: id('M', 2),
+    name: 'Direccion',
+    attributes: [pk(2), createAttribute({ id: id('X', 3), name: 'calle', type: 'String', isNullable: false })],
+  });
+  const persona = createClass({
+    id: id('M', 3),
+    name: 'Persona',
+    kind: 'abstract',
+    attributes: [pk(4), createAttribute({ id: id('X', 5), name: 'nombre', type: 'String', isNullable: false })],
+  });
+  const cliente = createClass({
+    id: id('M', 4),
+    name: 'Cliente',
+    attributes: [createAttribute({ id: id('X', 6), name: 'telefono', type: 'String' })],
+  });
+  const articulo = createClass({
+    id: id('M', 5),
+    name: 'Articulo',
+    attributes: [pk(7), createAttribute({ id: id('X', 8), name: 'titulo', type: 'String', isNullable: false })],
+  });
+  const pedido = createClass({
+    id: id('M', 6),
+    name: 'Pedido',
+    attributes: [pk(9), createAttribute({ id: id('X', 10), name: 'total', type: 'Decimal', isNullable: false })],
+  });
+
+  return createDiagram({
+    id: 'corpus-mixto',
+    name: 'Mixto',
+    meta: { basePackage: 'com.ejemplo.mixto', artifactId: 'mixto', description: 'Casos de la revisión' },
+    classes: {
+      [reporte.id]: reporte,
+      [direccion.id]: direccion,
+      [persona.id]: persona,
+      [cliente.id]: cliente,
+      [articulo.id]: articulo,
+      [pedido.id]: pedido,
+    },
+    relations: Object.fromEntries(
+      [
+        createRelation({ id: id('T', 1), kind: 'inheritance', sourceId: cliente.id, targetId: persona.id }),
+        createRelation({
+          id: id('T', 2),
+          kind: 'association',
+          sourceId: persona.id,
+          targetId: direccion.id,
+          sourceMultiplicity: '*',
+          targetMultiplicity: '1',
+        }),
+        createRelation({
+          id: id('T', 3),
+          kind: 'association',
+          sourceId: pedido.id,
+          targetId: cliente.id,
+          sourceMultiplicity: '*',
+          targetMultiplicity: '1',
+        }),
+        createRelation({
+          id: id('T', 4),
+          kind: 'association',
+          sourceId: pedido.id,
+          targetId: articulo.id,
+          sourceMultiplicity: '*',
+          targetMultiplicity: '*',
+        }),
+        createRelation({
+          id: id('T', 6),
+          kind: 'association',
+          sourceId: articulo.id,
+          targetId: persona.id,
+          sourceMultiplicity: '*',
+          targetMultiplicity: '0..1',
+        }),
+        createRelation({
+          id: id('T', 5),
+          kind: 'association',
+          sourceId: articulo.id,
+          targetId: articulo.id,
+          sourceMultiplicity: '*',
+          targetMultiplicity: '*',
+        }),
+      ].map((r) => [r.id, r]),
+    ),
+  });
+}
+
 export const CORPUS: { name: string; diagram: () => ClassDiagram }[] = [
   { name: 'tienda', diagram: tiendaDiagram },
   { name: 'rrhh', diagram: rrhhDiagram },
   { name: 'minimo', diagram: minimoDiagram },
+  { name: 'mixto', diagram: mixtoDiagram },
 ];

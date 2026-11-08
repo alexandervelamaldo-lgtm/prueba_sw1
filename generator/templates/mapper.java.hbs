@@ -3,7 +3,7 @@ package {{{pkg}}}.dto.mapper;
 import {{{pkg}}}.domain.{{{entity.className}}};
 import {{{pkg}}}.dto.{{{entity.className}}}Request;
 import {{{pkg}}}.dto.{{{entity.className}}}Response;
-{{#if toOneAssociations}}
+{{#if repositoryDependencies}}
 import {{{project.basePackage}}}.exception.ResourceNotFoundException;
 {{/if}}
 {{#each repositoryDependencies}}
@@ -13,6 +13,10 @@ import {{{packageName}}}.repository.{{{className}}}Repository;
 import {{{packageName}}}.domain.{{{className}}};
 {{/each}}
 import org.springframework.stereotype.Component;
+{{#if hasToManyIdLists}}
+import java.util.HashSet;
+import java.util.stream.Collectors;
+{{/if}}
 {{#each dtoImports}}
 import {{{this}}};
 {{/each}}
@@ -24,6 +28,9 @@ import {{{this}}};
  * un identificador y el mapeador recupera la entidad, fallando con 404 si no
  * existe. Se hace aquí y no en el servicio para que la capa 3 no dependa de los
  * repositorios de otras entidades.
+{{#if hasToManyIdLists}}
+ * Las listas de una N:M siguen la misma regla, id por id.
+{{/if}}
  *
  * Generado a partir del diagrama «{{{project.name}}}». No editar a mano.
  */
@@ -75,6 +82,15 @@ public class {{{entity.className}}}Mapper {
         entity.{{{setterName}}}({{{targetVar}}}Repository.findById(request.{{{idComponentName}}}())
                 .orElseThrow(() -> new ResourceNotFoundException("{{{targetClass}}}", request.{{{idComponentName}}}())));
 {{/if}}
+{{/each}}
+{{#each toManyIdLists}}
+        // Sin lista no se toca la relación: quien no la conoce no debe vaciarla al modificar.
+        if (request.{{{name}}}() != null) {
+            entity.{{{associationSetterName}}}(request.{{{name}}}().stream()
+                    .map(idDestino -> {{{targetVar}}}Repository.findById(idDestino)
+                            .orElseThrow(() -> new ResourceNotFoundException("{{{targetClass}}}", idDestino)))
+                    .collect(Collectors.toCollection(HashSet::new)));
+        }
 {{/each}}
     }
 }

@@ -1,0 +1,54 @@
+package {{{project.basePackage}}}.infraestructura;
+
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.stereotype.Component;
+
+/**
+ * Datos iniciales del diagrama «{{{project.name}}}».
+ *
+ * Filas de ejemplo capturadas en la herramienta —a mano o leyendo una tabla
+ * fotografiada—. Hacen lo que `V2__datos_iniciales.sql` en la variante
+ * PostgreSQL: se cargan al arrancar, y solo en una colección vacía, para no
+ * duplicarlas en cada arranque ni pisar lo que ya se haya guardado.
+ *
+ * Generado a partir del diagrama. No editar a mano.
+ */
+@Component
+public class CargaDatosIniciales implements CommandLineRunner {
+
+{{#each cargas}}
+    private final {{{repositoryClass}}} {{{repositoryVar}}};
+{{/each}}
+
+    public CargaDatosIniciales(
+{{#each cargas}}
+            {{{repositoryClass}}} {{{repositoryVar}}}{{#unless @last}},{{/unless}}
+{{/each}}
+    ) {
+{{#each cargas}}
+        this.{{{repositoryVar}}} = {{{repositoryVar}}};
+{{/each}}
+    }
+
+    @Override
+    public void run(String... args) {
+{{#each cargas}}
+        if ({{{repositoryVar}}}.count() == 0) {
+{{#each filas}}
+            {{{../entityClass}}} {{{variable}}} = new {{{../entityClass}}}();
+{{#each sentencias}}
+            {{{this}}}
+{{/each}}
+            {{{../repositoryVar}}}.save({{{variable}}});
+{{/each}}
+        }
+{{/each}}
+    }
+
+    /** Los mismos valores que PostgreSQL acepta como verdadero, más «sí». */
+    private static Boolean booleano(String valor) {
+        String v = valor.trim().toLowerCase();
+        return v.equals("true") || v.equals("t") || v.equals("1") || v.equals("yes")
+                || v.equals("y") || v.equals("on") || v.equals("sí") || v.equals("si");
+    }
+}

@@ -247,6 +247,69 @@ describe('contraste AA en los dos temas', () => {
       }
     }
   });
+
+  describe('paleta propia del Modo IA: contraste AA en los dos temas', () => {
+    const PARES_IA: [string, string, string][] = [
+      ['--ia-texto', '--ia-fondo', 'texto principal sobre lienzo IA'],
+      ['--ia-texto', '--ia-fondo-2', 'texto principal sobre barra flotante IA'],
+      ['--ia-texto', '--ia-fondo-3', 'texto principal sobre control IA'],
+      ['--ia-texto-2', '--ia-fondo', 'texto secundario sobre lienzo IA'],
+      ['--ia-texto-2', '--ia-fondo-2', 'texto secundario sobre barra flotante IA'],
+      ['--ia-texto-2', '--ia-fondo-3', 'texto secundario sobre control IA'],
+      ['--ia-acento', '--ia-fondo', 'acento sobre lienzo IA'],
+      ['--ia-acento', '--ia-fondo-2', 'acento sobre barra flotante IA'],
+      ['--ia-acento', '--ia-fondo-3', 'acento sobre control IA'],
+      ['--ia-sobre-acento', '--ia-acento', 'texto sobre botón acento IA'],
+      ['--ia-sobre-acento', '--ia-acento-2', 'texto sobre botón acento señalado IA'],
+    ];
+
+    for (const [tema, tabla] of [
+      ['oscuro', OSCURO],
+      ['claro', CLARO],
+    ] as const) {
+      describe(`tema ${tema}`, () => {
+        for (const [frente, fondo, donde] of PARES_IA) {
+          it(`${donde}: ${frente} sobre ${fondo}`, () => {
+            const a = tabla[frente] ?? OSCURO[frente];
+            const b = tabla[fondo] ?? OSCURO[fondo];
+            expect(a, `${frente} no está definida`).toBeDefined();
+            expect(b, `${fondo} no está definida`).toBeDefined();
+            const ratio = contraste(a as string, b as string);
+            expect(
+              ratio,
+              `${frente} (${a as string}) sobre ${fondo} (${b as string}) da ${ratio.toFixed(2)}:1`,
+            ).toBeGreaterThanOrEqual(4.5);
+          });
+        }
+      });
+    }
+
+    it('el acento IA tiene personalidad propia y rango acotado', () => {
+      for (const [tema, tabla] of [
+        ['oscuro', OSCURO],
+        ['claro', CLARO],
+      ] as const) {
+        const hex = ((tabla['--ia-acento'] ?? OSCURO['--ia-acento']) as string).replace('#', '');
+        const c = [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+        const rango = Math.max(...c) - Math.min(...c);
+        expect(rango).toBeLessThanOrEqual(210);
+      }
+    });
+
+    it('la paleta IA se distingue claramente del editor normal', () => {
+      for (const [tema, tabla] of [
+        ['oscuro', OSCURO],
+        ['claro', CLARO],
+      ] as const) {
+        const fondoNormal = (tabla['--fondo'] ?? OSCURO['--fondo']) as string;
+        const fondoIA = (tabla['--ia-fondo'] ?? OSCURO['--ia-fondo']) as string;
+        expect(fondoIA).not.toBe(fondoNormal);
+        const acentoNormal = (tabla['--acento'] ?? OSCURO['--acento']) as string;
+        const acentoIA = (tabla['--ia-acento'] ?? OSCURO['--ia-acento']) as string;
+        expect(acentoIA).not.toBe(acentoNormal);
+      }
+    });
+  });
 });
 
 /* --------------------------------------------------------------------------
@@ -359,6 +422,9 @@ describe('la sombra dice qué capa recibe el clic, no adorna', () => {
     // `.boton-ayuda`, y el panel que despliega flota sobre la burbuja misma.
     '.asistente-flotante__burbuja',
     '.asistente-flotante__panel',
+    // La barra flotante del Modo IA (ModoIA en EditorDiagrama.tsx): flota centrada
+    // al fondo del lienzo, en otra capa que recibe el foco de conversación.
+    '.editor--ia .columna--derecha',
   ];
 
   it('solo llevan sombra las superficies que están en otra capa', () => {

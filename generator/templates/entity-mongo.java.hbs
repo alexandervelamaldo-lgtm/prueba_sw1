@@ -2,12 +2,19 @@ package {{{pkg}}}.domain;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
+{{#if hasUniqueAllFields}}
+import org.springframework.data.mongodb.core.index.Indexed;
+{{/if}}
 {{#if hasValidations}}
 import jakarta.validation.constraints.*;
 {{/if}}
 {{#each imports}}
 import {{{this}}};
 {{/each}}
+{{#if hasToManyIdLists}}
+import java.util.ArrayList;
+import java.util.List;
+{{/if}}
 import java.util.Objects;
 
 /**
@@ -21,7 +28,7 @@ import java.util.Objects;
  * `@DBRef` ni documento embebido.
  */
 @Document(collection = "{{{entity.tableName}}}")
-public class {{{entity.className}}} {
+public class {{{entity.className}}}{{#if hasInterfaces}} implements {{{interfaceList}}}{{/if}} {
 
     @Id
     private {{{entity.identifier.javaType}}} {{{entity.identifier.name}}};
@@ -30,11 +37,20 @@ public class {{{entity.className}}} {
 {{#each validations}}
     {{{this}}}
 {{/each}}
+{{#if unique}}
+    // `sparse`: Spring no escribe los campos a null, y sin él dos documentos
+    // sin valor chocarían en el índice único.
+    @Indexed(unique = true, sparse = true)
+{{/if}}
     private {{{javaType}}} {{{name}}};
 
 {{/each}}
 {{#each toOneAssociations}}
     private {{{idJavaType}}} {{{idFieldName}}};
+
+{{/each}}
+{{#each toManyIdLists}}
+    private List<String> {{{name}}} = new ArrayList<>();
 
 {{/each}}
     public {{{entity.className}}}() {
@@ -66,6 +82,16 @@ public class {{{entity.className}}} {
 
     public void {{{idSetterName}}}({{{idJavaType}}} {{{idFieldName}}}) {
         this.{{{idFieldName}}} = {{{idFieldName}}};
+    }
+
+{{/each}}
+{{#each toManyIdLists}}
+    public List<String> {{{getterName}}}() {
+        return {{{name}}};
+    }
+
+    public void {{{setterName}}}(List<String> {{{name}}}) {
+        this.{{{name}}} = {{{name}}};
     }
 
 {{/each}}

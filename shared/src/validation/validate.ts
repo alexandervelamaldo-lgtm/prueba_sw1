@@ -520,12 +520,41 @@ function validateEnums(diagram: ClassDiagram, issues: ValidationIssue[]): void {
       });
     }
 
+    // El generador emite cada literal en mayúsculas (`normalize.ts`), así que
+    // `activo` y `ACTIVO` son válidos por separado pero acaban en el mismo
+    // valor Java, y una enumeración con un valor repetido no compila.
+    const vistos = new Map<string, string>();
     for (const literal of cls.literals) {
       if (!isValidJavaIdentifier(literal)) {
         issues.push({
           severity: 'error',
           code: 'INVALID_ENUM_LITERAL',
           message: `El literal «${literal}» de «${cls.name}» no es un identificador Java válido.`,
+          elementId: cls.id,
+          elementName: cls.name,
+        });
+        continue;
+      }
+      const generado = literal.toUpperCase();
+      const anterior = vistos.get(generado);
+      if (anterior !== undefined) {
+        issues.push({
+          severity: 'error',
+          code: 'DUPLICATE_ENUM_LITERAL',
+          message:
+            `Los literales «${anterior}» y «${literal}» de «${cls.name}» generan el mismo ` +
+            `valor Java «${generado}».`,
+          elementId: cls.id,
+          elementName: cls.name,
+        });
+        continue;
+      }
+      vistos.set(generado, literal);
+      if (generado !== literal) {
+        issues.push({
+          severity: 'warning',
+          code: 'ENUM_LITERAL_UPPERCASED',
+          message: `El literal «${literal}» de «${cls.name}» se generará como «${generado}».`,
           elementId: cls.id,
           elementName: cls.name,
         });
@@ -569,6 +598,16 @@ function validateRelationEndpoints(diagram: ClassDiagram, issues: ValidationIssu
         message:
           `«${source.name}» realiza «${target.name}», que no es una interfaz. ` +
           `Use herencia en su lugar.`,
+        elementId: relation.id,
+        elementName: source.name,
+      });
+    }
+
+    if (relation.kind === 'dependency') {
+      issues.push({
+        severity: 'warning',
+        code: 'DEPENDENCY_NOT_GENERATED',
+        message: `La dependencia de «${source.name}» a «${target.name}» es solo documental: no genera código.`,
         elementId: relation.id,
         elementName: source.name,
       });

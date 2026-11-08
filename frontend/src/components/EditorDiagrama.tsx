@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { BorderBeam } from 'border-beam';
 import {
   writeComunicacion,
   type ClassKind,
@@ -20,6 +21,21 @@ import { PanelPropiedades } from './PanelPropiedades';
 import { Asistente } from './Asistente';
 import { ModoIA } from './ModoIA';
 import { AvatarIA, type EstadoAvatarIA } from './AvatarIA';
+import { EfectoLuminaIA, type ManejadorEfectoLumina } from './EfectoLuminaIA';
+import { BienvenidaModoIA } from './BienvenidaModoIA';
+import { OrbeIA } from './OrbeIA';
+import { IndicadorSync } from './IndicadorSync';
+import { prefiereMenosMovimiento } from './cursor-ia';
+import {
+  filtrarPanelesParaModoIA,
+  conexionConProblema,
+  veloVisible,
+  debeSalirConEscape,
+  accionEntradaModoIA,
+  etiquetaAvatarIA,
+  debeMostrarOrbe,
+  botonTemaModoIA,
+} from './modo-ia-vista';
 import type { MarcasDeBorrado } from './ia-ejecucion';
 import { ImportarDiagrama } from './ImportarDiagrama';
 import { ImportarXmi } from './ImportarXmi';
@@ -115,6 +131,7 @@ export function EditorDiagrama({
   const [saludoPendiente, setSaludoPendiente] = useState(false);
   const [estadoIA, setEstadoIA] = useState<EstadoAvatarIA>('reposo');
   const alSaludar = useCallback(() => setSaludoPendiente(false), []);
+  const efectoLuminaRef = useRef<ManejadorEfectoLumina | null>(null);
   const [herramienta, setHerramienta] = useState<'seleccion' | 'relacion'>('seleccion');
   const [tipoRelacion, setTipoRelacion] = useState<RelationKind>('association');
   // Herramienta "asociación de clase": no es un séptimo `RelationKind`, es un
@@ -146,16 +163,74 @@ export function EditorDiagrama({
   // Modo conversación: entra con el avatar y solo sale con el avatar (o al
   // cerrar el panel de la IA): mientras tanto, la IA vuelve a escuchar sola.
   const [conversacion, setConversacion] = useState(false);
+  const [modoIAInmersivo, setModoIAInmersivo] = useState(false);
+  const [bienvenidaMontada, setBienvenidaMontada] = useState(false);
+
+  const salirModoIA = useCallback(() => {
+    setModoIAInmersivo(false);
+    setConversacion(false);
+  }, []);
+
+  const alTerminarBienvenida = useCallback(() => {
+    setBienvenidaMontada(false);
+  }, []);
+
+  const orbeActivo = debeMostrarOrbe(modoIAInmersivo, estadoIA);
+  const [bienvenidaSaliendo, setBienvenidaSaliendo] = useState(false);
+  const alDesvanecerBienvenida = useCallback(() => setBienvenidaSaliendo(true), []);
+  const [orbeMontado, setOrbeMontado] = useState(false);
+
+  useEffect(() => {
+    if (orbeActivo) {
+      setOrbeMontado(true);
+    }
+  }, [orbeActivo]);
+
+  const alTerminarOrbe = useCallback(() => {
+    setOrbeMontado(false);
+  }, []);
+
   const panelIAAbierto = paneles.disposicion.abiertos.ia;
   useEffect(() => {
-    if (!panelIAAbierto) setConversacion(false);
+    if (!panelIAAbierto) {
+      setConversacion(false);
+      setModoIAInmersivo(false);
+    }
   }, [panelIAAbierto]);
+
+  useEffect(() => {
+    setBienvenidaSaliendo(false);
+    if (!modoIAInmersivo) {
+      setBienvenidaMontada(false);
+      return;
+    }
+    if (prefiereMenosMovimiento()) {
+      setBienvenidaMontada(true);
+      return;
+    }
+    const temporizador = window.setTimeout(() => {
+      setBienvenidaMontada(true);
+    }, 1250);
+    return () => {
+      window.clearTimeout(temporizador);
+    };
+  }, [modoIAInmersivo]);
   const { tema, alternar: alternarTema } = useTema();
 
   const pedirZoom = useCallback((tipo: 'acercar' | 'alejar' | 'ajustar') => {
     serie.current += 1;
     setOrden({ tipo, n: serie.current });
   }, []);
+
+  // Entrar o salir del Modo IA cambia el espacio libre del lienzo. Se espera un
+  // momento para que React Flow haya medido su tamaño nuevo antes de encuadrar.
+  const modoAnteriorRef = useRef(modoIAInmersivo);
+  useEffect(() => {
+    if (modoAnteriorRef.current === modoIAInmersivo) return;
+    modoAnteriorRef.current = modoIAInmersivo;
+    const temporizador = window.setTimeout(() => pedirZoom('ajustar'), 60);
+    return () => window.clearTimeout(temporizador);
+  }, [modoIAInmersivo, pedirZoom]);
 
   const centrar = useCallback((ids: string[]) => {
     serie.current += 1;
@@ -316,12 +391,29 @@ export function EditorDiagrama({
     [aplicar, avisar, tipoRelacion, claseAsociacionActiva, estado.diagrama.classes],
   );
 
+  // `Esc` en el Modo IA, antes de que nadie más atienda la tecla: en la fase de
+  // burbuja un diálogo ya se habría cerrado con ella, y se saldría también del modo.
+  useEffect(() => {
+    if (!modoIAInmersivo) return;
+    const alPulsar = (evento: KeyboardEvent): void => {
+      const hayModalAbierto = Boolean(
+        document.querySelector('dialog[open], [role="dialog"], .modal, .modal__caja'),
+      );
+      if (debeSalirConEscape(evento, hayModalAbierto, true)) salirModoIA();
+    };
+    window.addEventListener('keydown', alPulsar, true);
+    return () => window.removeEventListener('keydown', alPulsar, true);
+  }, [modoIAInmersivo, salirModoIA]);
+
   // Atajos. Se ignoran mientras se escribe en un campo: si no, teclear el nombre
   // de una clase con una «s» dispararía el atajo en vez de escribir la letra.
   useEffect(() => {
     const alPulsar = (evento: KeyboardEvent): void => {
       const destino = evento.target as HTMLElement | null;
-      if (destino && /^(INPUT|TEXTAREA|SELECT)$/.test(destino.tagName)) return;
+      const esCampo = Boolean(destino && /^(INPUT|TEXTAREA|SELECT)$/.test(destino.tagName));
+
+      if (modoIAInmersivo && evento.key === 'Escape') return;
+      if (esCampo) return;
 
       if ((evento.ctrlKey || evento.metaKey) && evento.key.toLowerCase() === 'z') {
         evento.preventDefault();
@@ -342,7 +434,7 @@ export function EditorDiagrama({
 
     window.addEventListener('keydown', alPulsar);
     return () => window.removeEventListener('keydown', alPulsar);
-  }, [estado, seleccion, soloLectura, aplicar]);
+  }, [estado, seleccion, soloLectura, aplicar, modoIAInmersivo]);
 
   /*
     Aquí estaba `descargar`, que bajaba el ZIP en cuanto se pulsaba la orden del
@@ -553,6 +645,17 @@ export function EditorDiagrama({
 
   const ejecutar = useCallback(
     (id: string) => {
+      if (id === 'ver:ia') {
+        const accion = accionEntradaModoIA('menu');
+        if (accion.dispararEfecto) {
+          efectoLuminaRef.current?.disparar();
+        }
+        paneles.abrir('ia');
+        if (accion.iniciarSaludo) setSaludoPendiente(true);
+        if (accion.iniciarConversacion) setConversacion(true);
+        setModoIAInmersivo(true);
+        return;
+      }
       if (id.startsWith('ver:')) {
         paneles.alternar(id.slice(4) as Acoplado);
         return;
@@ -676,25 +779,62 @@ export function EditorDiagrama({
   );
 
   return (
-    <div className="editor">
+    <div className={`editor${modoIAInmersivo ? ' editor--ia' : ''}`}>
+      <EfectoLuminaIA ref={efectoLuminaRef} />
       <header className="barra">
-        <BarraMenu menus={menus} onComando={ejecutar} />
+        {!modoIAInmersivo && <BarraMenu menus={menus} onComando={ejecutar} />}
         {autor && (
           <AvatarIA
             estado={estadoIA}
             activo={conversacion}
-            onClick={() => {
-              if (conversacion) {
-                setConversacion(false);
+            etiqueta={etiquetaAvatarIA(modoIAInmersivo, conversacion)}
+            onClick={(evento) => {
+              if (modoIAInmersivo) {
+                setConversacion((actual) => !actual);
                 return;
               }
+              const accion = accionEntradaModoIA('avatar');
+              if (accion.dispararEfecto) {
+                efectoLuminaRef.current?.disparar(evento?.clientX, evento?.clientY);
+              }
               paneles.abrir('ia');
-              setSaludoPendiente(true);
-              setConversacion(true);
+              if (accion.iniciarSaludo) setSaludoPendiente(true);
+              if (accion.iniciarConversacion) setConversacion(true);
+              setModoIAInmersivo(true);
             }}
           />
         )}
         <h1 className="barra__titulo">{proyecto.name}</h1>
+
+        {modoIAInmersivo && (
+          <div className="barra__acciones-ia">
+            {conexionConProblema(estado.conexion, estado.sincronizado) && (
+              <IndicadorSync
+                estado={estado.conexion}
+                detalle={estado.detalleConexion}
+                sincronizado={estado.sincronizado}
+                participantes={[]}
+              />
+            )}
+            <button
+              type="button"
+              className="barra__boton barra__boton--tema-ia"
+              onClick={alternarTema}
+              aria-label={botonTemaModoIA(tema).etiqueta}
+              title={botonTemaModoIA(tema).etiqueta}
+            >
+              <Icono nombre={botonTemaModoIA(tema).icono} />
+            </button>
+            <button
+              type="button"
+              className="barra__boton barra__boton--salir-ia"
+              onClick={salirModoIA}
+              title="Salir del Modo IA (Esc)"
+            >
+              Salir
+            </button>
+          </div>
+        )}
 
         {/*
           La barra de herramientas, ahora que hay menú.
@@ -709,15 +849,8 @@ export function EditorDiagrama({
           Nada de lo que hay aquí es exclusivo de la barra: todo tiene su entrada
           de menú y su atajo. Una barra de herramientas es un acceso rápido, no la
           única puerta.
-
-          En pantalla estrecha no se monta, y su sitio lo ocupa la barra del
-          pulgar de abajo. No es que estorbe: es que la cabecera es la franja más
-          lejos del pulgar de la mano que sujeta el teléfono, así que estos
-          iconos estaban donde más cuesta llegar precisamente por ser los que más
-          se pulsan. Dejar de dibujarla devuelve además su fila entera de alto al
-          lienzo, que es lo que escasea en un móvil.
         */}
-        {!estrecha && (
+        {!modoIAInmersivo && !estrecha && (
           <div className="barra__herramientas" role="group" aria-label="Herramientas del diagrama">
             <div className="barra__grupo">
               {/* Con `title` a secas, un lector de pantalla anuncia el icono y nada
@@ -838,6 +971,20 @@ export function EditorDiagrama({
         con la plantilla escrita en el `style` no habría forma de que la
         cambiara.
       */}
+      {/*
+        El borde de la IA queda siempre montado y solo cambia `active`: envolver
+        el cuerpo de forma condicional remontaría el lienzo y todos los paneles
+        cada vez que el modo conversación entra o sale.
+      */}
+      <BorderBeam
+        className="editor__borde-ia"
+        active={conversacion}
+        size="md"
+        colorVariant="colorful"
+        staticColors
+        theme={tema === 'claro' ? 'light' : 'dark'}
+        borderRadius={0}
+      >
       <main
         className="editor__cuerpo"
         ref={paneles.cuerpo}
@@ -851,35 +998,38 @@ export function EditorDiagrama({
         <ColumnaAcoplada
           lado="izquierda"
           control={paneles}
-          paneles={[
-            {
-              acoplado: 'arbol',
-              contenido: (
-                <ArbolProyecto
-                  diagrama={estado.diagrama}
-                  nombreProyecto={proyecto.name}
-                  seleccion={seleccion}
-                  onSeleccionar={setSeleccion}
-                  onCentrar={centrar}
-                />
-              ),
-            },
-            {
-              acoplado: 'paleta',
-              contenido: (
-                <Paleta
-                  soloLectura={soloLectura}
-                  herramienta={herramienta}
-                  tipoRelacion={tipoRelacion}
-                  claseAsociacionActiva={claseAsociacionActiva}
-                  onCrear={crearClase}
-                  onArmarRelacion={armarRelacion}
-                  onArmarClaseAsociacion={armarClaseAsociacion}
-                  onSeleccionar={seleccionar}
-                />
-              ),
-            },
-          ]}
+          paneles={filtrarPanelesParaModoIA(
+            [
+              {
+                acoplado: 'arbol',
+                contenido: (
+                  <ArbolProyecto
+                    diagrama={estado.diagrama}
+                    nombreProyecto={proyecto.name}
+                    seleccion={seleccion}
+                    onSeleccionar={setSeleccion}
+                    onCentrar={centrar}
+                  />
+                ),
+              },
+              {
+                acoplado: 'paleta',
+                contenido: (
+                  <Paleta
+                    soloLectura={soloLectura}
+                    herramienta={herramienta}
+                    tipoRelacion={tipoRelacion}
+                    claseAsociacionActiva={claseAsociacionActiva}
+                    onCrear={crearClase}
+                    onArmarRelacion={armarRelacion}
+                    onArmarClaseAsociacion={armarClaseAsociacion}
+                    onSeleccionar={seleccionar}
+                  />
+                ),
+              },
+            ],
+            modoIAInmersivo,
+          )}
         />
 
         <LienzoFlow
@@ -893,109 +1043,145 @@ export function EditorDiagrama({
           onCursor={alMoverCursor}
           onRelacionar={relacionar}
           orden={orden}
+          enModoIA={modoIAInmersivo}
           onEscala={setEscala}
           aBorrar={aBorrar}
         />
 
+        {modoIAInmersivo && (
+          <div
+            className={`velo-ia${
+              veloVisible(bienvenidaMontada && !bienvenidaSaliendo, orbeActivo)
+                ? ' velo-ia--visible'
+                : ''
+            }`}
+            aria-hidden="true"
+          />
+        )}
+
+        {modoIAInmersivo && bienvenidaMontada && (
+          <BienvenidaModoIA
+            totalClases={Object.keys(estado.diagrama.classes).length}
+            oculta={orbeMontado}
+            onDesvanecer={alDesvanecerBienvenida}
+            onTerminado={alTerminarBienvenida}
+          />
+        )}
+
+        {modoIAInmersivo && orbeMontado && (
+          <OrbeIA
+            activo={orbeActivo}
+            onTerminado={alTerminarOrbe}
+          />
+        )}
+
         <ColumnaAcoplada
           lado="derecha"
           control={paneles}
-          paneles={[
-            {
-              acoplado: 'propiedades',
-              contenido: (
-                <PanelPropiedades
-                  diagrama={estado.diagrama}
-                  clase={claseSeleccionada}
-                  soloLectura={soloLectura}
-                  historial={estado.historial}
-                  aplicar={aplicar}
-                />
-              ),
-            },
-            {
-              acoplado: 'historial',
-              contenido: <HistorialCambios historial={estado.historial} />,
-            },
-            {
-              acoplado: 'tablon',
-              /*
-                Solo se monta cuando el panel está abierto, y no con `display:
-                none` como los demás. El tablón no es pintura: mientras esté
-                montado sondea al servidor cada pocos segundos. Dejarlo vivo
-                dentro de un panel plegado sería tráfico permanente por una
-                conversación que nadie está mirando.
-              */
-              contenido:
-                usuario && paneles.disposicion.abiertos.tablon ? (
-                  <PanelTablon
+          paneles={filtrarPanelesParaModoIA(
+            [
+              {
+                acoplado: 'propiedades',
+                contenido: (
+                  <PanelPropiedades
+                    diagrama={estado.diagrama}
+                    clase={claseSeleccionada}
+                    soloLectura={soloLectura}
+                    historial={estado.historial}
+                    aplicar={aplicar}
+                  />
+                ),
+              },
+              {
+                acoplado: 'historial',
+                contenido: <HistorialCambios historial={estado.historial} />,
+              },
+              {
+                acoplado: 'tablon',
+                /*
+                  Solo se monta cuando el panel está abierto, y no con `display:
+                  none` como los demás. El tablón no es pintura: mientras esté
+                  montado sondea al servidor cada pocos segundos. Dejarlo vivo
+                  dentro de un panel plegado sería tráfico permanente por una
+                  conversación que nadie está mirando.
+                */
+                contenido:
+                  usuario && paneles.disposicion.abiertos.tablon ? (
+                    <PanelTablon
+                      proyectoId={proyecto.id}
+                      usuarioId={usuario.id}
+                      rol={proyecto.role}
+                    />
+                  ) : null,
+              },
+              {
+                acoplado: 'ia',
+                // Mismo motivo que el tablón: el panel sondea al servidor
+                // mientras está montado, así que no se deja vivo detrás de un
+                // panel plegado que nadie está mirando.
+                contenido:
+                  autor && paneles.disposicion.abiertos.ia ? (
+                    <ModoIA
+                      proyecto={proyecto}
+                      diagrama={estado.diagrama}
+                      aplicar={aplicar}
+                      soloLectura={soloLectura}
+                      usuario={autor}
+                      centrar={centrar}
+                      agruparDeshacer={estado.agruparDeshacer}
+                      seleccion={seleccion}
+                      onVistaPrevia={setABorrar}
+                      participantes={participantes}
+                      saludoPendiente={saludoPendiente}
+                      onSaludado={alSaludar}
+                      onEstado={setEstadoIA}
+                      conversacion={conversacion}
+                    />
+                  ) : null,
+              },
+              {
+                acoplado: 'versiones',
+                contenido: usuario ? (
+                  <PanelVersiones
                     proyectoId={proyecto.id}
                     usuarioId={usuario.id}
                     rol={proyecto.role}
-                  />
-                ) : null,
-            },
-            {
-              acoplado: 'ia',
-              // Mismo motivo que el tablón: el panel sondea al servidor
-              // mientras está montado, así que no se deja vivo detrás de un
-              // panel plegado que nadie está mirando.
-              contenido:
-                autor && paneles.disposicion.abiertos.ia ? (
-                  <ModoIA
-                    proyecto={proyecto}
                     diagrama={estado.diagrama}
-                    aplicar={aplicar}
-                    soloLectura={soloLectura}
-                    usuario={autor}
-                    centrar={centrar}
-                    agruparDeshacer={estado.agruparDeshacer}
-                    seleccion={seleccion}
-                    onVistaPrevia={setABorrar}
-                    participantes={participantes}
-                    saludoPendiente={saludoPendiente}
-                    onSaludado={alSaludar}
-                    onEstado={setEstadoIA}
-                    conversacion={conversacion}
                   />
                 ) : null,
-            },
-            {
-              acoplado: 'versiones',
-              contenido: usuario ? (
-                <PanelVersiones
-                  proyectoId={proyecto.id}
-                  usuarioId={usuario.id}
-                  rol={proyecto.role}
-                  diagrama={estado.diagrama}
-                />
-              ) : null,
-            },
-          ]}
+              },
+            ],
+            modoIAInmersivo,
+          )}
         />
       </main>
+      </BorderBeam>
 
-      <BarraEstado
-        escala={escala}
-        onAcercar={() => pedirZoom('acercar')}
-        onAlejar={() => pedirZoom('alejar')}
-        onAjustar={() => pedirZoom('ajustar')}
-        estado={estado.conexion}
-        detalle={estado.detalleConexion}
-        sincronizado={estado.sincronizado}
-        participantes={participantes}
-        clase={claseSeleccionada}
-        clases={Object.keys(estado.diagrama.classes).length}
-        relaciones={Object.keys(estado.diagrama.relations).length}
-      />
+      {!modoIAInmersivo && (
+        <BarraEstado
+          escala={escala}
+          onAcercar={() => pedirZoom('acercar')}
+          onAlejar={() => pedirZoom('alejar')}
+          onAjustar={() => pedirZoom('ajustar')}
+          estado={estado.conexion}
+          detalle={estado.detalleConexion}
+          sincronizado={estado.sincronizado}
+          participantes={participantes}
+          clase={claseSeleccionada}
+          clases={Object.keys(estado.diagrama.classes).length}
+          relaciones={Object.keys(estado.diagrama.relations).length}
+        />
+      )}
 
-      <Asistente
-        proyectoId={proyecto.id}
-        soloLectura={soloLectura}
-        diagrama={estado.diagrama}
-        aplicar={aplicar}
-        modo="flotante"
-      />
+      {!modoIAInmersivo && (
+        <Asistente
+          proyectoId={proyecto.id}
+          soloLectura={soloLectura}
+          diagrama={estado.diagrama}
+          aplicar={aplicar}
+          modo="flotante"
+        />
+      )}
 
       {/*
         La barra del pulgar, solo en pantalla estrecha.
@@ -1012,7 +1198,7 @@ export function EditorDiagrama({
         los cinco botones seguirían en el árbol: encontrables por tabulador en un
         portátil y anunciados por el lector de pantalla como si existieran.
       */}
-      {estrecha && (
+      {!modoIAInmersivo && estrecha && (
         <BarraPulgar
           soloLectura={soloLectura}
           herramienta={herramienta}

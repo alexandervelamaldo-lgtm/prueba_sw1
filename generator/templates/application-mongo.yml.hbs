@@ -9,6 +9,9 @@ spring:
   data:
     mongodb:
       uri: mongodb://${DB_HOST:localhost}:${DB_PORT:27017}/${DB_NAME:${app.database-name}}
+      # Sin esto Spring ignora `@Indexed(unique = true)` y el valor único no se
+      # garantiza: desde Spring Data MongoDB 3 los índices no se crean solos.
+      auto-index-creation: true
 
 server:
   port: ${SERVER_PORT:8080}

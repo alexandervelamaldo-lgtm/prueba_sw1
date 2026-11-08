@@ -21,9 +21,9 @@ exec > >(tee -a /var/log/arranque-uml.log) 2>&1
 echo "=== arranque $(date -Is) ==="
 
 REGION=us-east-1
-CUENTA=381549360414
+CUENTA=238391222527
 REGISTRO="$CUENTA.dkr.ecr.$REGION.amazonaws.com"
-IMAGEN="$REGISTRO/uml-tool:v8"
+IMAGEN="$REGISTRO/uml-tool:v2"
 ENTORNO=/etc/uml.env
 
 dnf install -y docker
@@ -47,7 +47,7 @@ secreto() {
 # Los secretos que falten no abortan el arranque. Sin LLM_API_KEY el servicio
 # funciona igual, solo con la ayuda de IA desactivada; preferimos una herramienta
 # a medias y visible que una maquina que no levanta y no dice por que.
-for entrada in DATABASE_URL SESSION_SECRET LLM_API_KEY; do
+for entrada in DATABASE_URL SESSION_SECRET LLM_API_KEY LLM_VISION_API_KEY ELEVENLABS_API_KEY GROQ_API_KEY; do
   valor=$(secreto "uml/$entrada")
   if [ -n "${valor:-}" ] && [ "$valor" != "None" ]; then
     printf '%s=%s\n' "$entrada" "$valor" >> "$ENTORNO"

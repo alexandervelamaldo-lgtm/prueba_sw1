@@ -1,5 +1,6 @@
 package {{{project.basePackage}}}.exception;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -21,6 +22,22 @@ public class GlobalExceptionHandler {
                 exception.getMessage(),
                 Map.of());
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(body);
+    }
+
+    /**
+     * Un valor único repetido. PostgreSQL la lanza al violar un UNIQUE, MongoDB
+     * con `DuplicateKeyException` (que hereda de esta) y en Cassandra, que no
+     * tiene restricción de unicidad, la lanza el servicio al comprobarlo.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleConflict(DataIntegrityViolationException exception) {
+        ErrorResponse body = new ErrorResponse(
+                Instant.now(),
+                HttpStatus.CONFLICT.value(),
+                "Conflicto",
+                "Ya existe un registro con ese valor único",
+                Map.of());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

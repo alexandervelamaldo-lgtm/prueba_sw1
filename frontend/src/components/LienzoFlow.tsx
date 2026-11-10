@@ -20,10 +20,9 @@ import {
   type OnConnect,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { listClasses, listRelations, type UmlClass, type UmlRelation } from '@app/shared';
+import { listClasses, listRelations, llevaCardinalidad, type UmlClass, type UmlRelation } from '@app/shared';
 import {
   ALTO_CABECERA,
-  ALTO_FILA,
   ANCHO_MINIMO,
   ESCALA_MAXIMA,
   ESCALA_MINIMA,
@@ -32,12 +31,11 @@ import {
   anclaje,
   desviosPorPar,
   etiquetaClase,
+  filasMiembro,
   medidasDe,
   puntoEnCurva,
   puntoMedioRelacion,
   recortar,
-  textoAtributo,
-  textoMetodo,
   zoomMaximoAlCentrar,
   type Medida,
   type Punto,
@@ -206,6 +204,25 @@ function Marcadores(): JSX.Element {
         >
           <path d="M0 5L7 0L14 5L7 10z" fill="var(--texto-2)" />
         </marker>
+        {/*
+          La punta abierta de la navegabilidad: un extremo marcado como no
+          navegable en UML se lee «solo se puede ir hacia el otro lado», y esa
+          flecha abierta —sin cerrar, a diferencia de `#flecha`— es su notación
+          estándar. No se reutiliza `#flecha` porque esa ya se usa para la
+          dependencia y confundiría ambas semánticas en una relación que fuera
+          las dos cosas a la vez.
+        */}
+        <marker
+          id="navegable"
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="8"
+          markerHeight="8"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0L9 5L0 10" fill="none" stroke="var(--texto-2)" strokeWidth="1.5" />
+        </marker>
       </defs>
     </svg>
   );
@@ -228,7 +245,7 @@ function NodoClaseUml({ data, selected }: NodeProps<NodoClase>): JSX.Element {
   const { cls, medida, seleccionada, soloLectura, colorAjeno, nombreAjeno } = data;
   const etiqueta = etiquetaClase(cls);
   const { ancho, alto } = medida;
-  const separador = ALTO_CABECERA + cls.attributes.length * ALTO_FILA + 3;
+  const filas = filasMiembro(cls);
   const activa = seleccionada || selected;
 
   /*
@@ -298,30 +315,22 @@ function NodoClaseUml({ data, selected }: NodeProps<NodoClase>): JSX.Element {
         </text>
         <line x1="0" y1={ALTO_CABECERA} x2={ancho} y2={ALTO_CABECERA} className="caja__linea" />
 
-        {cls.attributes.map((atributo, indice) => (
-          <text
-            key={atributo.name}
-            x={PADDING}
-            y={ALTO_CABECERA + (indice + 1) * ALTO_FILA - 5}
-            className="caja__miembro"
-          >
-            {recortar(textoAtributo(atributo), ancho)}
-          </text>
-        ))}
-
-        {cls.methods.length > 0 && (
-          <line x1="0" y1={separador} x2={ancho} y2={separador} className="caja__linea" />
-        )}
-
-        {cls.methods.map((metodo, indice) => (
-          <text
-            key={metodo.name}
-            x={PADDING}
-            y={ALTO_CABECERA + (cls.attributes.length + indice + 1) * ALTO_FILA + 4}
-            className="caja__miembro caja__miembro--metodo"
-          >
-            {recortar(textoMetodo(metodo), ancho)}
-          </text>
+        {/*
+          Una sola pasada por `filasMiembro`, en vez de una por atributos y otra
+          por métodos: así los literales de un enum —la tercera sección que esa
+          función añade cuando `cls.kind === 'enum'`— se pintan por el mismo
+          camino que las otras dos, sin un bloque aparte que alguien tenga que
+          acordarse de mantener a la vez.
+        */}
+        {filas.map((fila, indice) => (
+          <g key={indice}>
+            {fila.separadorAntes && (
+              <line x1="0" y1={fila.separadorY} x2={ancho} y2={fila.separadorY} className="caja__linea" />
+            )}
+            <text x={PADDING} y={fila.y} className={fila.clase}>
+              {recortar(fila.texto, ancho)}
+            </text>
+          </g>
         ))}
       </svg>
 
@@ -338,26 +347,62 @@ function NodoClaseUml({ data, selected }: NodeProps<NodoClase>): JSX.Element {
    La relación
    -------------------------------------------------------------------------- */
 
+/**
+ * Las puntas de navegabilidad, por extremo.
+ *
+ * `source.navigable` y `target.navigable` son dos banderas independientes del
+ * modelo (ver `EndPointSchema` en `shared/src/model/uml.ts`): cada extremo
+ * dice si se puede recorrer *hacia* esa clase. En UML eso solo se dibuja
+ * cuando un extremo lo es y el otro no —el caso bidireccional, que es el valor
+ * por defecto de ambas banderas, no lleva ninguna punta especial, y pintarla
+ * ahí sería afirmar una restricción que el modelo no tiene—.
+ *
+ * La herencia, la realización y la dependencia no entran aquí: no tienen
+ * navegabilidad que mostrar más allá de su propia punta de flecha, que ya
+ * dice todo lo que hay que decir sobre su sentido.
+ */
+function marcadoresNavegabilidad(relacion: UmlRelation): { inicio?: string; fin?: string } {
+  if (relacion.kind === 'inheritance' || relacion.kind === 'realization' || relacion.kind === 'dependency') {
+    return {};
+  }
+  const { source, target } = relacion;
+  if (source.navigable === target.navigable) return {};
+
+  if (target.navigable && !source.navigable) return { fin: 'url(#navegable)' };
+  // El rombo de agregación/composición ya ocupa el inicio de la línea: no hay
+  // sitio para una segunda punta en ese extremo sin superponerlas.
+  if (relacion.kind === 'aggregation' || relacion.kind === 'composition') return {};
+  return { inicio: 'url(#navegable)' };
+}
+
 /** Estilo de trazo y punta de flecha según el tipo de relación UML. */
-function estiloRelacion(kind: UmlRelation['kind']): {
+function estiloRelacion(relacion: UmlRelation): {
   marcadorFin?: string;
   marcadorInicio?: string;
   discontinua: boolean;
 } {
-  switch (kind) {
-    case 'inheritance':
-      return { marcadorFin: 'url(#herencia)', discontinua: false };
-    case 'realization':
-      return { marcadorFin: 'url(#herencia)', discontinua: true };
-    case 'composition':
-      return { marcadorInicio: 'url(#rombo-lleno)', discontinua: false };
-    case 'aggregation':
-      return { marcadorInicio: 'url(#rombo)', discontinua: false };
-    case 'dependency':
-      return { marcadorFin: 'url(#flecha)', discontinua: true };
-    default:
-      return { discontinua: false };
-  }
+  const base = ((): { marcadorFin?: string; marcadorInicio?: string; discontinua: boolean } => {
+    switch (relacion.kind) {
+      case 'inheritance':
+        return { marcadorFin: 'url(#herencia)', discontinua: false };
+      case 'realization':
+        return { marcadorFin: 'url(#herencia)', discontinua: true };
+      case 'composition':
+        return { marcadorInicio: 'url(#rombo-lleno)', discontinua: false };
+      case 'aggregation':
+        return { marcadorInicio: 'url(#rombo)', discontinua: false };
+      case 'dependency':
+        return { marcadorFin: 'url(#flecha)', discontinua: true };
+      default:
+        return { discontinua: false };
+    }
+  })();
+  const navegabilidad = marcadoresNavegabilidad(relacion);
+  return {
+    ...base,
+    marcadorInicio: base.marcadorInicio ?? navegabilidad.inicio,
+    marcadorFin: base.marcadorFin ?? navegabilidad.fin,
+  };
 }
 
 /**
@@ -374,7 +419,11 @@ function estiloRelacion(kind: UmlRelation['kind']): {
 function AristaRelacionUml({ data }: EdgeProps<AristaRelacion>): JSX.Element | null {
   if (!data) return null;
   const { relacion, origen, destino, medidaOrigen, medidaDestino, desvio } = data;
-  const estilo = estiloRelacion(relacion.kind);
+  const estilo = estiloRelacion(relacion);
+  // La herencia y la realización no tienen cardinalidad en UML —una subclase
+  // no es «de 0 a 3» superclases—, así que ni la multiplicidad ni el papel de
+  // cada extremo tienen nada que decir ahí.
+  const conCardinalidad = llevaCardinalidad(relacion.kind);
 
   const trazo = (
     d: string,
@@ -399,12 +448,26 @@ function AristaRelacionUml({ data }: EdgeProps<AristaRelacion>): JSX.Element | n
           {relacion.name}
         </text>
       )}
-      <text x={etiquetas.origen.x} y={etiquetas.origen.y} className="relacion__multiplicidad">
-        {relacion.source.multiplicity}
-      </text>
-      <text x={etiquetas.destino.x} y={etiquetas.destino.y} className="relacion__multiplicidad">
-        {relacion.target.multiplicity}
-      </text>
+      {conCardinalidad && (
+        <>
+          {relacion.source.role && (
+            <text x={etiquetas.origen.x} y={etiquetas.origen.y - 11} className="relacion__rol">
+              {relacion.source.role}
+            </text>
+          )}
+          {relacion.target.role && (
+            <text x={etiquetas.destino.x} y={etiquetas.destino.y - 11} className="relacion__rol">
+              {relacion.target.role}
+            </text>
+          )}
+          <text x={etiquetas.origen.x} y={etiquetas.origen.y} className="relacion__multiplicidad">
+            {relacion.source.multiplicity}
+          </text>
+          <text x={etiquetas.destino.x} y={etiquetas.destino.y} className="relacion__multiplicidad">
+            {relacion.target.multiplicity}
+          </text>
+        </>
+      )}
     </g>
   );
 

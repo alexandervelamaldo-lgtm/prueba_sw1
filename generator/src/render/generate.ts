@@ -214,7 +214,11 @@ export function buildEntityView(ir: GenerationIR, entity: EntityIR): EntityView 
     return {
       name: lista.name,
       javaType: `List<${lista.idJavaType}>`,
-      validations: [],
+      // La cota superior de la multiplicidad UML (p. ej. `0..5`) no tenía
+      // ningún efecto en el código generado: se podía enviar una lista de
+      // cien ids y la API la aceptaba sin más. `@Size` la hace valer en la
+      // petición, igual que ya hace `@NotNull` con el extremo obligatorio.
+      validations: a.maxSize !== undefined ? [`@Size(max = ${a.maxSize})`] : [],
       accessor: usaIdPlano
         ? `entity.${lista.getterName}()`
         : `entity.${a.getterName}().stream().map(${a.targetClass}::${idGetter}).toList()`,

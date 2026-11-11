@@ -178,6 +178,72 @@ describe('cargarEnv', () => {
   });
 });
 
+describe('LLM_TIMEOUT_MS', () => {
+  const base = { SESSION_SECRET: 'secreto' };
+
+  it('un entero positivo es el plazo del modelo de texto', () => {
+    expect(loadConfig({ ...base, LLM_TIMEOUT_MS: '60000' }).llmTimeoutMs).toBe(60_000);
+  });
+
+  it('sin variable, o con un valor que no es un entero positivo, se queda el plazo por defecto', () => {
+    expect(loadConfig(base).llmTimeoutMs).toBeUndefined();
+    expect(loadConfig({ ...base, LLM_TIMEOUT_MS: '0' }).llmTimeoutMs).toBeUndefined();
+    expect(loadConfig({ ...base, LLM_TIMEOUT_MS: 'mucho' }).llmTimeoutMs).toBeUndefined();
+  });
+});
+
+describe('LLM_JSON_MODE', () => {
+  const base = { SESSION_SECRET: 'secreto' };
+
+  it('con 1 se pide el modo JSON', () => {
+    expect(loadConfig({ ...base, LLM_JSON_MODE: '1' }).llmJsonMode).toBe(true);
+  });
+
+  it('sin variable o con otro valor queda apagado', () => {
+    expect(loadConfig(base).llmJsonMode).toBe(false);
+    expect(loadConfig({ ...base, LLM_JSON_MODE: '0' }).llmJsonMode).toBe(false);
+  });
+});
+
+describe('LLM_RELATION_EXAMPLES', () => {
+  const base = { SESSION_SECRET: 'secreto' };
+
+  it('con 1 se activan los ejemplos', () => {
+    expect(loadConfig({ ...base, LLM_RELATION_EXAMPLES: '1' }).llmRelationExamples).toBe(true);
+  });
+
+  it('sin variable o con otro valor quedan apagados', () => {
+    expect(loadConfig(base).llmRelationExamples).toBe(false);
+    expect(loadConfig({ ...base, LLM_RELATION_EXAMPLES: '0' }).llmRelationExamples).toBe(false);
+  });
+});
+
+describe('LLM_HISTORY_MESSAGES', () => {
+  const base = { SESSION_SECRET: 'secreto' };
+
+  it('un entero positivo es el límite de mensajes', () => {
+    expect(loadConfig({ ...base, LLM_HISTORY_MESSAGES: '6' }).llmHistoryMessages).toBe(6);
+  });
+
+  it('sin variable, o con un valor que no es un entero positivo, no hay límite', () => {
+    expect(loadConfig(base).llmHistoryMessages).toBeUndefined();
+    expect(loadConfig({ ...base, LLM_HISTORY_MESSAGES: '0' }).llmHistoryMessages).toBeUndefined();
+  });
+});
+
+describe('LLM_HISTORY_USER_ONLY', () => {
+  const base = { SESSION_SECRET: 'secreto' };
+
+  it('con 1 solo viajan los mensajes de la persona', () => {
+    expect(loadConfig({ ...base, LLM_HISTORY_USER_ONLY: '1' }).llmHistoryUserOnly).toBe(true);
+  });
+
+  it('sin variable o con otro valor viaja la conversación completa', () => {
+    expect(loadConfig(base).llmHistoryUserOnly).toBe(false);
+    expect(loadConfig({ ...base, LLM_HISTORY_USER_ONLY: '0' }).llmHistoryUserOnly).toBe(false);
+  });
+});
+
 describe('LLM_LIMITE_DIARIO_TOKENS', () => {
   const base = { SESSION_SECRET: 'secreto' };
 

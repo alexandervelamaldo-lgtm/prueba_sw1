@@ -1,0 +1,4 @@
+# Local text model for running the project on a laptop (see docs/06-despliegue.md).
+# Create it with: ollama create qwen3-uml -f despliegue/Modelfile.qwen-local
+FROM qwen3:4b-instruct
+PARAMETER num_ctx 8192

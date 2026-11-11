@@ -73,6 +73,16 @@ export interface Config {
   llmProvider: 'anthropic' | 'openai';
   llmBaseUrl?: string;
   llmModel?: string;
+  /** Plazo del modelo de texto, en ms. Un modelo local en CPU necesita más que el valor por defecto. */
+  llmTimeoutMs?: number;
+  /** Pide `response_format` con el esquema de la respuesta al interpretar. Opt-in: no todo proveedor compatible lo admite. */
+  llmJsonMode: boolean;
+  /** Añade al prompt ejemplos de relaciones, para modelos locales pequeños que tienden a omitirlas. */
+  llmRelationExamples: boolean;
+  /** Máximo de mensajes del hilo que viajan al modelo. Sin definir, todos los de la ventana. */
+  llmHistoryMessages?: number;
+  /** Envía al modelo solo los mensajes de la persona, sin sus propias respuestas. */
+  llmHistoryUserOnly: boolean;
   /**
    * Modelo con visión, para leer tablas fotografiadas.
    *
@@ -294,6 +304,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     llmProvider: proveedor(env.LLM_PROVIDER),
     llmBaseUrl: env.LLM_BASE_URL,
     llmModel: env.LLM_MODEL,
+    llmTimeoutMs: enteroPositivo(env.LLM_TIMEOUT_MS),
+    llmJsonMode: env.LLM_JSON_MODE?.trim() === '1',
+    llmRelationExamples: env.LLM_RELATION_EXAMPLES?.trim() === '1',
+    llmHistoryMessages: enteroPositivo(env.LLM_HISTORY_MESSAGES),
+    llmHistoryUserOnly: env.LLM_HISTORY_USER_ONLY?.trim() === '1',
     llmVisionModel: env.LLM_VISION_MODEL,
     llmVisionApiKey: env.LLM_VISION_API_KEY,
     llmVisionBaseUrl: env.LLM_VISION_BASE_URL,

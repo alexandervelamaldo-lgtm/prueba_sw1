@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { AddressInfo } from 'node:net';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDiagram, createClass, createAttribute, type EventoAsistente } from '@app/shared';
 import {
   GrammarAssistant,
@@ -753,6 +753,200 @@ describe('LlmAssistant.revisar contra un proveedor simulado', () => {
   });
 });
 
+describe('LLM_HISTORY_MESSAGES', () => {
+  const historial = Array.from({ length: 10 }, (_, i) => ({
+    role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+    texto: `mensaje ${i}`,
+    autorId: null,
+    autorNombre: null,
+    creadoEn: '',
+    tipo: 'respuesta' as const,
+  }));
+  const enviados = () => (recibidos[0]?.messages as { role: string; content: string }[]).map((m) => m.content);
+
+  it('con límite, solo viajan los últimos mensajes', async () => {
+    const remoto = createAssistant({ llmApiKey: 'k', llmProvider: 'openai', llmBaseUrl: baseUrl, llmModel: 'algo', llmHistoryMessages: 4 });
+    await remoto.interpret('crea la clase Pedido', diagrama, { historial, otrosProyectos: [] });
+    expect(enviados().slice(1, -1)).toEqual(['mensaje 6', 'mensaje 7', 'mensaje 8', 'mensaje 9']);
+  });
+
+  it('con solo la persona, las respuestas del modelo no viajan y el límite cuenta sus mensajes', async () => {
+    const remoto = createAssistant({
+      llmApiKey: 'k',
+      llmProvider: 'openai',
+      llmBaseUrl: baseUrl,
+      llmModel: 'algo',
+      llmHistoryMessages: 3,
+      llmHistoryUserOnly: true,
+    });
+    await remoto.interpret('crea la clase Pedido', diagrama, { historial, otrosProyectos: [] });
+    expect(enviados().slice(1, -1)).toEqual(['mensaje 4', 'mensaje 6', 'mensaje 8']);
+  });
+
+  it('sin límite, viaja todo el historial', async () => {
+    await motor().interpret('crea la clase Pedido', diagrama, { historial, otrosProyectos: [] });
+    expect(enviados().slice(1, -1)).toHaveLength(10);
+  });
+});
+
+describe('multiplicidad dictada en la orden', () => {
+  const conRelacion = {
+    ...createDiagram({
+      id: 'D',
+      name: 'D',
+      classes: {
+        A: createClass({ id: 'A', name: 'Oficina', position: { x: 0, y: 0 } }),
+        B: createClass({ id: 'B', name: 'Departamento', position: { x: 300, y: 0 } }),
+      },
+    }),
+    relations: {
+      R9: {
+        id: 'R9',
+        kind: 'association',
+        source: { classId: 'A', multiplicity: '1' },
+        target: { classId: 'B', multiplicity: '*' },
+      },
+    },
+  } as unknown as typeof diagrama;
+
+  const respuestaIncompleta = JSON.stringify({
+    actions: [
+      { _type: 'message', text: 'Cambio la relación.' },
+      { _type: 'operation', operation: { op: 'updateRelation', id: 'R9', changes: { targetMultiplicity: '1' } } },
+    ],
+    confidence: 0.9,
+  });
+  const local = () =>
+    createAssistant({ llmApiKey: 'k', llmProvider: 'openai', llmBaseUrl: baseUrl, llmModel: 'algo', llmRelationExamples: true });
+  const cambiosDe = (operations: unknown[]) => (operations[0] as { changes: unknown }).changes;
+
+  beforeEach(() => {
+    responder = () => ({ status: 200, payload: comoOpenAi(respuestaIncompleta) });
+  });
+
+  it('completa los dos extremos según la frase', async () => {
+    const r = await local().interpret('Cambia la relación entre oficina y departamentos de muchos a uno.', conRelacion);
+    expect(cambiosDe(r.operations)).toEqual({ sourceMultiplicity: '*', targetMultiplicity: '1' });
+  });
+
+  it('respeta el orden en que se nombran las clases', async () => {
+    const r = await local().interpret('Cambia la relación entre departamento y oficina de muchos a uno.', conRelacion);
+    expect(cambiosDe(r.operations)).toEqual({ sourceMultiplicity: '1', targetMultiplicity: '*' });
+  });
+
+  it('también en streaming', async () => {
+    bloquesSse = [`data: ${JSON.stringify({ choices: [{ delta: { content: respuestaIncompleta } }] })}\n\n`, 'data: [DONE]\n\n'];
+    const eventos: EventoAsistente[] = [];
+    for await (const e of local().interpretarEnStream!('cambia la relación entre oficina y departamento de muchos a uno', conRelacion)) {
+      eventos.push(e);
+    }
+    const operacion = eventos.find((e) => e.tipo === 'operacion');
+    expect(operacion && operacion.tipo === 'operacion' && operacion.operacion).toEqual({
+      op: 'updateRelation',
+      id: 'R9',
+      changes: { sourceMultiplicity: '*', targetMultiplicity: '1' },
+    });
+  });
+
+  it('sin la frase, no toca lo que propuso el modelo', async () => {
+    const r = await local().interpret('Haz que la relación entre oficina y departamento termine en uno.', conRelacion);
+    expect(cambiosDe(r.operations)).toEqual({ targetMultiplicity: '1' });
+  });
+
+  describe('clase intermedia', () => {
+    const acciones = (operaciones: object[]) =>
+      JSON.stringify({
+        actions: [{ _type: 'message', text: 'Creo la clase.' }, ...operaciones.map((operation) => ({ _type: 'operation', operation }))],
+        confidence: 0.9,
+      });
+    const colgar = { op: 'setAssociationClass', relationId: 'R9', classRef: { name: 'Puente' } };
+    const crear = { op: 'addClass', name: 'Puente', kind: 'class' };
+    const atributo = { op: 'addAttribute', classRef: { name: 'Puente' }, name: 'fecha', type: 'String' };
+    const orden = 'crea una clase intermedia entre Oficina y Departamento';
+    const tipos = (operaciones: { op: string }[]) => operaciones.map((o) => o.op);
+
+    it('convierte a muchos a muchos, crea la clase antes de colgarla y lo avisa', async () => {
+      responder = () => ({ status: 200, payload: comoOpenAi(acciones([colgar, crear, atributo])) });
+      const r = await local().interpret(orden, conRelacion);
+      expect(tipos(r.operations)).toEqual(['addClass', 'addAttribute', 'updateRelation', 'setAssociationClass']);
+      expect(r.operations[2]).toEqual({
+        op: 'updateRelation',
+        id: 'R9',
+        changes: { sourceMultiplicity: '*', targetMultiplicity: '*' },
+      });
+      expect(r.explanation).toContain('muchos a muchos');
+    });
+
+    it('usa la relación existente si el modelo intenta crear otra entre las mismas clases', async () => {
+      const nueva = {
+        op: 'addRelation',
+        kind: 'association',
+        source: { name: 'Departamento' },
+        target: { name: 'Oficina' },
+        sourceMultiplicity: '1',
+        targetMultiplicity: '*',
+        associationClassName: 'Puente',
+      };
+      responder = () => ({ status: 200, payload: comoOpenAi(acciones([crear, atributo, nueva])) });
+      const r = await local().interpret(orden, conRelacion);
+      expect(tipos(r.operations)).toEqual(['addClass', 'addAttribute', 'updateRelation', 'setAssociationClass']);
+      expect(r.operations[3]).toEqual({ op: 'setAssociationClass', relationId: 'R9', classRef: { name: 'Puente' } });
+    });
+
+    it('crea la clase si el modelo se la olvidó', async () => {
+      responder = () => ({ status: 200, payload: comoOpenAi(acciones([colgar, atributo])) });
+      const r = await local().interpret(orden, conRelacion);
+      expect(tipos(r.operations)).toEqual(['addClass', 'addAttribute', 'updateRelation', 'setAssociationClass']);
+    });
+
+    it('no convierte una relación que ya es muchos a muchos', async () => {
+      responder = () => ({ status: 200, payload: comoOpenAi(acciones([crear, colgar])) });
+      const yaMuchos = {
+        ...conRelacion,
+        relations: { R9: { ...conRelacion.relations.R9, source: { ...conRelacion.relations.R9!.source, multiplicity: '*' } } },
+      } as typeof conRelacion;
+      const r = await local().interpret(orden, yaMuchos);
+      expect(tipos(r.operations)).toEqual(['addClass', 'setAssociationClass']);
+    });
+
+    it('en streaming llega en el mismo orden y avisa antes de terminar', async () => {
+      const contenido = acciones([colgar, crear, atributo]);
+      bloquesSse = [`data: ${JSON.stringify({ choices: [{ delta: { content: contenido } }] })}\n\n`, 'data: [DONE]\n\n'];
+      const eventos: EventoAsistente[] = [];
+      for await (const e of local().interpretarEnStream!(orden, conRelacion)) eventos.push(e);
+      const orden_ = eventos.flatMap((e) => (e.tipo === 'operacion' ? [e.operacion.op] : []));
+      expect(orden_).toEqual(['addClass', 'addAttribute', 'updateRelation', 'setAssociationClass']);
+      expect(eventos.some((e) => e.tipo === 'mensaje' && e.texto.includes('muchos a muchos'))).toBe(true);
+      expect(eventos.at(-1)?.tipo).toBe('fin');
+    });
+
+    it('sin el modo local, no reordena nada', async () => {
+      responder = () => ({ status: 200, payload: comoOpenAi(acciones([colgar, crear])) });
+      const r = await motor().interpret(orden, conRelacion);
+      expect(tipos(r.operations)).toEqual(['setAssociationClass', 'addClass']);
+    });
+  });
+
+  it('sin el modo local, no toca lo que propuso el modelo', async () => {
+    const r = await motor().interpret('Cambia la relación entre oficina y departamentos de muchos a uno.', conRelacion);
+    expect(cambiosDe(r.operations)).toEqual({ targetMultiplicity: '1' });
+  });
+});
+
+describe('interpretarEnStream cuando el modelo rechaza el pedido', () => {
+  it('avisa en el registro al caer a la gramática', async () => {
+    responder = () => ({ status: 400, payload: { error: { message: 'exceeds the available context size' } } });
+    const aviso = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const eventos: EventoAsistente[] = [];
+    for await (const evento of motor().interpretarEnStream('crea la clase Pedido', diagrama)) eventos.push(evento);
+
+    expect(eventos.at(-1)).toEqual(expect.objectContaining({ tipo: 'fin', motor: 'gramatica-local' }));
+    expect(aviso.mock.calls.some(([texto]) => String(texto).includes('El modelo no respondió'))).toBe(true);
+    aviso.mockRestore();
+  });
+});
+
 describe('createAssistant', () => {
   it('sin clave devuelve la gramática, que no es un modo degradado', () => {
     const motorSinClave = createAssistant({});
@@ -763,6 +957,104 @@ describe('createAssistant', () => {
     const remoto = createAssistant({ llmApiKey: 'k', llmProvider: 'openai', llmModel: 'algo' });
     expect(remoto).toBeInstanceOf(LlmAssistant);
     expect(remoto.name).toContain('algo');
+  });
+
+  describe('modo JSON', () => {
+    const conModoJson = () =>
+      createAssistant({
+        llmApiKey: 'k',
+        llmProvider: 'openai',
+        llmBaseUrl: baseUrl,
+        llmModel: 'algo',
+        llmJsonMode: true,
+      });
+
+    const pideEsquema = expect.objectContaining({
+      type: 'json_schema',
+      json_schema: expect.objectContaining({
+        schema: expect.objectContaining({
+          required: ['actions', 'confidence'],
+          properties: { actions: { type: 'array', items: { type: 'object' } }, confidence: { type: 'number' } },
+        }),
+      }),
+    });
+
+    it('activado, interpretar pide el esquema de la respuesta', async () => {
+      await conModoJson().interpret('crea la clase Pedido', diagrama);
+      expect(recibidos[0]?.response_format).toEqual(pideEsquema);
+    });
+
+    it('activado, interpretar en streaming también lo pide', async () => {
+      bloquesSse = ['data: [DONE]\n\n'];
+      const motorJson = conModoJson();
+      for await (const _ of motorJson.interpretarEnStream!('crea la clase Pedido', diagrama)) {
+        /* solo importa lo que se envió */
+      }
+      expect(recibidos[0]?.response_format).toEqual(pideEsquema);
+    });
+
+    it('activado, la revisión sigue siendo texto llano', async () => {
+      responder = () => ({ status: 200, payload: comoOpenAi('NADA') });
+      await conModoJson().revisar(diagrama);
+      expect(recibidos[0]?.response_format).toBeUndefined();
+    });
+
+    it('apagado, no se envía response_format', async () => {
+      await motor().interpret('crea la clase Pedido', diagrama);
+      expect(recibidos[0]?.response_format).toBeUndefined();
+    });
+  });
+
+  describe('ejemplos de relaciones', () => {
+    const conEjemplos = () =>
+      createAssistant({
+        llmApiKey: 'k',
+        llmProvider: 'openai',
+        llmBaseUrl: baseUrl,
+        llmModel: 'algo',
+        llmRelationExamples: true,
+      });
+    const sistema = () => (recibidos[0]?.messages as { role: string; content: string }[])[0]?.content;
+
+    it('activados, interpretar los añade al prompt del sistema', async () => {
+      await conEjemplos().interpret('crea la clase Pedido', diagrama);
+      expect(sistema()).toContain('Ejemplos de órdenes con relaciones');
+    });
+
+    it('activados, traducen las frases de multiplicidad', async () => {
+      await conEjemplos().interpret('crea la clase Pedido', diagrama);
+      expect(sistema()).toContain('"sourceMultiplicity":"*","targetMultiplicity":"*"');
+      expect(sistema()).toContain('"sourceMultiplicity":"*","targetMultiplicity":"1"');
+    });
+
+    it('activados, la revisión no los lleva', async () => {
+      responder = () => ({ status: 200, payload: comoOpenAi('NADA') });
+      await conEjemplos().revisar(diagrama);
+      expect(sistema()).not.toContain('Ejemplos de órdenes con relaciones');
+    });
+
+    it('apagados, el prompt no cambia', async () => {
+      await motor().interpret('crea la clase Pedido', diagrama);
+      expect(sistema()).not.toContain('Ejemplos de órdenes con relaciones');
+    });
+  });
+
+  it('aplica el plazo configurado: un modelo colgado degrada a la gramática al vencer', async () => {
+    server.removeAllListeners('request');
+    server.on('request', () => {
+      /* se deja colgada a propósito */
+    });
+    const remoto = createAssistant({
+      llmApiKey: 'k',
+      llmProvider: 'openai',
+      llmBaseUrl: baseUrl,
+      llmModel: 'algo',
+      llmTimeoutMs: 100,
+    });
+
+    const respuesta = await remoto.interpret('crea la clase Pedido', createDiagram({ id: 'D', name: 'D' }));
+
+    expect(respuesta.operations).toEqual([{ op: 'addClass', name: 'Pedido', kind: 'class' }]);
   });
 });
 

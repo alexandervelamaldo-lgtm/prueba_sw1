@@ -1,5 +1,6 @@
 import type { AssistantResponse, ClassDiagram, EntradaHistorial, EventoAsistente } from '@app/shared';
 import {
+  isToMany,
   AssistantActionSchema,
   describeOperation,
   interpretCommand,
@@ -188,6 +189,171 @@ Cuando el usuario pida "crear una clase intermedia", "clase de asociación", "ro
 7. Si no puedes identificar con certeza el id real de la relación N:M en el resumen, no propongas "setAssociationClass": dilo en un "message" y pide al usuario que señale la relación en el lienzo.
 Para quitarle a una relación su clase de asociación sin borrar la clase, usa "setAssociationClass" con "classRef": null.`;
 
+const sinAcentos = (texto: string): string => texto.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+
+/**
+ * Pone los dos extremos que dicta una frase como «de muchos a uno».
+ *
+ * Un modelo local pequeño cambia solo uno de ellos aunque el prompt le pida los
+ * dos, y el resultado es una relación distinta de la pedida. La frase sigue el
+ * orden en que se nombran las clases, que no tiene por qué ser el de la flecha.
+ */
+function completarMultiplicidad(
+  operacion: AssistantResponse['operations'][number],
+  orden: string,
+  diagrama: ClassDiagram,
+): AssistantResponse['operations'][number] {
+  if (operacion.op !== 'updateRelation') return operacion;
+  const texto = sinAcentos(orden);
+  const frase = /\b(uno|muchos)\s+a\s+(uno|muchos)\b/.exec(texto);
+  const relacion = diagrama.relations[operacion.id];
+  if (!frase || !relacion) return operacion;
+
+  const posicionDe = (claseId: string): number => {
+    const nombre = sinAcentos(diagrama.classes[claseId]?.name ?? '');
+    return nombre ? texto.indexOf(nombre) : -1;
+  };
+  const origen = posicionDe(relacion.source.classId);
+  const destino = posicionDe(relacion.target.classId);
+  const invertida = origen !== -1 && destino !== -1 && destino < origen;
+
+  const primero = frase[1] === 'uno' ? '1' : '*';
+  const segundo = frase[2] === 'uno' ? '1' : '*';
+  return {
+    ...operacion,
+    changes: {
+      ...operacion.changes,
+      sourceMultiplicity: invertida ? segundo : primero,
+      targetMultiplicity: invertida ? primero : segundo,
+    },
+  };
+}
+
+const AVISO_RELACION_CONVERTIDA =
+  'Cambié la relación a muchos a muchos, porque una clase intermedia solo puede colgar de una relación así.';
+
+/** La relación que ya une esas dos clases, en cualquier sentido, si las referencias traen nombre. */
+function relacionEntre(diagrama: ClassDiagram, a: object, b: object): ClassDiagram['relations'][string] | undefined {
+  const nombreDe = (ref: object): string | undefined =>
+    'name' in ref && typeof ref.name === 'string' ? sinAcentos(ref.name) : undefined;
+  const nombreDeClase = (id: string): string | undefined => {
+    const nombre = diagrama.classes[id]?.name;
+    return nombre === undefined ? undefined : sinAcentos(nombre);
+  };
+  const [primera, segunda] = [nombreDe(a), nombreDe(b)];
+  if (!primera || !segunda) return undefined;
+  return Object.values(diagrama.relations).find((relacion) => {
+    const extremos = [nombreDeClase(relacion.source.classId), nombreDeClase(relacion.target.classId)];
+    return extremos.includes(primera) && extremos.includes(segunda);
+  });
+}
+
+/**
+ * Deja aplicable una clase intermedia pedida a un modelo local pequeño, que
+ * cuelga la clase antes de crearla, a veces ni la crea, y no comprueba que la
+ * relación sea muchos a muchos. Las operaciones llegan una a una en streaming,
+ * así que el colgado se retiene y sale al final con lo que le hace falta.
+ */
+function crearPreparadorDeClaseIntermedia(diagrama: ClassDiagram) {
+  type Operacion = AssistantResponse['operations'][number];
+  const existentes = new Set(Object.values(diagrama.classes).map((clase) => clase.name));
+  const creadas = new Set<string>();
+  const pendientes: Extract<Operacion, { op: 'setAssociationClass' }>[] = [];
+
+  return {
+    recibir(operacion: Operacion): Operacion[] {
+      if (operacion.op === 'addRelation' && operacion.associationClassName) {
+        const existente = relacionEntre(diagrama, operacion.source, operacion.target);
+        if (!existente) return [operacion];
+        return this.recibir({
+          op: 'setAssociationClass',
+          relationId: existente.id,
+          classRef: { name: operacion.associationClassName },
+        });
+      }
+      if (operacion.op === 'addClass') {
+        if (creadas.has(operacion.name)) return [];
+        creadas.add(operacion.name);
+        return [operacion];
+      }
+      if (operacion.op !== 'setAssociationClass' || !operacion.classRef || !('name' in operacion.classRef)) return [operacion];
+      pendientes.push(operacion);
+      const nombre = operacion.classRef.name;
+      if (existentes.has(nombre) || creadas.has(nombre)) return [];
+      creadas.add(nombre);
+      return [{ op: 'addClass', name: nombre, kind: 'class' }];
+    },
+    cerrar(): { operaciones: Operacion[]; convertida: boolean } {
+      const operaciones: Operacion[] = [];
+      const convertidas = new Set<string>();
+      for (const colgado of pendientes) {
+        const relacion = diagrama.relations[colgado.relationId];
+        const yaEsMuchosAMuchos = !relacion || (isToMany(relacion.source.multiplicity) && isToMany(relacion.target.multiplicity));
+        if (!yaEsMuchosAMuchos && !convertidas.has(colgado.relationId)) {
+          convertidas.add(colgado.relationId);
+          operaciones.push({
+            op: 'updateRelation',
+            id: colgado.relationId,
+            changes: { sourceMultiplicity: '*', targetMultiplicity: '*' },
+          });
+        }
+        operaciones.push(colgado);
+      }
+      return { operaciones, convertida: convertidas.size > 0 };
+    },
+  };
+}
+
+/**
+ * La forma de la respuesta, como esquema y no como `json_object`: un JSON válido
+ * no basta, porque un modelo pequeño llegó a meter "confidence" dentro de
+ * `actions` como texto. Las acciones van abiertas: las valida `parseAssistantResponse`.
+ */
+const FORMATO_DE_RESPUESTA = {
+  type: 'json_schema',
+  json_schema: {
+    name: 'respuesta_asistente',
+    schema: {
+      type: 'object',
+      properties: { actions: { type: 'array', items: { type: 'object' } }, confidence: { type: 'number' } },
+      required: ['actions', 'confidence'],
+    },
+  },
+} as const;
+
+/**
+ * Ejemplos para modelos locales pequeños, que tienden a omitir las relaciones.
+ * Opt-in (`LLM_RELATION_EXAMPLES`): un modelo grande no los necesita y gastaría
+ * tokens en ellos. Usan un dominio ajeno a la evaluación para no darle las
+ * respuestas de sus casos.
+ */
+const EJEMPLOS_DE_RELACIONES = `
+
+Ejemplos de órdenes con relaciones:
+- Regla: si la orden dice que una clase tiene, se asocia, se relaciona, hereda o se compone de otra, la respuesta SIEMPRE lleva su operación de relación, aunque la orden pida más cosas. No la omitas.
+- En "addRelation" omite "associationClassName" salvo que pidan una clase intermedia; nunca escribas campos con null.
+- El id de "updateRelation" se copia del corchete de la línea de esa relación en el diagrama actual, con sus mayúsculas exactas.
+- Las multiplicidades nuevas salen de la orden, nunca de lo que el diagrama ya tiene: "de X a Y" pone X en "sourceMultiplicity" e Y en "targetMultiplicity", con uno = "1" y muchos = "*". Escribe SIEMPRE los dos campos, también el que no cambia. Aplica el cambio aunque creas que ya está así.
+- El diagrama actual es la única verdad sobre lo que existe: si un atributo aparece ahí, se puede modificar o eliminar.
+
+Orden: crea una asociación entre Factura y Usuario
+{"actions":[{"_type":"message","text":"Asocio Factura con Usuario."},{"_type":"operation","operation":{"op":"addRelation","kind":"association","source":{"name":"Factura"},"target":{"name":"Usuario"},"sourceMultiplicity":"1","targetMultiplicity":"1"}}],"confidence":0.9}
+
+Orden: crea la clase Autor con un atributo nombre de tipo String; un Autor tiene muchos Libro
+{"actions":[{"_type":"message","text":"Creo Autor y lo relaciono con Libro."},{"_type":"operation","operation":{"op":"addClass","name":"Autor","kind":"class","position":{"x":0,"y":0}}},{"_type":"operation","operation":{"op":"addAttribute","classRef":{"name":"Autor"},"name":"nombre","type":"String","visibility":"-","isIdentifier":false,"isNullable":true,"isUnique":false}},{"_type":"operation","operation":{"op":"addRelation","kind":"association","source":{"name":"Autor"},"target":{"name":"Libro"},"sourceMultiplicity":"1","targetMultiplicity":"*"}}],"confidence":0.9}
+
+Diagrama actual contiene: [id:K7] Libro 1 --association--> * Capitulo
+Orden: cambia la relación entre Libro y Capitulo a una composición
+{"actions":[{"_type":"message","text":"La cambio a composición."},{"_type":"operation","operation":{"op":"updateRelation","id":"K7","changes":{"kind":"composition"}}}],"confidence":0.9}
+
+Diagrama actual contiene: [id:K7] Libro 1 --association--> * Capitulo
+Orden: cambia la relación entre Libro y Capitulo de muchos a muchos
+{"actions":[{"_type":"message","text":"La dejo de muchos a muchos."},{"_type":"operation","operation":{"op":"updateRelation","id":"K7","changes":{"sourceMultiplicity":"*","targetMultiplicity":"*"}}}],"confidence":0.9}
+
+Diagrama actual contiene: [id:K7] Libro 1 --association--> * Capitulo
+Orden: cambia la relación entre Libro y Capitulo de muchos a uno
+{"actions":[{"_type":"message","text":"La dejo de muchos a uno."},{"_type":"operation","operation":{"op":"updateRelation","id":"K7","changes":{"sourceMultiplicity":"*","targetMultiplicity":"1"}}}],"confidence":0.9}`;
+
 /**
  * INSTRUCCIONES PARA "HABLAR SOLA":
  * A diferencia de `SYSTEM_PROMPT`, aquí no se pide traducir ninguna orden —no
@@ -210,6 +376,13 @@ export interface LlmOptions {
   model?: string;
   baseUrl?: string;
   timeoutMs?: number;
+  /** Solo protocolo OpenAI y solo al interpretar: la revisión y el resumen son texto llano. */
+  modoJson?: boolean;
+  ejemplosDeRelaciones?: boolean;
+  /** Cuántos mensajes del hilo viajan al modelo. Un modelo local pequeño imita las respuestas largas y agota su contexto. */
+  maxMensajesHistorial?: number;
+  /** Quita del hilo las respuestas del modelo: uno pequeño repite sus negativas aunque el diagrama las desmienta. */
+  historialSoloPersona?: boolean;
   fallback?: AssistantEngine;
 }
 
@@ -249,7 +422,19 @@ export class LlmAssistant implements AssistantEngine {
       const raw = await this.ask(prompt, diagram, contexto);
       // 2. Comprueba que la respuesta de la IA sea un código JSON correcto.
       const parsed = parseAssistantResponse(extractJson(raw));
-      if (parsed.ok) return parsed.value;
+      if (parsed.ok) {
+        if (!this.options.ejemplosDeRelaciones) return parsed.value;
+        const preparador = crearPreparadorDeClaseIntermedia(diagram);
+        const recibidas = parsed.value.operations.flatMap((operacion) =>
+          preparador.recibir(completarMultiplicidad(operacion, prompt, diagram)),
+        );
+        const { operaciones, convertida } = preparador.cerrar();
+        return {
+          ...parsed.value,
+          operations: [...recibidas, ...operaciones],
+          explanation: convertida ? `${parsed.value.explanation} ${AVISO_RELACION_CONVERTIDA}`.trim() : parsed.value.explanation,
+        };
+      }
       console.warn('El modelo devolvió una respuesta que no valida:', parsed.error);
     } catch (error) {
       console.warn('El modelo no respondió:', (error as Error).message);
@@ -279,33 +464,44 @@ export class LlmAssistant implements AssistantEngine {
     if (prefijo) mensajes.push({ role: 'assistant', content: prefijo });
     const body = this.provider === 'anthropic'
       ? { model, max_tokens: 4096, stream: true, system, messages: mensajes }
-      : { model, max_tokens: 4096, stream: true, messages: [{ role: 'system' as const, content: system }, ...mensajes] };
+      : {
+          model,
+          max_tokens: 4096,
+          stream: true,
+          messages: [{ role: 'system' as const, content: system }, ...mensajes],
+          ...(this.options.modoJson ? { response_format: FORMATO_DE_RESPUESTA } : {}),
+        };
 
     let texto = prefijo;
     let accionesProcesadas = 0;
     let ultimoParcial: string | undefined;
     let confianza = 1;
 
-    const emitirAccion = (valor: unknown): EventoAsistente | null => {
+    const preparador = crearPreparadorDeClaseIntermedia(diagram);
+    const eventoDe = (operacion: AssistantResponse['operations'][number]): EventoAsistente => ({
+      tipo: 'operacion',
+      operacion,
+      descripcion: describeOperation(operacion),
+      motor: this.name,
+    });
+
+    const emitirAccion = (valor: unknown): EventoAsistente[] => {
       const validada = AssistantActionSchema.safeParse(valor);
       if (!validada.success) throw new Error(`acción del modelo no válida: ${validada.error.message}`);
       const accion = validada.data;
-      if (accion._type === 'think') return null;
-      if (accion._type === 'message') return { tipo: 'mensaje', texto: accion.text };
-      if (accion._type === 'point') return { tipo: 'senalar', clases: accion.classes };
-      if (accion._type === 'review') return { tipo: 'repasar' };
-      return {
-        tipo: 'operacion',
-        operacion: accion.operation,
-        descripcion: describeOperation(accion.operation),
-        motor: this.name,
-      };
+      if (accion._type === 'think') return [];
+      if (accion._type === 'message') return [{ tipo: 'mensaje', texto: accion.text }];
+      if (accion._type === 'point') return [{ tipo: 'senalar', clases: accion.classes }];
+      if (accion._type === 'review') return [{ tipo: 'repasar' }];
+      if (!this.options.ejemplosDeRelaciones) return [eventoDe(accion.operation)];
+      return preparador.recibir(completarMultiplicidad(accion.operation, prompt, diagram)).map(eventoDe);
     };
 
-    const registrar = async function* (evento: EventoAsistente | null): AsyncGenerator<EventoAsistente> {
-      if (!evento) return;
-      eventosEnviados += 1;
-      yield evento;
+    const registrar = async function* (eventos: EventoAsistente[]): AsyncGenerator<EventoAsistente> {
+      for (const evento of eventos) {
+        eventosEnviados += 1;
+        yield evento;
+      }
     };
 
     // Uso de esta respuesta: lo que informen los eventos del proveedor o, si
@@ -380,6 +576,9 @@ export class LlmAssistant implements AssistantEngine {
       for (const accion of completa.actions.slice(accionesProcesadas)) {
         yield* registrar(emitirAccion(accion));
       }
+      const { operaciones, convertida } = preparador.cerrar();
+      if (convertida) yield* registrar([{ tipo: 'mensaje', texto: AVISO_RELACION_CONVERTIDA }]);
+      yield* registrar(operaciones.map(eventoDe));
       if (eventosEnviados === 0) {
         yield* this.eventosDeFallback(prompt, diagram);
         return;
@@ -388,6 +587,7 @@ export class LlmAssistant implements AssistantEngine {
     } catch (error) {
       if (signal?.aborted) throw error;
       if (eventosEnviados > 0) throw error;
+      console.warn('El modelo no respondió:', (error as Error).message);
       yield* this.eventosDeFallback(prompt, diagram);
     } finally {
       reportarUso();
@@ -424,7 +624,10 @@ export class LlmAssistant implements AssistantEngine {
     // como texto plano dentro del prompt: así el modelo conversa de verdad en
     // vez de releer un resumen cada vez. Sin firma: el hilo es de una sola
     // persona.
-    return (contexto?.historial ?? []).map((turno) => ({ role: turno.role, content: turno.texto }));
+    const completo = contexto?.historial ?? [];
+    const historial = this.options.historialSoloPersona ? completo.filter((turno) => turno.role === 'user') : completo;
+    const limite = this.options.maxMensajesHistorial;
+    return (limite ? historial.slice(-limite) : historial).map((turno) => ({ role: turno.role, content: turno.texto }));
   }
 
   // FUNCIÓN PRIVADA DE COMUNICACIÓN CON LA IA:
@@ -439,7 +642,9 @@ export class LlmAssistant implements AssistantEngine {
     diagram: ClassDiagram,
     contexto?: AssistantContext,
   ): { system: string; user: string; historial: { role: 'user' | 'assistant'; content: string }[] } {
-    const system = SYSTEM_PROMPT.replace('TIPOS', listSupportedTypes().join(', '));
+    const system =
+      SYSTEM_PROMPT.replace('TIPOS', listSupportedTypes().join(', ')) +
+      (this.options.ejemplosDeRelaciones ? EJEMPLOS_DE_RELACIONES : '');
     const otrosProyectos = contexto?.otrosProyectos ?? [];
     const lineaOtrosProyectos = otrosProyectos.length > 0
       ? `\n\nOtros proyectos de este usuario (solo el nombre, para contexto; nunca mezcles su contenido con este diagrama): ${otrosProyectos.join(', ')}.`
@@ -559,6 +764,7 @@ export class LlmAssistant implements AssistantEngine {
         max_tokens: maxTokens,
         stream: false,
         messages: [{ role: 'system', content: system }, ...historial, { role: 'user', content: user }],
+        ...(forzarJsonInicial && this.options.modoJson ? { response_format: FORMATO_DE_RESPUESTA } : {}),
       },
       timeoutMs: this.options.timeoutMs ?? 20_000,
     });
@@ -797,6 +1003,11 @@ export function createAssistant(config: {
   llmProvider?: 'anthropic' | 'openai';
   llmBaseUrl?: string;
   llmModel?: string;
+  llmTimeoutMs?: number;
+  llmJsonMode?: boolean;
+  llmRelationExamples?: boolean;
+  llmHistoryMessages?: number;
+  llmHistoryUserOnly?: boolean;
 }): AssistantEngine {
   if (!config.llmApiKey) return new GrammarAssistant();
   return new LlmAssistant({
@@ -804,5 +1015,10 @@ export function createAssistant(config: {
     provider: config.llmProvider,
     baseUrl: config.llmBaseUrl,
     model: config.llmModel,
+    timeoutMs: config.llmTimeoutMs,
+    modoJson: config.llmJsonMode,
+    ejemplosDeRelaciones: config.llmRelationExamples,
+    maxMensajesHistorial: config.llmHistoryMessages,
+    historialSoloPersona: config.llmHistoryUserOnly,
   });
 }

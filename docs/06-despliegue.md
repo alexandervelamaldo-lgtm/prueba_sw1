@@ -325,6 +325,11 @@ proyecto: son la definición del despliegue, no notas de una sesión.
    | `GROQ_API_KEY` | Opcional. Desde Secrets Manager. Transcribe la voz (Whisper) en los navegadores sin reconocimiento de voz propio, como Firefox; sin ella, ahí no hay micrófono. `GROQ_TRANSCRIPTION_MODEL` cambia el modelo (por defecto `whisper-large-v3-turbo`) |
    | `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL` | Opcionales. Por defecto, una voz prediseñada y `eleven_flash_v2_5` |
    | `LLM_LIMITE_DIARIO_TOKENS` | Opcional. Tokens de la IA que cada usuario puede gastar por día (UTC); al llegar, el asistente responde 429 hasta las 00:00 UTC. Sin ella no hay límite, solo se cuenta |
+   | `LLM_TIMEOUT_MS` | Opcional. Plazo del modelo de texto en milisegundos (por defecto 20000); al vencer responde la gramática local. Súbelo con un modelo local en CPU |
+   | `LLM_JSON_MODE` | Opcional. Con `1`, el asistente pide al modelo `response_format` con el esquema de su respuesta (protocolo OpenAI). Útil con modelos locales pequeños; déjala sin definir si tu proveedor no lo admite |
+   | `LLM_RELATION_EXAMPLES` | Opcional. Con `1`, añade al prompt del asistente ejemplos de órdenes con relaciones, para modelos locales pequeños que tienden a omitirlas, completa los dos extremos cuando la orden dicta una multiplicidad como «de muchos a uno», y al pedir una clase intermedia convierte la relación a muchos a muchos si hace falta. Gasta unos cientos de tokens por pedido |
+   | `LLM_HISTORY_MESSAGES` | Opcional. Máximo de mensajes de la conversación que recibe el modelo; sin ella, todos los de la ventana. Con un modelo local pequeño conviene `6`. Su contexto se amplía con `ollama create qwen3-uml -f despliegue/Modelfile.qwen-local` |
+   | `LLM_HISTORY_USER_ONLY` | Opcional. Con `1`, el modelo recibe solo los mensajes de la persona, sin sus propias respuestas. Evita que un modelo local pequeño repita sus negativas; a cambio, no recuerda lo que él mismo contestó |
    | `DOCS_DIR` | No hace falta. La imagen trae `docs/` y el valor por defecto lo encuentra |
 
 App Runner admite WebSockets y termina TLS por su cuenta, así que `wss://`

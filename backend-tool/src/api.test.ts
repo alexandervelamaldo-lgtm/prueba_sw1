@@ -55,11 +55,13 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await deps.rooms.shutdown();
-  // `LocalIdentityProvider.persist()` escribe el fichero de usuarios en segundo
-  // plano y no devuelve nada que esperar. Sin este `flush`, el borrado del
-  // directorio compite con una escritura a medio hacer y Windows responde
-  // ENOTEMPTY: una prueba que falla por el desmontaje, no por lo que probaba.
+  // `LocalIdentityProvider.persist()` y `FileConversationStore.persistir()`
+  // escriben en segundo plano y no devuelven nada que esperar. Sin este
+  // `flush`, el borrado del directorio compite con una escritura a medio
+  // hacer y Windows responde ENOTEMPTY: una prueba que falla por el
+  // desmontaje, no por lo que probaba.
   if (deps.identity instanceof LocalIdentityProvider) await deps.identity.flush();
+  await (deps.conversations as { flush?: () => Promise<void> }).flush?.();
   await rm(dataDir, { recursive: true, force: true });
 });
 
@@ -804,6 +806,51 @@ describe('asistente', () => {
     );
   });
 
+  it('anuncia una importación de XMI o de imagen a todos los que compartan el proyecto, con quién la hizo', async () => {
+    const ana = await registrar('ana@ejemplo.com');
+    const beto = await registrar('beto@ejemplo.com');
+    const proyectoId = await crearProyecto(ana);
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/miembros`)
+      .set('Authorization', `Bearer ${ana}`)
+      .send({ email: 'beto@ejemplo.com', rol: 'viewer' });
+
+    const anuncio = await request(app)
+      .post(`/api/proyectos/${proyectoId}/asistente/accion-archivo`)
+      .set('Authorization', `Bearer ${ana}`)
+      .send({ accion: 'importar-xmi' });
+    expect(anuncio.status).toBe(204);
+
+    // Beto no hizo la importación, pero comparte el proyecto: tiene que verla
+    // en su propio sondeo del historial, igual que vería cualquier otro turno.
+    const historial = await request(app)
+      .get(`/api/proyectos/${proyectoId}/asistente/historial`)
+      .set('Authorization', `Bearer ${beto}`);
+    expect(historial.status).toBe(200);
+    const turnos = historial.body.turnos as { texto: string; autorNombre: string | null }[];
+    expect(turnos.map((turno) => turno.texto)).toEqual([
+      'Importa un diagrama desde un XMI.',
+      'Diagrama importado desde un XMI.',
+    ]);
+    expect(turnos[0]?.autorNombre).toBe('ana');
+  });
+
+  it('quien solo puede leer no puede anunciar una importación', async () => {
+    const ana = await registrar('ana@ejemplo.com');
+    const beto = await registrar('beto@ejemplo.com');
+    const proyectoId = await crearProyecto(ana);
+    await request(app)
+      .post(`/api/proyectos/${proyectoId}/miembros`)
+      .set('Authorization', `Bearer ${ana}`)
+      .send({ email: 'beto@ejemplo.com', rol: 'viewer' });
+
+    const anuncio = await request(app)
+      .post(`/api/proyectos/${proyectoId}/asistente/accion-archivo`)
+      .set('Authorization', `Bearer ${beto}`)
+      .send({ accion: 'importar-imagen' });
+    expect(anuncio.status).toBe(403);
+  });
+
   it('con revision, el motor recibe la petición de revisión con las pistas del revisor local, y el turno guarda lo que se escribió', async () => {
     const token = await registrar('ana@ejemplo.com');
     const proyectoId = await crearProyecto(token);
@@ -932,7 +979,7 @@ describe('asistente', () => {
 
     await enviar();
     await vi.waitFor(async () => {
-      expect(await deps.conversations.getResumen(proyectoId, anaId)).toBe('Ana empezó pidiendo la orden 1.');
+      expect(await deps.conversations.getResumen(proyectoId)).toBe('Ana empezó pidiendo la orden 1.');
     });
     await enviar();
 
@@ -987,7 +1034,7 @@ describe('asistente', () => {
     await Promise.all([enviar('orden 21'), enviar('orden 22')]);
     await vi.waitFor(async () => {
       expect(llamadas).toHaveLength(2);
-      expect(await deps.conversations.getResumen(proyectoId, anaId)).toBe(
+      expect(await deps.conversations.getResumen(proyectoId)).toBe(
         'orden 1,respuesta 1 | orden 2,respuesta 2',
       );
     });
@@ -1302,7 +1349,7 @@ describe('asistente', () => {
     expect(eventos.at(-1)).toMatchObject({ tipo: 'fin', motor: 'gramatica-local' });
   });
 
-  it('cada integrante tiene su propio hilo: Beto no ve lo que Ana le pidió a la IA', async () => {
+  it('el hilo es del proyecto: Beto ve lo que Ana le pidió a la IA, y al revés', async () => {
     const ana = await registrar('ana@ejemplo.com');
     const beto = await registrar('beto@ejemplo.com');
     const proyectoId = await crearProyecto(ana);
@@ -1328,14 +1375,13 @@ describe('asistente', () => {
       .set('Authorization', `Bearer ${ana}`);
 
     expect(historialDeBeto.status).toBe(200);
+    // Mismo hilo, visto por cualquiera de los dos: ambos pedidos aparecen,
+    // cada uno con el autor que lo escribió.
     const textosDeBeto = historialDeBeto.body.turnos.map((t: { texto: string }) => t.texto);
+    expect(textosDeBeto).toContain('crea la clase Cliente');
     expect(textosDeBeto).toContain('crea la clase Pedido');
-    expect(textosDeBeto).not.toContain('crea la clase Cliente');
-    expect(historialDeBeto.body.turnos).toHaveLength(2);
-
-    const textosDeAna = historialDeAna.body.turnos.map((t: { texto: string }) => t.texto);
-    expect(textosDeAna).toContain('crea la clase Cliente');
-    expect(textosDeAna).not.toContain('crea la clase Pedido');
+    expect(historialDeBeto.body.turnos).toHaveLength(4);
+    expect(historialDeAna.body.turnos).toEqual(historialDeBeto.body.turnos);
   });
 });
 

@@ -66,6 +66,13 @@ export function handleMessage(message: Uint8Array, context: HandleContext): Hand
     return { kind: 'broadcast', payload: message };
   }
 
+  if (sobre.kind === 'chat') {
+    // El aviso de chat lo manda el servidor cuando guarda un turno o un
+    // comentario espontáneo (`api/assistant.ts`, `ai/vigilancia.ts`); ningún
+    // cliente tiene razón legítima para mandarlo él mismo.
+    return { kind: 'rejected', reason: 'aviso de chat solo lo manda el servidor' };
+  }
+
   const { decoder } = sobre;
 
   let syncType: number;

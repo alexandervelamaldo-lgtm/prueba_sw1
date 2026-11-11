@@ -24,6 +24,7 @@ function participante(parcial: Partial<Participante> = {}): Participante {
     color: '#739ec9',
     cursor: { x: 10, y: 10 },
     seleccion: null,
+    modoIA: false,
     ...parcial,
   };
 }

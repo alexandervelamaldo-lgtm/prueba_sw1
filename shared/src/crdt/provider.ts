@@ -1,4 +1,5 @@
 import * as encoding from 'lib0/encoding';
+import { ObservableV2 } from 'lib0/observable';
 import * as syncProtocol from 'y-protocols/sync';
 import {
   Awareness,
@@ -98,7 +99,13 @@ const CIERRES_DEFINITIVOS = new Set([
 /** El único valor de `readyState` en el que se puede enviar. */
 const ABIERTO = 1;
 
-export class CollabProvider {
+/** Eventos propios del proveedor, más allá de los de `doc` y `awareness`. */
+interface EventosProvider {
+  /** Algo cambió en el hilo del Modo IA del proyecto: vuelve a pedir el historial. */
+  chat: () => void;
+}
+
+export class CollabProvider extends ObservableV2<EventosProvider> {
   readonly doc: Y.Doc;
   readonly awareness: Awareness;
 
@@ -131,6 +138,7 @@ export class CollabProvider {
   private generacion = 0;
 
   constructor(options: CollabProviderOptions) {
+    super();
     this.doc = options.doc;
     this.url = options.url;
     this.awareness = options.awareness ?? new Awareness(options.doc);
@@ -292,6 +300,10 @@ export class CollabProvider {
       applyAwarenessUpdate(this.awareness, sobre.payload, this);
       return;
     }
+    if (sobre.kind === 'chat') {
+      this.emit('chat', []);
+      return;
+    }
 
     // `readSyncMessage` lee el subtipo del decodificador y escribe la respuesta
     // entera en el codificador, subtipo incluido. Solo hay que darle la cabecera
@@ -383,7 +395,7 @@ export class CollabProvider {
   }
 
   /** Cierra sin reintentar. Es lo que hay que llamar al salir del diagrama. */
-  destroy(): void {
+  override destroy(): void {
     this.cerradoAdrede = true;
     if (this.reintentoTimer !== null) clearTimeout(this.reintentoTimer);
     this.doc.off('update', this.enviarCambioLocal);
@@ -391,6 +403,7 @@ export class CollabProvider {
     this.awareness.destroy();
     this.socket?.close();
     this.socket = null;
+    super.destroy();
   }
 }
 

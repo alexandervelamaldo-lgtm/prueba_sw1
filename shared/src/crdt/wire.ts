@@ -19,10 +19,12 @@ import * as Y from 'yjs';
  * Formato: [varUint tipo][carga]
  *   tipo 0 → sincronización del documento
  *   tipo 1 → presencia (awareness)
+ *   tipo 2 → aviso de chat del Modo IA, sin carga (ver `encodeChatPing`)
  */
 
 export const MESSAGE_SYNC = 0;
 export const MESSAGE_AWARENESS = 1;
+export const MESSAGE_CHAT = 2;
 
 /** Subtipos dentro de un mensaje de sincronización. */
 export const SYNC_STEP_1 = 0;
@@ -51,6 +53,24 @@ export function encodeAwareness(
   const encoder = encoding.createEncoder();
   encoding.writeVarUint(encoder, MESSAGE_AWARENESS);
   encoding.writeVarUint8Array(encoder, awarenessProtocol.encodeAwarenessUpdate(awareness, clients));
+  return encoding.toUint8Array(encoder);
+}
+
+/**
+ * «Algo cambió en el Modo IA, vuelve a pedir el historial».
+ *
+ * Sin carga a propósito: lo que de verdad hace falta mandar —el turno nuevo,
+ * con su `creadoEn` tal cual quedó en el almacén— ya tiene un camino propio y
+ * probado, el que usa `ModoIA.tsx` al montarse y cada `INTERVALO_SONDEO_MS`
+ * (`api.obtenerHistorialAsistente`). Duplicar ese contenido aquí abriría una
+ * segunda fuente de verdad que podría desincronizarse de la primera —por
+ * ejemplo, si el aviso llega antes de que la escritura en disco termine—. Este
+ * mensaje solo adelanta el próximo sondeo; quien ya sondea cada pocos segundos
+ * simplemente deja de esperar.
+ */
+export function encodeChatPing(): Uint8Array {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MESSAGE_CHAT);
   return encoding.toUint8Array(encoder);
 }
 
@@ -90,7 +110,11 @@ export interface IncomingAwareness {
   payload: Uint8Array;
 }
 
-export type Incoming = IncomingSync | IncomingAwareness | { kind: 'ilegible' };
+export interface IncomingChat {
+  kind: 'chat';
+}
+
+export type Incoming = IncomingSync | IncomingAwareness | IncomingChat | { kind: 'ilegible' };
 
 /** Lee la cabecera de un mensaje y deja el resto listo para interpretar. */
 export function readEnvelope(message: Uint8Array): Incoming {
@@ -101,6 +125,7 @@ export function readEnvelope(message: Uint8Array): Incoming {
     if (messageType === MESSAGE_AWARENESS) {
       return { kind: 'awareness', payload: decoding.readVarUint8Array(decoder) };
     }
+    if (messageType === MESSAGE_CHAT) return { kind: 'chat' };
     if (messageType !== MESSAGE_SYNC) return { kind: 'ilegible' };
 
     return { kind: 'sync', decoder };

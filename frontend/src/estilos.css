@@ -1234,7 +1234,8 @@ select:focus {
   gris se lee mal justo cuando más importa distinguirlo de un «1».
 */
 .relacion__etiqueta,
-.relacion__multiplicidad {
+.relacion__multiplicidad,
+.relacion__rol {
   fill: var(--texto-2);
   font-size: 10px;
   text-anchor: middle;
@@ -1247,6 +1248,15 @@ select:focus {
 .relacion__multiplicidad {
   fill: var(--texto);
   font-weight: 600;
+}
+
+/*
+  El papel va en cursiva, como en cualquier diagrama UML impreso, para que no
+  se confunda con la cardinalidad que tiene justo debajo: son dos datos del
+  mismo extremo y hay que distinguirlos sin leer cuál está más arriba.
+*/
+.relacion__rol {
+  font-style: italic;
 }
 
 /*
@@ -7076,7 +7086,8 @@ select:focus {
   margin-left: auto;
 }
 
-.barra__boton--tema-ia {
+.barra__boton--tema-ia,
+.barra__boton--icono-ia {
   background: var(--fondo-3);
   color: var(--texto);
   border: 1px solid var(--borde);
@@ -7089,7 +7100,8 @@ select:focus {
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.barra__boton--tema-ia:hover {
+.barra__boton--tema-ia:hover,
+.barra__boton--icono-ia:hover {
   background: var(--borde);
 }
 

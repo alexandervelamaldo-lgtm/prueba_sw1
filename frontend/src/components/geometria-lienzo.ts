@@ -96,6 +96,70 @@ export function etiquetaClase(cls: UmlClass): string | null {
 }
 
 /**
+ * El hueco que deja la línea separadora entre una sección de miembros y la
+ * siguiente (atributos → métodos → literales de enum).
+ */
+const DESPLAZAMIENTO_SEPARADOR = 9;
+
+export interface FilaMiembro {
+  texto: string;
+  /** Línea base del texto, en coordenadas de la caja. */
+  y: number;
+  /** Clase CSS de la fila (distingue métodos y literales de los atributos). */
+  clase: string;
+  /** Si va precedida de la línea separadora de su sección. */
+  separadorAntes: boolean;
+  /** Dónde pintar esa línea, solo presente cuando `separadorAntes` es cierto. */
+  separadorY?: number;
+}
+
+/**
+ * Las filas de una clase, en el mismo orden en que se pintan: atributos,
+ * métodos y —solo si es un enum— sus literales.
+ *
+ * Antes esta cuenta vivía en dos sitios a la vez: en `medidasDe`, para la
+ * altura de la caja, y en `NodoClaseUml`, para la posición de cada fila al
+ * pintarla. Mantener esas dos cuentas sincronizadas a mano es lo que hizo que
+ * los literales de un enum nunca llegaran a dibujarse: nadie tocó el segundo
+ * sitio al añadir el primero. Con una sola función, los dos usos leen el
+ * mismo resultado.
+ */
+export function filasMiembro(cls: UmlClass): FilaMiembro[] {
+  const secciones: Array<{ textos: string[]; clase: string }> = [
+    { textos: cls.attributes.map(textoAtributo), clase: 'caja__miembro' },
+    { textos: cls.methods.map(textoMetodo), clase: 'caja__miembro caja__miembro--metodo' },
+  ];
+  if (cls.kind === 'enum') {
+    secciones.push({ textos: cls.literals, clase: 'caja__miembro caja__miembro--literal' });
+  }
+
+  const filas: FilaMiembro[] = [];
+  let y = ALTO_CABECERA;
+  let huboSeccion = false;
+
+  for (const { textos, clase } of secciones) {
+    if (textos.length === 0) continue;
+    let separadorY: number | undefined;
+    if (huboSeccion) {
+      separadorY = y + 3;
+      y += DESPLAZAMIENTO_SEPARADOR;
+    }
+    textos.forEach((texto, indice) => {
+      y += ALTO_FILA;
+      filas.push({
+        texto,
+        y: y - 5,
+        clase,
+        separadorAntes: indice === 0 && huboSeccion,
+        ...(indice === 0 && separadorY !== undefined ? { separadorY } : {}),
+      });
+    });
+    huboSeccion = true;
+  }
+  return filas;
+}
+
+/**
  * Cuánto ocupa una clase en el lienzo.
  *
  * La anchura era fija en 200 px y el texto que no cabía simplemente se salía de
@@ -105,13 +169,14 @@ export function etiquetaClase(cls: UmlClass): string | null {
  * mezcla con el de otra clase y no se sabe de quién es cada línea.
  */
 export function medidasDe(cls: UmlClass): Medida {
-  const filas = cls.attributes.length + cls.methods.length;
-  const separador = cls.attributes.length > 0 && cls.methods.length > 0 ? 6 : 0;
-  const alto = ALTO_CABECERA + Math.max(filas, 1) * ALTO_FILA + separador + PADDING;
+  const filas = filasMiembro(cls);
+  // Sin filas, la caja deja igualmente el hueco de una fila vacía: una clase
+  // sin miembros no se encoge hasta ser solo la cabecera.
+  const ultimaY = filas.at(-1)?.y ?? ALTO_CABECERA + ALTO_FILA - 5;
+  const alto = ultimaY + 5 + PADDING;
 
-  const miembros = [...cls.attributes.map(textoAtributo), ...cls.methods.map(textoMetodo)];
-  const anchoMiembros = miembros.reduce(
-    (mayor, texto) => Math.max(mayor, texto.length * ANCHO_CARACTER_MIEMBRO + PADDING * 2),
+  const anchoMiembros = filas.reduce(
+    (mayor, fila) => Math.max(mayor, fila.texto.length * ANCHO_CARACTER_MIEMBRO + PADDING * 2),
     0,
   );
   // El nombre va centrado, así que necesita holgura a los dos lados; si no, roza

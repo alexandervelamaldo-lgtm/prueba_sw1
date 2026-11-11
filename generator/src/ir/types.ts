@@ -99,6 +99,12 @@ export interface AssociationIR {
   nullable: boolean;
   getterName: string;
   setterName: string;
+  /**
+   * Cota superior de la multiplicidad UML del extremo que llena esta
+   * colección (p. ej. `3` para `0..3`), si el diagrama la acota. `*` y `n..*`
+   * no la fijan y se omite: sin cota no hay nada que validar.
+   */
+  maxSize?: number;
 }
 
 export interface EntityIR {

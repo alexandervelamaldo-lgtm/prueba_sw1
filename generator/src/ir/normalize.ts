@@ -11,6 +11,7 @@ import {
   listRelations,
   lookupType,
   packageForClass,
+  parseMultiplicity,
   pluralize,
   toCamelCase,
   toKebabCase,
@@ -202,6 +203,19 @@ function buildAssociations(
   return result;
 }
 
+/**
+ * Cota superior de una multiplicidad, para `AssociationIR.maxSize`.
+ *
+ * `*` y `n..*` representan «sin cota» (`upper === null` en `parseMultiplicity`)
+ * y no producen ninguna restricción; una cota de `0` tampoco tendría sentido
+ * como `@Size(max = 0)`, así que se trata igual que «sin cota» en vez de
+ * generar una validación que rechazaría siempre la colección.
+ */
+function maxSizeDe(multiplicity: string): number | undefined {
+  const { upper } = parseMultiplicity(multiplicity);
+  return upper && upper > 0 ? upper : undefined;
+}
+
 function isPersistentAssociation(relation: UmlRelation): boolean {
   return (
     relation.kind === 'association' ||
@@ -296,6 +310,7 @@ function associationsForRelation(
       manySideRole: roleOnTarget,
       cascade: cascadeOnSource,
       collectionRequired: isRequired(relation.source.multiplicity),
+      manySideMultiplicity: relation.target.multiplicity,
       navigableFromOne: relation.target.navigable,
       navigableFromMany: relation.source.navigable,
       selfReference,
@@ -311,6 +326,7 @@ function associationsForRelation(
       manySideRole: roleOnSource,
       cascade: false, // la composición se declara desde el todo, que aquí es target
       collectionRequired: isRequired(relation.target.multiplicity),
+      manySideMultiplicity: relation.source.multiplicity,
       navigableFromOne: relation.source.navigable,
       navigableFromMany: relation.target.navigable,
       selfReference,
@@ -340,6 +356,7 @@ function associationsForRelation(
     collection: true,
     javaType: `Set<${targetName}>`,
     nullable: true,
+    maxSize: maxSizeDe(relation.target.multiplicity),
     ...accessors(owningField),
   };
 
@@ -361,6 +378,7 @@ function associationsForRelation(
         collection: true,
         javaType: `Set<${sourceName}>`,
         nullable: true,
+        maxSize: maxSizeDe(relation.source.multiplicity),
         ...accessors(inverseField),
       },
     });
@@ -375,6 +393,8 @@ function oneToManyPair(spec: {
   manySideRole?: string;
   cascade: boolean;
   collectionRequired: boolean;
+  /** Multiplicidad del extremo `manySide` en la relación original: la cota de su colección. */
+  manySideMultiplicity: string;
   navigableFromOne: boolean;
   navigableFromMany: boolean;
   selfReference: boolean;
@@ -431,6 +451,7 @@ function oneToManyPair(spec: {
     collection: true,
     javaType: `Set<${manyName}>`,
     nullable: true,
+    maxSize: maxSizeDe(spec.manySideMultiplicity),
     ...accessors(collectionField),
   };
 
@@ -506,6 +527,7 @@ function associationClassPair(
         collection: true,
         javaType: `Set<${assocName}>`,
         nullable: true,
+        maxSize: maxSizeDe(relation.target.multiplicity),
         ...accessors(collectionField),
       },
     });
@@ -527,6 +549,7 @@ function associationClassPair(
         collection: true,
         javaType: `Set<${assocName}>`,
         nullable: true,
+        maxSize: maxSizeDe(relation.source.multiplicity),
         ...accessors(collectionField),
       },
     });
@@ -598,6 +621,7 @@ function associationForAttribute(
         collection: true,
         javaType: `Set<${targetName}>`,
         nullable: true,
+        maxSize: attr.multiplicity ? maxSizeDe(attr.multiplicity) : undefined,
         ...accessors(fieldName),
       },
     };
@@ -653,6 +677,18 @@ function dedupeFieldNames(associations: AssociationIR[]): AssociationIR[] {
   });
 }
 
+/**
+ * Solo los nombres: el modificador del getter/setter es siempre `public`,
+ * aunque el atributo UML declare otra visibilidad. El mapper
+ * (`{pkg}.dto.mapper`) lee y escribe todo campo y asociación propietaria
+ * desde fuera del paquete de la entidad y sin relación de herencia con
+ * ella: ni `protected` ni el paquete-privado de `~` sobreviven a esa
+ * llamada, así que `public` es la única visibilidad de atributo que no
+ * rompe la compilación del proyecto generado. La visibilidad UML sí se usa
+ * en otro punto: el filtro `cls.methods.filter((m) => m.visibility === '+')`
+ * de `operationsForEntity`, que decide qué operaciones del diagrama llegan
+ * al servicio.
+ */
 function accessors(fieldName: string): { getterName: string; setterName: string } {
   const capitalized = fieldName.charAt(0).toUpperCase() + fieldName.slice(1);
   return { getterName: `get${capitalized}`, setterName: `set${capitalized}` };

@@ -7086,7 +7086,8 @@ select:focus {
   margin-left: auto;
 }
 
-.barra__boton--tema-ia {
+.barra__boton--tema-ia,
+.barra__boton--icono-ia {
   background: var(--fondo-3);
   color: var(--texto);
   border: 1px solid var(--borde);
@@ -7099,7 +7100,8 @@ select:focus {
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.barra__boton--tema-ia:hover {
+.barra__boton--tema-ia:hover,
+.barra__boton--icono-ia:hover {
   background: var(--borde);
 }
 

@@ -13,7 +13,7 @@ import { usePantallaEstrecha, useTecladoFisico } from '../hooks/useDispositivo';
 import { usePaneles } from '../hooks/usePaneles';
 import { useTema } from '../hooks/useTema';
 import { useSesion } from '../services/sesion';
-import { type Proyecto } from '../services/api';
+import { api, type Proyecto } from '../services/api';
 import { exportarXmiDelDiagrama } from '../services/exportar';
 import type { OrdenVista } from './Lienzo';
 import { LienzoFlow } from './LienzoFlow';
@@ -268,6 +268,31 @@ export function EditorDiagrama({
   );
 
   useEffect(() => anunciar({ seleccion }), [seleccion, anunciar]);
+
+  // El Modo IA se anuncia igual que la selección: así cualquier compañero sabe
+  // que esta pestaña está dentro, no solo si tiene una clase seleccionada.
+  useEffect(() => anunciar({ modoIA: modoIAInmersivo }), [modoIAInmersivo, anunciar]);
+
+  // Es una conversación de equipo (ver `ModoIA.tsx`), no la pantalla de uno: si
+  // alguien entra, al resto no le queda sentido seguir mirando el lienzo solo
+  // mientras esa conversación avanza sin ellos. Por eso se le sigue.
+  //
+  // Se sigue el **flanco** de entrada (nadie → alguien) y no el nivel: si se
+  // disparara mientras la condición siga en pie, pulsar "Salir" con un
+  // compañero que ya estaba dentro antes de abrir esta pestaña no serviría de
+  // nada, porque el efecto volvería a meternos en el siguiente repintado. Con
+  // el flanco, entrar es cosa de cada uno otra vez hasta que alguien *vuelva*
+  // a entrar (la sala pasa de vacía a ocupada una vez más).
+  const algunoEnModoIA = participantes.some((p) => p.modoIA);
+  const abrirPanel = paneles.abrir;
+  const algunoAnteriorRef = useRef(false);
+  useEffect(() => {
+    const entroAhora = algunoEnModoIA && !algunoAnteriorRef.current;
+    algunoAnteriorRef.current = algunoEnModoIA;
+    if (!entroAhora || modoIAInmersivo) return;
+    abrirPanel('ia');
+    setModoIAInmersivo(true);
+  }, [algunoEnModoIA, modoIAInmersivo, abrirPanel]);
 
   const alMoverCursor = useCallback(
     (punto: { x: number; y: number } | null) => {
@@ -816,9 +841,44 @@ export function EditorDiagrama({
                 participantes={[]}
               />
             )}
+            {/*
+              Las mismas tres órdenes del menú Archivo, que en Modo IA queda
+              oculto (`!modoIAInmersivo && <BarraMenu .../>` arriba): sin esto,
+              importar una foto o un XMI —o sacar el XMI— obligaba a salir del
+              modo para llegar al menú y volver a entrar.
+            */}
             <button
               type="button"
-              className="barra__boton barra__boton--tema-ia"
+              className="barra__boton--icono-ia"
+              disabled={soloLectura}
+              onClick={() => ejecutar('importar-imagen')}
+              aria-label="Importar desde imagen…"
+              title="Importar desde imagen…"
+            >
+              <Icono nombre="imagen" />
+            </button>
+            <button
+              type="button"
+              className="barra__boton--icono-ia"
+              disabled={soloLectura}
+              onClick={() => ejecutar('importar-xmi')}
+              aria-label="Importar XMI…"
+              title="Importar XMI…"
+            >
+              <Icono nombre="importar" />
+            </button>
+            <button
+              type="button"
+              className="barra__boton--icono-ia"
+              onClick={() => ejecutar('exportar-xmi')}
+              aria-label="Exportar XMI"
+              title="Exportar XMI"
+            >
+              <Icono nombre="exportar" />
+            </button>
+            <button
+              type="button"
+              className="barra__boton--tema-ia"
               onClick={alternarTema}
               aria-label={botonTemaModoIA(tema).etiqueta}
               title={botonTemaModoIA(tema).etiqueta}
@@ -1127,8 +1187,10 @@ export function EditorDiagrama({
                       aplicar={aplicar}
                       soloLectura={soloLectura}
                       usuario={autor}
+                      provider={estado.provider}
                       centrar={centrar}
                       agruparDeshacer={estado.agruparDeshacer}
+                      onAccionArchivo={ejecutar}
                       seleccion={seleccion}
                       onVistaPrevia={setABorrar}
                       participantes={participantes}
@@ -1216,7 +1278,13 @@ export function EditorDiagrama({
           diagrama={estado.diagrama}
           aplicar={(operaciones) => {
             const resultado = aplicar(operaciones);
-            if (resultado.ok) setAviso({ texto: 'Diagrama importado.', deshacer: true });
+            if (resultado.ok) {
+              setAviso({ texto: 'Diagrama importado.', deshacer: true });
+              // Para que los demás con el Modo IA abierto se enteren sin
+              // mirar el lienzo (ver `api.anunciarAccionArchivo`). Best
+              // effort: si falla el aviso, la importación ya ocurrió igual.
+              void api.anunciarAccionArchivo(proyecto.id, 'importar-imagen').catch(() => {});
+            }
             return resultado;
           }}
           onCerrar={() => setImportando(false)}
@@ -1229,7 +1297,10 @@ export function EditorDiagrama({
           diagrama={estado.diagrama}
           aplicar={(operaciones) => {
             const resultado = aplicar(operaciones);
-            if (resultado.ok) setAviso({ texto: 'XMI importado.', deshacer: true });
+            if (resultado.ok) {
+              setAviso({ texto: 'XMI importado.', deshacer: true });
+              void api.anunciarAccionArchivo(proyecto.id, 'importar-xmi').catch(() => {});
+            }
             return resultado;
           }}
           guardarComunicaciones={(diagramas) => {

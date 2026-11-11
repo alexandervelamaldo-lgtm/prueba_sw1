@@ -383,9 +383,21 @@ export const api = {
   /** Tokens de la IA gastados hoy por quien pregunta, y el límite diario (`null` si no hay). */
   usoAsistente: (id: string) => pedir<{ hoy: number; limite: number | null }>(`/proyectos/${id}/asistente/uso`),
 
-  /** Lo ya hablado con el asistente en este proyecto: el hilo privado de quien pregunta (Modo IA). */
+  /** Lo ya hablado con el asistente en este proyecto: el hilo único y compartido del proyecto (Modo IA). */
   obtenerHistorialAsistente: (id: string) =>
     pedir<{ turnos: TurnoAsistente[] }>(`/proyectos/${id}/asistente/historial`),
+
+  /**
+   * Deja constancia en el hilo compartido del Modo IA de que una importación
+   * (XMI o imagen) acaba de aplicarse al diagrama, para que los demás
+   * colaboradores que tengan el Modo IA abierto lo vean por el sondeo de
+   * siempre (`ModoIA.tsx`), sin tener que mirar el lienzo.
+   */
+  anunciarAccionArchivo: (id: string, accion: 'importar-xmi' | 'importar-imagen') =>
+    pedir<void>(`/proyectos/${id}/asistente/accion-archivo`, {
+      method: 'POST',
+      body: JSON.stringify({ accion }),
+    }),
 
   /**
    * Pregunta a la guía a través del servidor.

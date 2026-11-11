@@ -1,4 +1,4 @@
-import { readDiagram } from '@app/shared';
+import { encodeChatPing, readDiagram } from '@app/shared';
 import type { AssistantEngine } from './assistant.js';
 import type { ConversationStore } from '../storage/conversaciones.js';
 import type { Room } from '../collab/rooms.js';
@@ -33,12 +33,16 @@ import type { Resumidor } from './memoria-resumida.js';
  *
  * ## A quién se le habla
  *
- * Cada integrante tiene su propio hilo con la IA (`storage/conversaciones.ts`),
- * así que el comentario va al hilo de quien hizo el último cambio de la
- * ráfaga, tenga o no el Modo IA abierto: lo verá al abrirlo. El autor sale del
- * origen de la transacción, que es la conexión del editor (`CollabServer`) o
- * `{ userId }` cuando el cambio entra por la API. Un cambio sin autor —por
- * ejemplo, el documento cargado de disco— no deja a nadie a quien hablarle.
+ * El hilo con la IA es del proyecto, no de cada integrante
+ * (`storage/conversaciones.ts`), así que el comentario va directo a ese hilo
+ * único: lo verá cualquiera que tenga el Modo IA abierto o lo abra después. El
+ * autor del último cambio de la ráfaga ya no decide a quién dirigir el
+ * mensaje —no hay a quién elegir, solo hay un hilo—; sigue haciendo falta para
+ * saber de cuyo cupo diario sale el costo de la llamada al modelo
+ * (`cupo.reservar`). El autor sale del origen de la transacción, que es la
+ * conexión del editor (`CollabServer`) o `{ userId }` cuando el cambio entra
+ * por la API. Un cambio sin autor —por ejemplo, el documento cargado de
+ * disco— no deja a quién cobrarle, así que tampoco produce comentario.
  */
 
 /** El usuario que originó una transacción, si el origen lo dice. */
@@ -111,6 +115,8 @@ export class VigilanteDiagrama {
 
   private async revisar(proyectoId: string, room: Room): Promise<void> {
     // Se consume aquí: la ráfaga siguiente tiene que traer su propio autor.
+    // Ya no decide a quién va el comentario —el hilo es del proyecto—, solo de
+    // cuyo cupo sale el costo de la llamada al modelo.
     const autor = this.ultimoAutor.get(room);
     this.ultimoAutor.delete(room);
 
@@ -139,8 +145,9 @@ export class VigilanteDiagrama {
       if (!comentario) return;
 
       this.ultimoComentario.set(proyectoId, ahora);
-      const salen = await this.conversations.appendComentario(proyectoId, autor, comentario);
+      const salen = await this.conversations.appendComentario(proyectoId, comentario);
       this.resumidor?.resumir(proyectoId, autor, salen);
+      room.broadcast(encodeChatPing());
     } catch (error) {
       // Un comentario espontáneo que falla no es una avería del proyecto: es
       // la IA quedándose callada, que es justo lo que pasa cuando no tiene

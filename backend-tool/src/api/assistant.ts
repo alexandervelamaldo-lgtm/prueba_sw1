@@ -1,6 +1,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { describeOperation, formatearEventoSse, leerHistorial, readDiagram, type EventoAsistente } from '@app/shared';
+import {
+  describeOperation,
+  encodeChatPing,
+  formatearEventoSse,
+  leerHistorial,
+  readDiagram,
+  type EventoAsistente,
+} from '@app/shared';
 import {
   peticionDeRevision,
   resumirCambiosRecientes,
@@ -9,7 +16,7 @@ import {
 } from '../ai/assistant.js';
 import type { IdentityProvider } from '../auth/identity.js';
 import type { ProjectStore } from '../storage/store.js';
-import type { RoomManager } from '../collab/rooms.js';
+import type { Room, RoomManager } from '../collab/rooms.js';
 import { MAXIMO_TURNOS, type ChatMessage, type ConversationStore } from '../storage/conversaciones.js';
 import { diaDeHoy, type UsoIAStore } from '../storage/uso-ia.js';
 import type { CupoDeIA, ReservaIA } from '../ai/cupo-ia.js';
@@ -35,6 +42,26 @@ const PeticionSchema = z.object({
   /** Id de la clase seleccionada en el lienzo; el nombre se toma del diagrama, no del cliente. */
   seleccion: z.string().max(200).optional(),
 });
+
+const AccionArchivoSchema = z.object({
+  accion: z.enum(['importar-xmi', 'importar-imagen']),
+});
+
+/**
+ * Lo que se deja en el hilo del proyecto cuando una importación (XMI o
+ * imagen) termina de aplicarse al lienzo, para que el resto de quienes
+ * tengan el Modo IA abierto se entere sin tener que fijarse en el lienzo
+ * (`EditorDiagrama.tsx`, en los `aplicar` de `ImportarXmi`/`ImportarDiagrama`).
+ * No cubre exportar: nadie pidió que se avisara de eso y no cambia el
+ * diagrama que ven los demás.
+ */
+const TEXTOS_ACCION_ARCHIVO: Record<'importar-xmi' | 'importar-imagen', { orden: string; respuesta: string }> = {
+  'importar-xmi': { orden: 'Importa un diagrama desde un XMI.', respuesta: 'Diagrama importado desde un XMI.' },
+  'importar-imagen': {
+    orden: 'Importa un diagrama desde una imagen.',
+    respuesta: 'Diagrama importado desde una imagen.',
+  },
+};
 
 /**
  * Cuántos nombres de otros proyectos se le cuentan a la IA.
@@ -110,11 +137,16 @@ export function assistantRouter(deps: {
   };
 
   /**
-   * Guarda un turno y, si eso empuja mensajes fuera de la ventana, los resume
-   * antes de perderlos (`ai/memoria-resumida.ts`, en segundo plano). Se
-   * resumen exactamente los que podó el almacén.
+   * Guarda un turno en el hilo del proyecto y, si eso empuja mensajes fuera de
+   * la ventana, los resume antes de perderlos (`ai/memoria-resumida.ts`, en
+   * segundo plano). Se resumen exactamente los que podó el almacén.
+   *
+   * Avisa además por el WebSocket colaborativo (`room.broadcast`) para que
+   * quien tenga el Modo IA abierto en otra pestaña adelante su próximo sondeo
+   * en vez de esperar los `INTERVALO_SONDEO_MS` de siempre (`ModoIA.tsx`).
    */
   const guardarTurno = async (
+    room: Room,
     proyectoId: string,
     usuarioId: string,
     texto: string,
@@ -122,6 +154,7 @@ export function assistantRouter(deps: {
   ): Promise<void> => {
     const salen = await conversations.appendTurn(proyectoId, usuarioId, texto, respuesta);
     resumidor.resumir(proyectoId, usuarioId, salen);
+    room.broadcast(encodeChatPing());
   };
 
 
@@ -135,14 +168,14 @@ export function assistantRouter(deps: {
         const room = await rooms.open(proyectoId);
         const diagram = readDiagram(room.doc);
 
-        // El historial es el hilo de quien pregunta (ver `conversaciones.ts`):
-        // cada integrante tiene el suyo y no ve el de los demás. De los otros
-        // proyectos solo se piden nombre y rol —nunca se abre su sala
-        // (`rooms.open`)—, así que su diagrama no llega a este prompt.
+        // El historial es el hilo del proyecto, compartido por todos sus
+        // integrantes (ver `conversaciones.ts`). De los otros proyectos solo se
+        // piden nombre y rol —nunca se abre su sala (`rooms.open`)—, así que su
+        // diagrama no llega a este prompt.
         const [turnos, misProyectos, resumen] = await Promise.all([
-          conversations.getHistory(proyectoId, request.user.id, MAXIMO_TURNOS * 2),
+          conversations.getHistory(proyectoId, MAXIMO_TURNOS * 2),
           store.listProjectsForUser(request.user.id),
-          conversations.getResumen(proyectoId, request.user.id),
+          conversations.getResumen(proyectoId),
         ]);
         const historial = await conAutores(turnos, identity);
         const otrosProyectos = misProyectos
@@ -158,7 +191,7 @@ export function assistantRouter(deps: {
           ...(resumen ? { resumen } : {}),
           registrarUso: reserva.registrar,
         });
-        await guardarTurno(proyectoId, request.user.id, body.texto, result.explanation);
+        await guardarTurno(room, proyectoId, request.user.id, body.texto, result.explanation);
 
         response.json({
           motor: assistant.name,
@@ -188,9 +221,9 @@ export function assistantRouter(deps: {
         const diagram = readDiagram(room.doc);
         const peticion = body.revision ? peticionDeRevision(diagram) : body.texto;
         const [turnos, misProyectos, resumen] = await Promise.all([
-          conversations.getHistory(proyectoId, request.user.id, MAXIMO_TURNOS * 2),
+          conversations.getHistory(proyectoId, MAXIMO_TURNOS * 2),
           store.listProjectsForUser(request.user.id),
-          conversations.getResumen(proyectoId, request.user.id),
+          conversations.getResumen(proyectoId),
         ]);
         const historial = await conAutores(turnos, identity);
         const otrosProyectos = misProyectos
@@ -276,7 +309,7 @@ export function assistantRouter(deps: {
 
         if (desconectado || abortador.signal.aborted) return;
         try {
-          await guardarTurno(proyectoId, request.user.id, body.texto, mensajes.join(' '));
+          await guardarTurno(room, proyectoId, request.user.id, body.texto, mensajes.join(' '));
         } catch (error) {
           // Los encabezados SSE ya salieron: el fallo viaja como evento, no como
           // la respuesta JSON de error de siempre.
@@ -292,15 +325,29 @@ export function assistantRouter(deps: {
     }),
   );
 
-  router.get(
-    '/:proyectoId/asistente/historial',
+  router.post(
+    '/:proyectoId/asistente/accion-archivo',
+    // Igual que las operaciones de diagrama que esta importación ya aplicó:
+    // dejar constancia de que pasó exige el mismo permiso de edición.
     requireRole(store, 'editor'),
     handler(async (request, response) => {
-      const turnos = await conversations.getHistory(
-        request.params.proyectoId ?? '',
-        request.user.id,
-        MAXIMO_TURNOS * 2,
-      );
+      const body = parseBody(AccionArchivoSchema, request.body);
+      const proyectoId = request.params.proyectoId ?? '';
+      const room = await rooms.open(proyectoId);
+      const { orden, respuesta } = TEXTOS_ACCION_ARCHIVO[body.accion];
+      await guardarTurno(room, proyectoId, request.user.id, orden, respuesta);
+      response.status(204).end();
+    }),
+  );
+
+  router.get(
+    '/:proyectoId/asistente/historial',
+    // 'viewer' y no 'editor': el hilo es del proyecto y quien solo puede leer
+    // el lienzo también puede leer la conversación sobre él; lo que no puede
+    // es escribir (eso lo sigue exigiendo el POST de más arriba).
+    requireRole(store, 'viewer'),
+    handler(async (request, response) => {
+      const turnos = await conversations.getHistory(request.params.proyectoId ?? '', MAXIMO_TURNOS * 2);
       response.json({ turnos: await conAutores(turnos, identity) });
     }),
   );

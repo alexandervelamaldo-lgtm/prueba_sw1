@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { describeOperation, interpretCommand, type Aplicar, type ClassDiagram } from '@app/shared';
+import { describeOperation, interpretCommand, type Aplicar, type ClassDiagram, type CollabProvider } from '@app/shared';
 import { ApiError, api, type Proyecto, type TurnoAsistente } from '../services/api';
 import { puntuarPorVocabulario } from '../services/dictado';
 import {
@@ -24,6 +24,12 @@ import {
 import { crearColaDeVoz } from './cola-voz';
 import { debeEscucharTrasSaludo, debeSeguirConversando, textoDeBienvenida } from './bienvenida-ia';
 import { crearManejadorDeStream, debeRepasar, textoParaCompartir, type EstadoRespuesta } from './respuesta-en-stream';
+import {
+  MENSAJE_ARCHIVO_SOLO_LECTURA,
+  MENSAJE_DE_ACCION_ARCHIVO,
+  reconocerAccionDeArchivo,
+  type AccionArchivo,
+} from './modo-ia-comandos-archivo';
 import type { GrupoDeshacer } from '../hooks/deshacer-agrupado';
 
 /** Pausa entre dos pasos de la IA, para que se vea cada uno. */
@@ -65,11 +71,13 @@ function guardarAutoAplicar(valor: boolean): void {
  * el historial del proyecto en cada llamada, así que el modelo ve los turnos
  * anteriores sin que este componente tenga que reenviarlos.
  *
- * El hilo es privado de cada integrante (`storage/conversaciones.ts`, clave
- * `(proyectoId, usuario)`): los demás colaboradores no lo ven. Aun así se
- * sondea igual que el tablón (`PanelTablon.tsx`), porque la IA puede dejar un
- * comentario espontáneo en este hilo (`ai/vigilancia.ts`) mientras la vista
- * está abierta, y tiene que aparecer sin recargar.
+ * El hilo es del proyecto (`storage/conversaciones.ts`, clave `proyectoId`):
+ * cualquier colaborador con acceso lo ve, igual que ya pasa con el lienzo. Se
+ * sondea igual que el tablón (`PanelTablon.tsx`) porque un compañero puede
+ * escribirle a la IA en paralelo, o la IA puede dejar un comentario
+ * espontáneo (`ai/vigilancia.ts`) mientras la vista está abierta; el aviso
+ * `chat` del WebSocket colaborativo (`provider`) adelanta ese sondeo en vez
+ * de esperar al intervalo fijo.
  *
  * Los turnos cargados del historial no traen propuesta: lo único que se
  * guardó de ellos es el texto, no las operaciones. Quien vuelve a abrir esta
@@ -84,10 +92,19 @@ interface Props {
   aplicar: Aplicar;
   soloLectura: boolean;
   usuario: { id: string; nombre: string };
+  /** El WebSocket colaborativo del proyecto; su aviso `chat` adelanta el sondeo. */
+  provider?: CollabProvider | null;
   /** Centra la cámara del lienzo en esas clases (`EditorDiagrama`). */
   centrar?: (ids: string[]) => void;
   /** Abre un grupo de deshacer; ver `hooks/deshacer-agrupado.ts`. */
   agruparDeshacer?: () => GrupoDeshacer;
+  /**
+   * Importar/exportar XMI e importar desde imagen (`EditorDiagrama.ejecutar`).
+   * Permite que «expórtalo en XMI» funcione por voz o por texto sin pasar por
+   * el servidor: son los mismos tres botones fijos del menú Archivo, no algo
+   * que la IA tenga que entender.
+   */
+  onAccionArchivo?: (accion: AccionArchivo) => void;
   /** La clase seleccionada en el lienzo: la IA entiende «esta clase». */
   seleccion?: string | null;
   /** Lo que se perdería con los borrados propuestos aún sin aplicar, para marcarlo en el lienzo. */
@@ -159,8 +176,10 @@ export function ModoIA({
   aplicar,
   soloLectura,
   usuario,
+  provider,
   centrar,
   agruparDeshacer,
+  onAccionArchivo,
   seleccion,
   onVistaPrevia,
   participantes,
@@ -419,7 +438,10 @@ export function ModoIA({
 
   // El mismo sondeo que el tablón (`PanelTablon.tsx`): un intervalo fijo y un
   // reintento inmediato al volver a la pestaña, porque esta conversación ya
-  // no es solo mía y un compañero puede escribirle a la IA en paralelo.
+  // no es solo mía y un compañero puede escribirle a la IA en paralelo. El
+  // aviso `chat` del WebSocket colaborativo (`room.broadcast` en
+  // `api/assistant.ts` y `ai/vigilancia.ts`) adelanta ese reintento en vez de
+  // esperar al intervalo fijo cuando alguien más está mirando esta vista.
   useEffect(() => {
     let detenido = false;
     let temporizador: ReturnType<typeof setTimeout> | null = null;
@@ -435,20 +457,25 @@ export function ModoIA({
       if (!detenido) temporizador = setTimeout(sondear, INTERVALO_SONDEO_MS);
     };
 
-    const alCambiarVisibilidad = (): void => {
-      if (document.visibilityState !== 'visible') return;
+    const sondearYa = (): void => {
       if (temporizador) clearTimeout(temporizador);
       void sondear();
     };
 
+    const alCambiarVisibilidad = (): void => {
+      if (document.visibilityState === 'visible') sondearYa();
+    };
+
     temporizador = setTimeout(sondear, INTERVALO_SONDEO_MS);
     document.addEventListener('visibilitychange', alCambiarVisibilidad);
+    provider?.on('chat', sondearYa);
     return () => {
       detenido = true;
       if (temporizador) clearTimeout(temporizador);
       document.removeEventListener('visibilitychange', alCambiarVisibilidad);
+      provider?.off('chat', sondearYa);
     };
-  }, [proyecto.id, fusionar]);
+  }, [proyecto.id, fusionar, provider]);
 
   const enviar = async (orden: string, porVoz = false, revision = false): Promise<void> => {
     while (ordenEnCursoRef.current) await ordenEnCursoRef.current;
@@ -482,6 +509,48 @@ export function ModoIA({
   };
 
   /**
+   * Resuelve una orden de fichero reconocida localmente (ver
+   * `modo-ia-comandos-archivo.ts`): la conversación la registra como un turno
+   * más, pero la acción la dispara directamente `onAccionArchivo`, sin pasar
+   * por `api.interpretarEnStream`.
+   */
+  const resolverAccionDeArchivo = (accion: AccionArchivo, orden: string, porVoz: boolean): void => {
+    interrumpidoRef.current = false;
+    setError(null);
+    setTexto('');
+    const bloqueada = accion !== 'exportar-xmi' && soloLectura;
+    const texto = bloqueada ? MENSAJE_ARCHIVO_SOLO_LECTURA : MENSAJE_DE_ACCION_ARCHIVO[accion];
+    setTurnos((previos) => [
+      ...previos,
+      {
+        id: idTurno(),
+        role: 'user',
+        texto: orden,
+        autorId: usuario.id,
+        autorNombre: usuario.nombre,
+        creadoEn: null,
+        propuesta: [],
+        motor: null,
+        tipo: 'respuesta',
+      },
+      {
+        id: idTurno(),
+        role: 'assistant',
+        texto,
+        autorId: null,
+        autorNombre: null,
+        creadoEn: null,
+        propuesta: [],
+        motor: null,
+        tipo: 'respuesta',
+        aplicadas: [],
+      },
+    ]);
+    if (!bloqueada) onAccionArchivo?.(accion);
+    if (porVoz) hablar(texto);
+  };
+
+  /**
    * `revision`: el botón «Revisar mi diagrama». La IA revisa con las pistas del
    * revisor local y propone arreglos, que nunca se aplican solos: son cambios
    * que nadie pidió, así que esperan su «Aplicar».
@@ -494,6 +563,14 @@ export function ModoIA({
   ): Promise<void> => {
     const limpia = orden.trim();
     if (!limpia) return;
+
+    // «Expórtalo en XMI», dicho o tecleado: ni el servidor ni la gramática
+    // local saben de ficheros, así que se resuelve aquí, sin ir a la IA.
+    const accionArchivo = !esRepaso ? reconocerAccionDeArchivo(limpia) : null;
+    if (accionArchivo) {
+      resolverAccionDeArchivo(accionArchivo, limpia, porVoz);
+      return;
+    }
 
     interrumpidoRef.current = false;
     setError(null);
@@ -735,8 +812,8 @@ export function ModoIA({
         <span className="modo-ia__insignia" aria-hidden="true">
           IA
         </span>{' '}
-        Su conversación privada con la IA sobre <code>{proyecto.name}</code>: el resto del equipo no
-        la ve.
+        La conversación del equipo con la IA sobre <code>{proyecto.name}</code>: cualquier
+        colaborador con acceso al proyecto la ve.
       </p>
       <label className="modo-ia__auto">
         <input

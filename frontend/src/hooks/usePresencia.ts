@@ -18,6 +18,8 @@ export interface Participante {
   cursor: { x: number; y: number } | null;
   /** Clase que tiene seleccionada, para resaltarla con su color. */
   seleccion: string | null;
+  /** Si está en el Modo IA inmersivo; a esto se le sigue (ver `EditorDiagrama`). */
+  modoIA: boolean;
 }
 
 /**
@@ -163,6 +165,8 @@ interface EstadoLocal {
   usuario?: { id: string; nombre: string };
   cursor?: { x: number; y: number } | null;
   seleccion?: string | null;
+  /** Si está en el Modo IA inmersivo (ver `EditorDiagrama`). */
+  modoIA?: boolean;
 }
 
 /** Dónde y cuándo se vio por última vez moverse a un cursor. */
@@ -233,6 +237,7 @@ function mismos(a: readonly Participante[], b: readonly Participante[]): boolean
       uno.nombre === otro.nombre &&
       uno.color === otro.color &&
       uno.seleccion === otro.seleccion &&
+      uno.modoIA === otro.modoIA &&
       uno.cursor?.x === otro.cursor?.x &&
       uno.cursor?.y === otro.cursor?.y
     );
@@ -306,6 +311,7 @@ export function usePresencia(
           color: reparto.get(identidadDe(clientId, e)) ?? COLORES[0]!,
           cursor: e.cursor ?? null,
           seleccion: e.seleccion ?? null,
+          modoIA: e.modoIA ?? false,
         });
       }
       otros.sort((a, b) => a.clientId - b.clientId);

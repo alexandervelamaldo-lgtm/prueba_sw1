@@ -59,7 +59,7 @@ class AsistenteFalso implements AssistantEngine {
 }
 
 class ConversacionesFalsas implements ConversationStore {
-  comentarios: { proyectoId: string; usuarioId: string; texto: string }[] = [];
+  comentarios: { proyectoId: string; texto: string }[] = [];
 
   async getHistory(): Promise<ChatMessage[]> {
     return [];
@@ -69,8 +69,8 @@ class ConversacionesFalsas implements ConversationStore {
   }
   /** Lo que devolverá `appendComentario` como podado, para probar el resumen. */
   podadosAlComentar: ChatMessage[] = [];
-  async appendComentario(proyectoId: string, usuarioId: string, texto: string): Promise<ChatMessage[]> {
-    this.comentarios.push({ proyectoId, usuarioId, texto });
+  async appendComentario(proyectoId: string, texto: string): Promise<ChatMessage[]> {
+    this.comentarios.push({ proyectoId, texto });
     return this.podadosAlComentar;
   }
   async getResumen(): Promise<string | null> {
@@ -243,7 +243,7 @@ describe('dos salas distintas del mismo proyecto', () => {
 });
 
 describe('a quién va el comentario', () => {
-  it('va al hilo de quien hizo el último cambio', async () => {
+  it('va directo al hilo único del proyecto, sin importar quién hizo el último cambio', async () => {
     const vigilante = crearVigilante();
     const sala = crearSala();
     sala.connections.add(crearConexion('ana'));
@@ -255,7 +255,7 @@ describe('a quién va el comentario', () => {
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
 
     expect(conversaciones.comentarios).toEqual([
-      { proyectoId: 'proyecto-1', usuarioId: 'beto', texto: 'Esta clase parece aislada.' },
+      { proyectoId: 'proyecto-1', texto: 'Esta clase parece aislada.' },
     ]);
   });
 
@@ -268,10 +268,10 @@ describe('a quién va el comentario', () => {
     cambiar(sala, { userId: 'carla' });
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
 
-    expect(conversaciones.comentarios.map((c) => c.usuarioId)).toEqual(['carla']);
+    expect(conversaciones.comentarios).toHaveLength(1);
   });
 
-  it('si el último cambio de la ráfaga no tiene autor, no se le atribuye al anterior', async () => {
+  it('si el último cambio de la ráfaga no tiene autor conocido, no hay a quién cobrarle y no comenta', async () => {
     const vigilante = crearVigilante();
     const sala = crearSala();
     sala.connections.add(crearConexion('ana'));
@@ -285,22 +285,36 @@ describe('a quién va el comentario', () => {
   });
 
   it('el autor de una ráfaga ya comentada no se arrastra a la siguiente', async () => {
-    const vigilante = crearVigilante();
+    const { cupo, sumado } = (function cupoFalso() {
+      const sumado: { usuarioId: string; tokens: number }[] = [];
+      return {
+        sumado,
+        cupo: {
+          reservar: async (usuarioId: string) => ({
+            registrar: () => {},
+            cerrar: async () => {
+              sumado.push({ usuarioId, tokens: 0 });
+            },
+          }),
+        },
+      };
+    })();
+    const vigilante = new VigilanteDiagrama(asistente, conversaciones, ESPERA_MS, ENFRIAMIENTO_MS, cupo);
     const sala = crearSala();
     sala.connections.add(crearConexion('ana'));
     vigilante.observar('proyecto-1', sala);
 
     cambiar(sala, crearConexion('ana'));
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
-    // Pasado el enfriamiento, un cambio sin autor no debe ir al hilo de Ana.
+    // Pasado el enfriamiento, un cambio sin autor no debe cobrarle a Ana.
     await new Promise((resolve) => setTimeout(resolve, ENFRIAMIENTO_MS));
     cambiar(sala, 'restauracion');
     await new Promise((resolve) => setTimeout(resolve, ESPERA_MS + 20));
 
-    expect(conversaciones.comentarios.map((c) => c.usuarioId)).toEqual(['ana']);
+    expect(sumado.map((s) => s.usuarioId)).toEqual(['ana']);
   });
 
-  it('un cambio sin autor conocido no produce comentario: no hay hilo al que dirigirlo', async () => {
+  it('un cambio sin autor conocido no produce comentario: no hay a quién cobrarle', async () => {
     const vigilante = crearVigilante();
     const sala = crearSala();
     sala.connections.add(crearConexion('ana'));
@@ -365,7 +379,7 @@ describe('cupo de la IA en los comentarios espontáneos', () => {
 });
 
 describe('memoria resumida en los comentarios espontáneos', () => {
-  it('lo que un comentario empuja fuera de la ventana se resume en el hilo de su destinatario', async () => {
+  it('lo que un comentario empuja fuera de la ventana se resume, a cargo de quien hizo el cambio', async () => {
     const resumidos: { proyectoId: string; usuarioId: string; textos: string[] }[] = [];
     const resumidor = {
       resumir: (proyectoId: string, usuarioId: string, mensajes: ChatMessage[]) => {

@@ -162,7 +162,8 @@ create table if not exists tablon_contadores (
 -- `autor_id` en `tablon_mensajes`, y sin clave foránea por la misma razón
 -- (decisión D8): la identidad definitiva la da un proveedor externo. Queda
 -- `null` en las filas de rol `assistant`, que no tienen autor humano. El hilo
--- se filtra por `hilo_usuario_id` (más abajo), no por esta columna.
+-- se filtra solo por `proyecto_id`: no hay columna que distinga un hilo de
+-- otro, porque ya no hay más que uno por proyecto.
 
 create table if not exists conversaciones_ia (
   id          bigserial primary key,
@@ -191,23 +192,19 @@ drop index if exists conversaciones_por_usuario;
 alter table conversaciones_ia add column if not exists tipo
   text not null default 'respuesta';
 
--- Un hilo por integrante. `hilo_usuario_id` es el dueño del hilo y va en
--- todas las filas, también en las del asistente; `usuario_id` sigue siendo
--- quién escribió la fila. Se añade como columna nueva y no se rellena a partir
--- de `usuario_id`: las filas de la época del hilo compartido mezclaban a
--- varios integrantes, sus respuestas no dicen a quién contestaban, y quedan
--- con `null`, fuera de todo hilo. Ver `storage/conversaciones.ts`.
-alter table conversaciones_ia add column if not exists hilo_usuario_id text;
+-- El hilo vuelve a ser uno por proyecto, no uno por integrante: ver la
+-- cabecera de `storage/conversaciones.ts` sobre por qué se revierte. La
+-- columna que distinguía un hilo de otro ya no distingue nada, así que se
+-- retira; `drop column if exists` es idempotente de verdad y no molesta a una
+-- base que ya la tenía quitada.
+drop index if exists conversaciones_por_hilo;
+alter table conversaciones_ia drop column if exists hilo_usuario_id;
+create index if not exists conversaciones_por_proyecto
+  on conversaciones_ia (proyecto_id, id);
 
-drop index if exists conversaciones_por_proyecto;
-create index if not exists conversaciones_por_hilo
-  on conversaciones_ia (proyecto_id, hilo_usuario_id, id);
-
--- Memoria resumida del Modo IA: lo que salió de la ventana de 20 turnos de un
--- hilo, resumido por la IA antes de podarlo. Una fila por hilo, que se
+-- Memoria resumida del Modo IA: lo que salió de la ventana de 20 turnos,
+-- resumido por la IA antes de podarlo. Una fila por proyecto, que se
 -- sobrescribe; tabla aparte porque no es un mensaje más de la conversación.
--- `usuario_id` sin clave foránea, por la misma razón que `conversaciones_ia`
--- (decisión D8).
 -- Control de costos: tokens de la IA que gastó cada usuario cada día (UTC).
 -- Ver `storage/uso-ia.ts`. Sin clave foránea a usuarios (decisión D8).
 create table if not exists uso_ia (
@@ -218,12 +215,31 @@ create table if not exists uso_ia (
 );
 
 create table if not exists resumenes_ia (
-  proyecto_id    uuid not null references proyectos(id) on delete cascade,
-  usuario_id     text not null,
+  proyecto_id    uuid not null primary key references proyectos(id) on delete cascade,
   resumen        text not null,
-  actualizado_en timestamptz not null default now(),
-  primary key (proyecto_id, usuario_id)
+  actualizado_en timestamptz not null default now()
 );
+
+-- Los resúmenes de la época del hilo por integrante, uno por `(proyecto,
+-- usuario)`, no sirven para el hilo fusionado: ninguno resume la conversación
+-- entera, solo la parte de quien lo generó. Se descartan sin más —la IA
+-- genera uno nuevo para el proyecto entero en el próximo corte de la
+-- ventana— y la tabla pasa a tener como mucho una fila por proyecto. La
+-- comprobación de `usuario_id` en `information_schema` hace que esto solo
+-- tenga efecto la primera vez: en cuanto la columna desaparece ya no queda
+-- nada que descartar.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+     where table_name = 'resumenes_ia' and column_name = 'usuario_id'
+  ) then
+    delete from resumenes_ia;
+    alter table resumenes_ia drop constraint if exists resumenes_ia_pkey;
+    alter table resumenes_ia drop column usuario_id;
+    alter table resumenes_ia add primary key (proyecto_id);
+  end if;
+end $$;
 
 -- Versiones del proyecto -----------------------------------------------------
 --

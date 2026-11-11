@@ -29,6 +29,7 @@ const quien = (parcial: Partial<Participante> & { clientId: number }): Participa
   color: '#4a90d9',
   cursor: null,
   seleccion: null,
+  modoIA: false,
   ...parcial,
 });
 

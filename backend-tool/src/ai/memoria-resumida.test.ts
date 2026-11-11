@@ -5,9 +5,11 @@ import type { CupoDeIA } from './cupo-ia.js';
 import { crearResumidor } from './memoria-resumida.js';
 
 /**
- * El resumen de lo que sale de la ventana de un hilo, sin red ni disco: lo que
- * hay que sujetar es la fila por hilo (cada resumen parte del anterior), que
- * sin cupo no se llama al modelo y que lo gastado se cuenta.
+ * El resumen de lo que sale de la ventana del hilo de un proyecto, sin red ni
+ * disco: lo que hay que sujetar es la fila por proyecto (cada resumen parte
+ * del anterior, y dos resúmenes del mismo proyecto no se pisan aunque los
+ * pague gente distinta), que sin cupo no se llama al modelo y que lo gastado
+ * se cuenta a quien pidió lo que empujó el resumen, no al proyecto.
  */
 
 const mensaje = (texto: string): ChatMessage => ({ role: 'user', texto, autorId: 'ana', creadoEn: '', tipo: 'respuesta' });
@@ -15,9 +17,9 @@ const mensaje = (texto: string): ChatMessage => ({ role: 'user', texto, autorId:
 function preparar(opciones: { conCupo?: boolean } = {}) {
   const resumenes = new Map<string, string>();
   const conversaciones = {
-    getResumen: async (p: string, u: string) => resumenes.get(`${p}/${u}`) ?? null,
-    setResumen: async (p: string, u: string, r: string) => {
-      resumenes.set(`${p}/${u}`, r);
+    getResumen: async (p: string) => resumenes.get(p) ?? null,
+    setResumen: async (p: string, r: string) => {
+      resumenes.set(p, r);
     },
   } as unknown as ConversationStore;
   const llamadas: { previo: string | null; textos: string[] }[] = [];
@@ -29,9 +31,9 @@ function preparar(opciones: { conCupo?: boolean } = {}) {
       return [previo, mensajes.map((m) => m.texto).join(',')].filter(Boolean).join(' | ');
     },
   } as unknown as AssistantEngine;
-  const gastado: number[] = [];
+  const gastado: { usuarioId: string; tokens: number }[] = [];
   const cupo: CupoDeIA = {
-    reservar: async () => {
+    reservar: async (usuarioId: string) => {
       if (opciones.conCupo === false) return null;
       let total = 0;
       return {
@@ -39,7 +41,7 @@ function preparar(opciones: { conCupo?: boolean } = {}) {
           total += n;
         },
         cerrar: async () => {
-          gastado.push(total);
+          gastado.push({ usuarioId, tokens: total });
         },
       };
     },
@@ -49,41 +51,52 @@ function preparar(opciones: { conCupo?: boolean } = {}) {
 }
 
 describe('crearResumidor', () => {
-  it('en fila por hilo: el segundo resumen parte del que dejó el primero', async () => {
+  it('en fila por proyecto: el segundo resumen parte del que dejó el primero', async () => {
     const { resumidor, resumenes, llamadas } = preparar();
 
     resumidor.resumir('P', 'ana', [mensaje('a')]);
     resumidor.resumir('P', 'ana', [mensaje('b')]);
-    await resumidor.esperar('P', 'ana');
+    await resumidor.esperar('P');
 
     expect(llamadas.map((l) => l.previo)).toEqual([null, 'a']);
-    expect(resumenes.get('P/ana')).toBe('a | b');
+    expect(resumenes.get('P')).toBe('a | b');
   });
 
-  it('lo que gasta el modelo se cuenta para el dueño del hilo', async () => {
-    const { resumidor, gastado } = preparar();
+  it('dos integrantes distintos del mismo proyecto comparten la misma fila: el segundo espera al primero', async () => {
+    const { resumidor, resumenes, llamadas } = preparar();
 
     resumidor.resumir('P', 'ana', [mensaje('a')]);
-    await resumidor.esperar('P', 'ana');
+    resumidor.resumir('P', 'beto', [mensaje('b')]);
+    await resumidor.esperar('P');
 
-    expect(gastado).toEqual([30]);
+    expect(llamadas.map((l) => l.previo)).toEqual([null, 'a']);
+    expect(resumenes.get('P')).toBe('a | b');
+  });
+
+  it('lo que gasta el modelo se cuenta para quien pidió lo que se resume, no para el proyecto', async () => {
+    const { resumidor, gastado } = preparar();
+
+    resumidor.resumir('P', 'carla', [mensaje('a')]);
+    await resumidor.esperar('P');
+
+    expect(gastado).toEqual([{ usuarioId: 'carla', tokens: 30 }]);
   });
 
   it('sin cupo no llama al modelo: guarda el resumen local', async () => {
     const { resumidor, resumenes, llamadas } = preparar({ conCupo: false });
 
     resumidor.resumir('P', 'ana', [mensaje('crea Pedido')]);
-    await resumidor.esperar('P', 'ana');
+    await resumidor.esperar('P');
 
     expect(llamadas).toEqual([]);
-    expect(resumenes.get('P/ana')).toContain('crea Pedido');
+    expect(resumenes.get('P')).toContain('crea Pedido');
   });
 
   it('sin mensajes que resumir no hace nada', async () => {
     const { resumidor, llamadas } = preparar();
 
     resumidor.resumir('P', 'ana', []);
-    await resumidor.esperar('P', 'ana');
+    await resumidor.esperar('P');
 
     expect(llamadas).toEqual([]);
   });

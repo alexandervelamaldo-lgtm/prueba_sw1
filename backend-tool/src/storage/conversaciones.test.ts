@@ -8,10 +8,11 @@ import { FileConversationStore, MAXIMO_TURNOS } from './conversaciones.js';
  * Pruebas del almacén de conversaciones del Modo IA, contra el disco de
  * verdad.
  *
- * Lo que importa comprobar no es tanto "se guarda" sino que cada integrante
- * tiene su propio hilo dentro de un proyecto, y que nadie ve el de otro: es
- * justo lo que una prueba con un doble en memoria no pondría en duda —un mapa
- * en memoria no distingue una clave mal construida de una buena—.
+ * El hilo es del proyecto, no de cada integrante (ver la cabecera de
+ * `conversaciones.ts`): lo que importa comprobar es que todos los mensajes de
+ * un proyecto —de quien sea su autor— caen en un único hilo compartido, que
+ * ese hilo no se mezcla con el de otro proyecto, y que `autorId` sigue
+ * distinguiendo quién escribió cada mensaje dentro de ese hilo único.
  */
 
 let dataDir: string;
@@ -34,12 +35,12 @@ afterEach(async () => {
 
 describe('getHistory', () => {
   it('un proyecto sin conversación devuelve una lista vacía', async () => {
-    expect(await almacen.getHistory(P, ANA, MAXIMO_TURNOS * 2)).toEqual([]);
+    expect(await almacen.getHistory(P, MAXIMO_TURNOS * 2)).toEqual([]);
   });
 
   it('cada turno queda como dos mensajes, el autor y luego el asistente', async () => {
     await almacen.appendTurn(P, ANA, 'crea la clase Pedido', 'Hecho: clase Pedido creada.');
-    const historial = await almacen.getHistory(P, ANA, 10);
+    const historial = await almacen.getHistory(P, 10);
     expect(historial).toHaveLength(2);
     expect(historial[0]).toMatchObject({ role: 'user', texto: 'crea la clase Pedido', autorId: ANA });
     expect(historial[1]).toMatchObject({
@@ -52,7 +53,7 @@ describe('getHistory', () => {
   it('devuelve los mensajes en orden cronológico', async () => {
     await almacen.appendTurn(P, ANA, 'uno', 'respuesta uno');
     await almacen.appendTurn(P, ANA, 'dos', 'respuesta dos');
-    const historial = await almacen.getHistory(P, ANA, 10);
+    const historial = await almacen.getHistory(P, 10);
     expect(historial.map((m) => m.texto)).toEqual(['uno', 'respuesta uno', 'dos', 'respuesta dos']);
   });
 
@@ -60,52 +61,56 @@ describe('getHistory', () => {
     for (let i = 1; i <= 5; i += 1) {
       await almacen.appendTurn(P, ANA, `orden ${i}`, `respuesta ${i}`);
     }
-    const historial = await almacen.getHistory(P, ANA, 2);
+    const historial = await almacen.getHistory(P, 2);
     expect(historial.map((m) => m.texto)).toEqual(['orden 5', 'respuesta 5']);
   });
 
   it('un límite de cero no descarga la conversación entera', async () => {
     // Mismo motivo que en `tablon.ts`: `slice(-0)` devuelve todo el arreglo.
     await almacen.appendTurn(P, ANA, 'uno', 'respuesta uno');
-    const historial = await almacen.getHistory(P, ANA, 0);
+    const historial = await almacen.getHistory(P, 0);
     expect(historial).toHaveLength(1);
   });
 });
 
-describe('un hilo por integrante', () => {
-  it('dos integrantes del mismo proyecto no ven el hilo del otro', async () => {
+describe('un hilo por proyecto, compartido por sus integrantes', () => {
+  it('dos integrantes del mismo proyecto comparten un único hilo, en el orden en que escribieron', async () => {
     await almacen.appendTurn(P, ANA, 'orden de Ana', 'respuesta a Ana');
     await almacen.appendTurn(P, BETO, 'orden de Beto', 'respuesta a Beto');
 
-    expect((await almacen.getHistory(P, ANA, 10)).map((m) => m.texto)).toEqual([
+    const historial = await almacen.getHistory(P, 10);
+    expect(historial.map((m) => m.texto)).toEqual([
       'orden de Ana',
       'respuesta a Ana',
-    ]);
-    expect((await almacen.getHistory(P, BETO, 10)).map((m) => m.texto)).toEqual([
       'orden de Beto',
       'respuesta a Beto',
     ]);
+    expect(historial.map((m) => m.autorId)).toEqual([ANA, null, BETO, null]);
   });
 
   it('el mismo usuario en dos proyectos distintos no comparte historial', async () => {
     await almacen.appendTurn(P, ANA, 'orden en Tienda', 'respuesta en Tienda');
     await almacen.appendTurn(OTRO_PROYECTO, ANA, 'orden en Clínica', 'respuesta en Clínica');
 
-    const enTienda = await almacen.getHistory(P, ANA, 10);
-    const enClinica = await almacen.getHistory(OTRO_PROYECTO, ANA, 10);
+    const enTienda = await almacen.getHistory(P, 10);
+    const enClinica = await almacen.getHistory(OTRO_PROYECTO, 10);
 
     expect(enTienda.map((m) => m.texto)).toEqual(['orden en Tienda', 'respuesta en Tienda']);
     expect(enClinica.map((m) => m.texto)).toEqual(['orden en Clínica', 'respuesta en Clínica']);
   });
 
-  it('un comentario espontáneo solo aparece en el hilo de su destinatario', async () => {
-    await almacen.appendComentario(P, BETO, 'Cliente no tiene id.');
+  it('un comentario espontáneo aparece en el hilo único del proyecto, lo vea quien lo vea', async () => {
+    await almacen.appendTurn(P, ANA, 'orden de Ana', 'respuesta a Ana');
+    await almacen.appendComentario(P, 'Cliente no tiene id.');
 
-    expect(await almacen.getHistory(P, ANA, 10)).toEqual([]);
-    expect((await almacen.getHistory(P, BETO, 10)).map((m) => m.texto)).toEqual(['Cliente no tiene id.']);
+    expect((await almacen.getHistory(P, 10)).map((m) => m.texto)).toEqual([
+      'orden de Ana',
+      'respuesta a Ana',
+      'Cliente no tiene id.',
+    ]);
   });
 
-  it('los mensajes del hilo compartido anterior no aparecen en ningún hilo', async () => {
+  it('un hilo de la época de un hilo por integrante se lee fusionado, en el orden en que quedó en disco', async () => {
     await almacen.flush();
     const ruta = join(dataDir, 'conversaciones', `${P}.json`);
     await mkdir(join(dataDir, 'conversaciones'), { recursive: true });
@@ -113,38 +118,65 @@ describe('un hilo por integrante', () => {
       ruta,
       JSON.stringify({
         mensajes: [
-          { role: 'user', texto: 'orden vieja', autorId: ANA, creadoEn: '2026-01-01T00:00:00.000Z', tipo: 'respuesta' },
-          { role: 'assistant', texto: 'respuesta vieja', autorId: null, creadoEn: '2026-01-01T00:00:00.001Z', tipo: 'respuesta' },
+          {
+            role: 'user',
+            texto: 'orden vieja de Ana',
+            autorId: ANA,
+            creadoEn: '2026-01-01T00:00:00.000Z',
+            tipo: 'respuesta',
+            hiloDe: ANA,
+          },
+          {
+            role: 'assistant',
+            texto: 'respuesta vieja a Ana',
+            autorId: null,
+            creadoEn: '2026-01-01T00:00:00.001Z',
+            tipo: 'respuesta',
+            hiloDe: ANA,
+          },
+          {
+            role: 'user',
+            texto: 'orden vieja de Beto',
+            autorId: BETO,
+            creadoEn: '2026-01-01T00:00:01.000Z',
+            tipo: 'respuesta',
+            hiloDe: BETO,
+          },
         ],
       }),
       'utf8',
     );
 
     const reabierto = new FileConversationStore(dataDir);
-    expect(await reabierto.getHistory(P, ANA, 10)).toEqual([]);
+    const historial = await reabierto.getHistory(P, 10);
+    expect(historial.map((m) => m.texto)).toEqual([
+      'orden vieja de Ana',
+      'respuesta vieja a Ana',
+      'orden vieja de Beto',
+    ]);
   });
 });
 
 describe('ventana de turnos', () => {
-  it('no guarda más de MAXIMO_TURNOS turnos por integrante: los más antiguos se descartan', async () => {
+  it('no guarda más de MAXIMO_TURNOS turnos por proyecto: los más antiguos se descartan', async () => {
     for (let i = 1; i <= MAXIMO_TURNOS + 5; i += 1) {
       await almacen.appendTurn(P, ANA, `orden ${i}`, `respuesta ${i}`);
     }
-    const historial = await almacen.getHistory(P, ANA, MAXIMO_TURNOS * 2 + 100);
+    const historial = await almacen.getHistory(P, MAXIMO_TURNOS * 2 + 100);
     expect(historial).toHaveLength(MAXIMO_TURNOS * 2);
     expect(historial[0]).toMatchObject({ texto: 'orden 6' });
     expect(historial.at(-1)).toMatchObject({ texto: `respuesta ${MAXIMO_TURNOS + 5}` });
   });
 
-  it('el hilo de un integrante no le quita sitio al de otro', async () => {
+  it('la ventana es del proyecto entero: los turnos de un integrante le quitan sitio al de otro', async () => {
     await almacen.appendTurn(P, BETO, 'orden de Beto', 'respuesta a Beto');
-    for (let i = 1; i <= MAXIMO_TURNOS + 5; i += 1) {
+    for (let i = 1; i <= MAXIMO_TURNOS; i += 1) {
       await almacen.appendTurn(P, ANA, `orden ${i}`, `respuesta ${i}`);
     }
-    expect((await almacen.getHistory(P, BETO, 10)).map((m) => m.texto)).toEqual([
-      'orden de Beto',
-      'respuesta a Beto',
-    ]);
+    // El turno de Beto fue el primero en entrar: con la ventana llena por los
+    // de Ana, es el primero en salir.
+    const historial = await almacen.getHistory(P, MAXIMO_TURNOS * 2 + 10);
+    expect(historial.map((m) => m.texto)).not.toContain('orden de Beto');
   });
 });
 
@@ -154,20 +186,19 @@ describe('persistencia', () => {
     await almacen.flush();
 
     const reabierto = new FileConversationStore(dataDir);
-    const historial = await reabierto.getHistory(P, ANA, 10);
+    const historial = await reabierto.getHistory(P, 10);
     expect(historial.map((m) => m.texto)).toEqual(['persistente', 'sigue aquí']);
   });
 });
 
 describe('borrarProyecto', () => {
-  it('se lleva el historial de todos los integrantes de ese proyecto', async () => {
+  it('se lleva el hilo entero del proyecto', async () => {
     await almacen.appendTurn(P, ANA, 'orden de Ana', 'respuesta a Ana');
     await almacen.appendTurn(P, BETO, 'orden de Beto', 'respuesta a Beto');
 
     await almacen.borrarProyecto(P);
 
-    expect(await almacen.getHistory(P, ANA, 10)).toEqual([]);
-    expect(await almacen.getHistory(P, BETO, 10)).toEqual([]);
+    expect(await almacen.getHistory(P, 10)).toEqual([]);
   });
 
   it('no toca el historial de otro proyecto', async () => {
@@ -176,14 +207,14 @@ describe('borrarProyecto', () => {
 
     await almacen.borrarProyecto(P);
 
-    expect(await almacen.getHistory(OTRO_PROYECTO, ANA, 10)).toHaveLength(2);
+    expect(await almacen.getHistory(OTRO_PROYECTO, 10)).toHaveLength(2);
   });
 });
 
 describe('appendComentario', () => {
   it('añade un único mensaje de rol assistant, sin autor y marcado como observación', async () => {
-    await almacen.appendComentario(P, ANA, 'Esta relación parece de agregación, no de composición.');
-    const historial = await almacen.getHistory(P, ANA, 10);
+    await almacen.appendComentario(P, 'Esta relación parece de agregación, no de composición.');
+    const historial = await almacen.getHistory(P, 10);
     expect(historial).toHaveLength(1);
     expect(historial[0]).toMatchObject({
       role: 'assistant',
@@ -195,7 +226,7 @@ describe('appendComentario', () => {
 
   it('un turno normal se marca como respuesta, no como observación', async () => {
     await almacen.appendTurn(P, ANA, 'crea la clase Pedido', 'Hecho.');
-    const historial = await almacen.getHistory(P, ANA, 10);
+    const historial = await almacen.getHistory(P, 10);
     expect(historial.map((m) => m.tipo)).toEqual(['respuesta', 'respuesta']);
   });
 
@@ -203,9 +234,9 @@ describe('appendComentario', () => {
     for (let i = 1; i <= MAXIMO_TURNOS; i += 1) {
       await almacen.appendTurn(P, ANA, `orden ${i}`, `respuesta ${i}`);
     }
-    await almacen.appendComentario(P, ANA, 'comentario espontáneo');
+    await almacen.appendComentario(P, 'comentario espontáneo');
 
-    const historial = await almacen.getHistory(P, ANA, MAXIMO_TURNOS * 2 + 10);
+    const historial = await almacen.getHistory(P, MAXIMO_TURNOS * 2 + 10);
     expect(historial).toHaveLength(MAXIMO_TURNOS * 2);
     // El comentario es un solo mensaje, no un turno de dos: al sobrepasar la
     // ventana se descarta solo el mensaje más antiguo (la orden del primer
@@ -215,11 +246,11 @@ describe('appendComentario', () => {
   });
 
   it('lo guardado por appendComentario sobrevive a reabrir el almacén', async () => {
-    await almacen.appendComentario(P, ANA, 'persistente también');
+    await almacen.appendComentario(P, 'persistente también');
     await almacen.flush();
 
     const reabierto = new FileConversationStore(dataDir);
-    const historial = await reabierto.getHistory(P, ANA, 10);
+    const historial = await reabierto.getHistory(P, 10);
     expect(historial[0]).toMatchObject({ texto: 'persistente también', tipo: 'observacion' });
   });
 });
@@ -237,7 +268,7 @@ describe('tipo por defecto en mensajes antiguos', () => {
     await writeFile(ruta, JSON.stringify(crudo), 'utf8');
 
     const reabierto = new FileConversationStore(dataDir);
-    const historial = await reabierto.getHistory(P, ANA, 10);
+    const historial = await reabierto.getHistory(P, 10);
     expect(historial.map((m) => m.tipo)).toEqual(['respuesta', 'respuesta']);
   });
 });
@@ -247,35 +278,34 @@ describe('identificadores', () => {
     await expect(almacen.appendTurn('../fuera', ANA, 'hola', 'hola')).rejects.toThrow(/no admisible/);
   });
 
-  it('el autor ya no forma parte de ninguna ruta de fichero: no hace falta que sea un id seguro', async () => {
-    // Antes esto habría fallado: `autorId` era un segmento de ruta
-    // (`<proyecto>/<usuario>.json`). Ahora es solo un dato dentro del fichero
-    // del proyecto, así que un valor con barras se guarda tal cual.
+  it('el autor no forma parte de ninguna ruta de fichero: no hace falta que sea un id seguro', async () => {
+    // `autorId` es solo un dato dentro del fichero del proyecto, no un
+    // segmento de ruta, así que un valor con barras se guarda tal cual.
     await expect(almacen.appendTurn(P, '../no-es-una-ruta', 'hola', 'hola')).resolves.toEqual([]);
-    const historial = await almacen.getHistory(P, '../no-es-una-ruta', 10);
+    const historial = await almacen.getHistory(P, 10);
     expect(historial[0]).toMatchObject({ autorId: '../no-es-una-ruta' });
   });
 });
 
 describe('resumen de lo que salió de la ventana', () => {
   it('no hay resumen hasta que se guarda uno', async () => {
-    expect(await almacen.getResumen(P, ANA)).toBeNull();
+    expect(await almacen.getResumen(P)).toBeNull();
   });
 
-  it('cada integrante tiene el suyo', async () => {
-    await almacen.setResumen(P, ANA, 'Ana modeló una tienda.');
+  it('es del proyecto, no de quien lo generó', async () => {
+    await almacen.setResumen(P, 'Ana y Beto modelaron una tienda.');
 
-    expect(await almacen.getResumen(P, ANA)).toBe('Ana modeló una tienda.');
-    expect(await almacen.getResumen(P, BETO)).toBeNull();
+    expect(await almacen.getResumen(P)).toBe('Ana y Beto modelaron una tienda.');
+    expect(await almacen.getResumen(OTRO_PROYECTO)).toBeNull();
   });
 
   it('sobrevive a reabrir el almacén y se va con el proyecto', async () => {
-    await almacen.setResumen(P, ANA, 'persistente');
+    await almacen.setResumen(P, 'persistente');
     await almacen.flush();
-    expect(await new FileConversationStore(dataDir).getResumen(P, ANA)).toBe('persistente');
+    expect(await new FileConversationStore(dataDir).getResumen(P)).toBe('persistente');
 
     await almacen.borrarProyecto(P);
-    expect(await almacen.getResumen(P, ANA)).toBeNull();
+    expect(await almacen.getResumen(P)).toBeNull();
   });
 });
 
@@ -285,15 +315,21 @@ describe('appendTurn devuelve lo que podó', () => {
   });
 
   it('devuelve los mensajes del hilo que salieron de la ventana, del más antiguo al más reciente', async () => {
-    for (let i = 1; i <= MAXIMO_TURNOS; i += 1) {
+    await almacen.appendTurn(P, BETO, 'de Beto', 'para Beto');
+    // `recortar` se ejecuta tras cada `appendTurn`, no solo al final: con
+    // MAXIMO_TURNOS turnos de Ana la ventana ya habría quedado llena y el
+    // turno de Beto se habría podado dentro mismo de este bucle. Un turno
+    // menos deja la ventana exactamente llena (Beto + MAXIMO_TURNOS - 1 de
+    // Ana = MAXIMO_TURNOS * 2 mensajes) sin que nadie haya salido todavía.
+    for (let i = 1; i < MAXIMO_TURNOS; i += 1) {
       await almacen.appendTurn(P, ANA, `orden ${i}`, `respuesta ${i}`);
     }
-    await almacen.appendTurn(P, BETO, 'de Beto', 'para Beto');
 
     const podados = await almacen.appendTurn(P, ANA, 'orden nueva', 'respuesta nueva');
 
-    expect(podados.map((m) => m.texto)).toEqual(['orden 1', 'respuesta 1']);
-    expect(podados[0]).toMatchObject({ role: 'user', autorId: ANA, tipo: 'respuesta' });
+    // El turno de Beto entró primero, así que es el primero en salir.
+    expect(podados.map((m) => m.texto)).toEqual(['de Beto', 'para Beto']);
+    expect(podados[0]).toMatchObject({ role: 'user', autorId: BETO, tipo: 'respuesta' });
   });
 });
 
@@ -310,13 +346,11 @@ describe('pedidos a la vez al abrir el almacén', () => {
     await reabierto.flush();
 
     const releido = new FileConversationStore(dataDir);
-    expect((await releido.getHistory(P, ANA, 10)).map((m) => m.texto)).toEqual([
-      'orden previa',
-      'respuesta previa',
-      'orden de Ana',
-      'respuesta a Ana',
-    ]);
-    expect((await releido.getHistory(P, BETO, 10)).map((m) => m.texto)).toEqual(['orden de Beto', 'respuesta a Beto']);
+    const historial = (await releido.getHistory(P, 10)).map((m) => m.texto);
+    expect(historial).toContain('orden previa');
+    expect(historial).toContain('orden de Ana');
+    expect(historial).toContain('orden de Beto');
+    expect(historial).toHaveLength(6);
   });
 });
 
@@ -326,12 +360,12 @@ describe('appendComentario devuelve lo que podó', () => {
       await almacen.appendTurn(P, ANA, `orden ${i}`, `respuesta ${i}`);
     }
 
-    const podados = await almacen.appendComentario(P, ANA, 'comentario');
+    const podados = await almacen.appendComentario(P, 'comentario');
 
     expect(podados.map((m) => m.texto)).toEqual(['orden 1']);
   });
 
   it('con sitio en la ventana no poda nada', async () => {
-    expect(await almacen.appendComentario(P, ANA, 'comentario')).toEqual([]);
+    expect(await almacen.appendComentario(P, 'comentario')).toEqual([]);
   });
 });

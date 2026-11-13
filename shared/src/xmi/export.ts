@@ -263,11 +263,38 @@ export function diagramaAXmi(diagrama: ClassDiagram): string {
     });
   }
 
+  /*
+   * UNA RELACIÓN PUEDE COLGAR UNA "CLASE DE ASOCIACIÓN" (UML): una clase que,
+   * además de sus propios atributos, *es* la asociación entre las otras dos
+   * (`relation.associationClassId`). Si se escribiera como una clase suelta
+   * más una `uml:Association` aparte —que es lo que hacía este fichero
+   * antes de corregirlo—, Enterprise Architect dibuja las dos cajas
+   * asociadas y la línea entre ellas, pero la tercera clase entra como una
+   * clase cualquiera, sin la línea discontinua que la conecta a esa
+   * asociación: deja de leerse como clase de asociación. El tipo que sí lleva
+   * esa conexión es `uml:AssociationClass`, que en UML es a la vez
+   * clasificador y asociación en un solo elemento; por eso, para la relación
+   * que cuelga de ella, no se escribe un `uml:Association` aparte más abajo.
+   */
+  const relacionDeClaseAsociacion = new Map<string, UmlRelation>();
+  for (const relacion of relaciones) {
+    if (
+      relacion.associationClassId &&
+      !relacionDeClaseAsociacion.has(relacion.associationClassId)
+    ) {
+      relacionDeClaseAsociacion.set(relacion.associationClassId, relacion);
+    }
+  }
+
   for (const clase of clases) {
-    escribirClase(xml, ids, clase, diagrama, refTipo);
+    escribirClase(xml, ids, clase, diagrama, refTipo, relacionDeClaseAsociacion.get(clase.id));
   }
 
   for (const relacion of relaciones) {
+    const yaEscritaComoClaseDeAsociacion =
+      relacion.associationClassId !== undefined &&
+      relacionDeClaseAsociacion.get(relacion.associationClassId) === relacion;
+    if (yaEscritaComoClaseDeAsociacion) continue;
     escribirRelacion(xml, ids, relacion, diagrama);
   }
 
@@ -287,13 +314,16 @@ function escribirClase(
   clase: UmlClass,
   diagrama: ClassDiagram,
   refTipo: (nombre: string) => RefTipo,
+  comoClaseDeAsociacion: UmlRelation | undefined,
 ): void {
   const tipoXmi =
     clase.kind === 'interface'
       ? 'uml:Interface'
       : clase.kind === 'enum'
         ? 'uml:Enumeration'
-        : 'uml:Class';
+        : comoClaseDeAsociacion
+          ? 'uml:AssociationClass'
+          : 'uml:Class';
 
   xml.abrir('packagedElement', {
     'xmi:type': tipoXmi,
@@ -342,6 +372,13 @@ function escribirClase(
         contract: ids.para(general.id),
       });
     }
+  }
+
+  // Esta misma clase es, además, la asociación N:M que la cuelga: sus dos
+  // extremos van aquí dentro, no en un `uml:Association` aparte (ver el
+  // comentario de `diagramaAXmi` sobre por qué).
+  if (comoClaseDeAsociacion) {
+    escribirExtremosDeAsociacion(xml, ids, comoClaseDeAsociacion, diagrama, ids.para(clase.id));
   }
 
   xml.cerrar('packagedElement');
@@ -455,14 +492,36 @@ function escribirRelacion(
     return;
   }
 
-  const idExtremoOrigen = ids.nuevo('end');
-  const idExtremoDestino = ids.nuevo('end');
-
   xml.abrir('packagedElement', {
     'xmi:type': 'uml:Association',
     'xmi:id': idRelacion,
     name: relacion.name,
   });
+  escribirExtremosDeAsociacion(xml, ids, relacion, diagrama, idRelacion);
+  xml.cerrar('packagedElement');
+}
+
+/**
+ * Los dos extremos de una asociación: `memberEnd` + `ownedEnd`, con la marca
+ * de agregación, la multiplicidad y la navegabilidad. Los usa tanto un
+ * `uml:Association` suelto como un `uml:AssociationClass` (clase de
+ * asociación): en UML el segundo es a la vez clasificador y asociación, así
+ * que sus extremos se escriben exactamente igual, solo que colgados del
+ * elemento de la clase en vez de uno aparte.
+ */
+function escribirExtremosDeAsociacion(
+  xml: Xml,
+  ids: Ids,
+  relacion: UmlRelation,
+  diagrama: ClassDiagram,
+  idAsociacion: string,
+): void {
+  const origen = diagrama.classes[relacion.source.classId];
+  const destino = diagrama.classes[relacion.target.classId];
+  if (!origen || !destino) return;
+
+  const idExtremoOrigen = ids.nuevo('end');
+  const idExtremoDestino = ids.nuevo('end');
 
   /*
    * DÓNDE VA `aggregation`. En UML la propiedad que lleva la marca es la que
@@ -485,7 +544,7 @@ function escribirRelacion(
   // herramienta de destino sabe leer con seguridad.
   escribirExtremo(xml, ids, {
     id: idExtremoOrigen,
-    idAsociacion: idRelacion,
+    idAsociacion,
     idTipo: ids.para(origen.id),
     nombre: relacion.source.role ?? toCamelCase(origen.name),
     multiplicidad: relacion.source.multiplicity,
@@ -494,7 +553,7 @@ function escribirRelacion(
   });
   escribirExtremo(xml, ids, {
     id: idExtremoDestino,
-    idAsociacion: idRelacion,
+    idAsociacion,
     idTipo: ids.para(destino.id),
     nombre:
       relacion.target.role ??
@@ -505,8 +564,6 @@ function escribirRelacion(
     navegable: relacion.target.navigable,
     agregacion: marca,
   });
-
-  xml.cerrar('packagedElement');
 }
 
 interface Extremo {

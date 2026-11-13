@@ -5,6 +5,7 @@ import {
 } from '../model/naming.js';
 import { resolveTypeName } from '../model/type-catalog.js';
 import {
+  isToMany,
   MULTIPLICITY_PATTERN,
   type ClassDiagram,
   type ClassKind,
@@ -185,6 +186,17 @@ interface ClaseLeida {
   readonly nombre: string;
   readonly kind: ClassKind;
   readonly nodo: XmlNode;
+  /**
+   * Es un `uml:AssociationClass`: a la vez clasificador y asociación N:M.
+   *
+   * No se crea con `addClass` como las demás (más abajo, en el bucle que
+   * emite esa operación, se la salta a propósito): la crea el propio
+   * `addRelation` de `leerRelaciones`, con `associationClassName`, porque es
+   * la única operación del modelo que sabe enlazarla a su relación en el
+   * mismo paso. Crearla antes con `addClass` chocaría con esa operación, que
+   * rechaza una clase que ya exista con ese nombre.
+   */
+  readonly esClaseDeAsociacion: boolean;
 }
 
 /**
@@ -199,7 +211,13 @@ interface ClaseLeida {
  * rendía diciendo que el fichero estaba vacío, cuando lo que estaba vacío era
  * la lista de tipos que este lector miraba.
  */
-const TIPOS_CLASIFICADOR = new Set(['Class', 'Interface', 'Enumeration', 'Component']);
+const TIPOS_CLASIFICADOR = new Set([
+  'Class',
+  'Interface',
+  'Enumeration',
+  'Component',
+  'AssociationClass',
+]);
 const TIPOS_DATO = new Set([
   'PrimitiveType',
   'DataType',
@@ -347,7 +365,7 @@ export function leerXmi(
             ? 'abstract'
             : 'class';
 
-    clases.push({ idXmi, nombre, kind, nodo });
+    clases.push({ idXmi, nombre, kind, nodo, esClaseDeAsociacion: tipo === 'AssociationClass' });
     if (clases.length > MAX_CLASES) {
       return fallo(`El fichero trae más de ${MAX_CLASES} clases; no se importa.`);
     }
@@ -372,6 +390,9 @@ export function leerXmi(
   let totalFilas = 0;
 
   for (const clase of clases) {
+    // La crea `leerRelaciones` con `addRelation` + `associationClassName`:
+    // ver el comentario en `ClaseLeida.esClaseDeAsociacion`.
+    if (clase.esClaseDeAsociacion) continue;
     const extra = extension.clases.get(clase.idXmi);
     operaciones.push({
       op: 'addClass',
@@ -411,6 +432,31 @@ export function leerXmi(
     });
     return 'String';
   };
+
+  // ---- relaciones ---------------------------------------------------------
+
+  // Antes de los atributos: una clase de asociación no existe en el diagrama
+  // hasta que `addRelation` la crea (ver `ClaseLeida.esClaseDeAsociacion`), así
+  // que sus propios atributos no se podrían colgar de ella si este bloque
+  // corriera primero.
+  const relaciones = leerRelaciones(raiz, claseDeId, avisos);
+  for (const relacion of relaciones) operaciones.push(relacion);
+
+  // Una clase de asociación no acepta `position` en el `addRelation` que la
+  // crea (ese campo es de `addClass`, que aquí no se usa para ella), así que
+  // la posición guardada en nuestra extensión se restaura aparte con
+  // `moveClass`, después de que la relación ya la haya creado.
+  for (const relacion of relaciones) {
+    if (relacion.op !== 'addRelation' || !relacion.associationClassName) continue;
+    const clase = clases.find((c) => c.nombre === relacion.associationClassName);
+    const posicion = clase ? extension.clases.get(clase.idXmi)?.posicion : undefined;
+    if (!posicion) continue;
+    operaciones.push({
+      op: 'moveClass',
+      ref: { name: relacion.associationClassName },
+      position: posicion,
+    });
+  }
 
   for (const clase of clases) {
     const extra = extension.clases.get(clase.idXmi);
@@ -521,11 +567,6 @@ export function leerXmi(
       totalMetodos++;
     }
   }
-
-  // ---- relaciones ---------------------------------------------------------
-
-  const relaciones = leerRelaciones(raiz, claseDeId, avisos);
-  for (const relacion of relaciones) operaciones.push(relacion);
 
   // ---- filas de datos -----------------------------------------------------
 
@@ -718,6 +759,83 @@ function leerRelaciones(
         targetMultiplicity: '1',
       });
     }
+  }
+
+  // ---- clases de asociación ------------------------------------------------
+
+  /*
+   * Una clase de asociación en UML es, a la vez, un clasificador y la propia
+   * asociación entre otras dos clases: sus dos extremos no viven en un
+   * `uml:Association` aparte, sino colgados del mismo elemento
+   * `uml:AssociationClass` (igual que al exportar: ver el comentario de
+   * `diagramaAXmi` en `export.ts`). Por eso esto no sale del bucle de
+   * «asociaciones y dependencias» de más abajo, que busca `uml:Association`:
+   * un `uml:AssociationClass` ya quedó fuera de ese tipo.
+   *
+   * El modelo interno solo admite una clase de asociación sobre una relación
+   * N:M (`validateAssociationClasses`). Si el fichero la trae sobre una
+   * relación que no lo es, o sus extremos no se pueden leer, no se inventa un
+   * N:M que no estaba: se importa la clase suelta —y la relación, si se pudo
+   * leer— con un aviso que explica que se perdió el enlace entre las dos.
+   */
+  for (const clase of claseDeId.values()) {
+    if (!clase.esClaseDeAsociacion) continue;
+
+    const sueltaConAviso = (motivo: string): void => {
+      avisos.push({
+        severidad: 'aviso',
+        mensaje: `La clase de asociación «${clase.nombre}» ${motivo}: se importa como clase suelta.`,
+      });
+      operaciones.push({ op: 'addClass', name: clase.nombre, kind: clase.kind });
+    };
+
+    const extremos = extremosDe(clase.nodo, porId, claseDeId);
+    if (extremos.length !== 2) {
+      sueltaConAviso('no tiene dos extremos de asociación legibles');
+      continue;
+    }
+
+    const [primero, segundo] = extremos as [ExtremoLeido, ExtremoLeido];
+    const origen = claseDeId.get(primero.idClase);
+    const destino = claseDeId.get(segundo.idClase);
+    if (!origen || !destino) {
+      sueltaConAviso('apunta a una clase que no se importó');
+      continue;
+    }
+    if (origen.idXmi === clase.idXmi || destino.idXmi === clase.idXmi) {
+      sueltaConAviso('no puede ser uno de los extremos de su propia relación');
+      continue;
+    }
+
+    if (!isToMany(primero.multiplicidad) || !isToMany(segundo.multiplicidad)) {
+      avisos.push({
+        severidad: 'aviso',
+        mensaje:
+          `La clase de asociación «${clase.nombre}» cuelga de una relación que no ` +
+          'es muchos a muchos, y aquí solo se admite sobre N:M: se importa la clase ' +
+          'suelta y la relación por separado, sin el enlace entre las dos.',
+      });
+      operaciones.push({ op: 'addClass', name: clase.nombre, kind: clase.kind });
+      operaciones.push({
+        op: 'addRelation',
+        kind: 'association',
+        source: { name: origen.nombre },
+        target: { name: destino.nombre },
+        sourceMultiplicity: primero.multiplicidad,
+        targetMultiplicity: segundo.multiplicidad,
+      });
+      continue;
+    }
+
+    operaciones.push({
+      op: 'addRelation',
+      kind: 'association',
+      source: { name: origen.nombre },
+      target: { name: destino.nombre },
+      sourceMultiplicity: primero.multiplicidad,
+      targetMultiplicity: segundo.multiplicidad,
+      associationClassName: clase.nombre,
+    });
   }
 
   // ---- asociaciones y dependencias ---------------------------------------

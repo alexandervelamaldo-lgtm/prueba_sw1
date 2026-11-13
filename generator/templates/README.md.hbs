@@ -40,6 +40,18 @@ que el generador no puede producir. Si lo quieres, `mvn wrapper:wrapper` lo crea
 
 La API queda expuesta en `http://localhost:8080`.
 
+Si ese puerto ya está ocupado, `run.bat` lo detecta antes de arrancar, dice qué
+programa lo tiene y se detiene —en Windows el 8080 lo suelen ocupar programas
+que nadie asocia a un backend, como el cliente web de Steam—. Para arrancar en
+otro puerto:
+
+```bat
+set SERVER_PORT=8081 && run.bat
+```
+
+Al cambiarlo, actualiza también la variable `baseUrl` de la colección de
+Postman.
+
 ## Esquema de base de datos
 
 El esquema lo gestiona Flyway a partir de las migraciones versionadas de

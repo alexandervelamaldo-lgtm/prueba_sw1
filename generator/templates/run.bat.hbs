@@ -23,11 +23,8 @@ rem cambia cada vez que se recrea el contenedor, de modo que hay que
 rem preguntárselo a Docker en cada arranque en lugar de darlo por sabido.
 set DB_PORT=
 for /f "tokens=2 delims=:" %%p in ('docker compose port db 5432') do set DB_PORT=%%p
-rem Dos "if" de una línea en lugar de un bloque "( ... )": este archivo se
-rem escribe con saltos de línea LF y cmd.exe parsea mal los bloques multilínea
-rem cuando faltan los CR.
 if not defined DB_PORT echo [ERROR] No se pudo averiguar el puerto que Docker publico para la base de datos. Revisa "docker compose ps".
-if not defined DB_PORT exit /b 1
+if not defined DB_PORT goto fallo
 rem Credenciales fijadas aquí a propósito, aunque application.yml ya traiga los
 rem mismos valores por defecto: Spring da prioridad a las variables de entorno,
 rem así que un DB_USER o DB_PASSWORD heredado del entorno de Windows —definido
@@ -40,4 +37,40 @@ set DB_USER=postgres
 set DB_PASSWORD=postgres
 echo Base de datos "%DB_NAME%" en %DB_HOST%:%DB_PORT%
 {{/if}}
-mvn spring-boot:run
+rem El puerto de la API se comprueba ANTES de llamar a Maven. Si está ocupado,
+rem Spring arranca, falla con "Port 8080 was already in use" y se muere; como
+rem esta ventana se cierra con el script, el mensaje pasa volando y el síntoma
+rem que queda es "aprieto run.bat y no hace nada". Vale la pena mirarlo aquí y
+rem además decir qué programa lo tiene: en Windows el 8080 lo ocupan cosas
+rem instaladas que nadie asocia a un backend (Steam, por ejemplo, lo usa para
+rem su cliente web). Se respeta un SERVER_PORT que ya venga del entorno, para
+rem poder esquivar el conflicto sin editar este archivo.
+if not defined SERVER_PORT set SERVER_PORT=8080
+netstat -ano | findstr /r /c:":%SERVER_PORT% .*LISTENING" >nul 2>&1
+if not errorlevel 1 goto puerto_ocupado
+echo API en http://localhost:%SERVER_PORT%
+rem "call" no es opcional: mvn es un .cmd y, sin call, cmd.exe le transfiere el
+rem control y no vuelve nunca, así que ni el salto a :fallo ni su "pause" se
+rem ejecutarían y el error de Maven volvería a perderse al cerrarse la ventana.
+call mvn spring-boot:run
+if errorlevel 1 goto fallo
+exit /b 0
+
+:puerto_ocupado
+echo.
+echo [ERROR] El puerto %SERVER_PORT% ya esta ocupado. Lo tiene:
+for /f "tokens=5" %%q in ('netstat -ano ^| findstr /r /c:":%SERVER_PORT% .*LISTENING"') do tasklist /fi "pid eq %%q" /nh
+echo.
+echo Cierra ese programa, o arranca en otro puerto con:
+echo     set SERVER_PORT=8081 ^&^& run.bat
+echo Si cambias el puerto, actualiza la variable "baseUrl" de la coleccion de Postman.
+echo.
+pause
+exit /b 1
+
+:fallo
+echo.
+echo [ERROR] El backend no arranco. El motivo esta en los mensajes de arriba.
+echo.
+pause
+exit /b 1

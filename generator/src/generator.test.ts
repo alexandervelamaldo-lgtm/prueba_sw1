@@ -615,6 +615,39 @@ describe('generación de ficheros', () => {
       expect(file.content.includes('\r'), file.path).toBe(false);
     }
   });
+
+  it('run.bat no deja que un fallo se pierda al cerrarse la ventana', () => {
+    // Quien arranca haciendo doble clic en run.bat solo ve la ventana mientras
+    // el script vive: si Maven falla, la consola se cierra con el script y el
+    // error se va con ella. El síntoma que queda es "aprieto run.bat y no pasa
+    // nada", que no dice nada de la causa real —el caso que lo motivó fue un
+    // "Port 8080 was already in use" con el puerto ocupado por Steam—. De ahí
+    // estas dos exigencias:
+    const script = fileNamed(files, 'run.bat').content;
+
+    // 1. "pause" en los caminos de error, para que el mensaje se quede en
+    //    pantalla hasta que alguien lo lea.
+    expect(script).toContain('pause');
+
+    // 2. "call" al invocar mvn. Sin él, cmd.exe transfiere el control al
+    //    mvn.cmd y no vuelve nunca, así que el salto al bloque de error y su
+    //    "pause" no llegarían a ejecutarse: el pause del punto 1 sería letra
+    //    muerta precisamente en el caso que pretende cubrir.
+    expect(script).toMatch(/call mvn spring-boot:run/);
+  });
+
+  it('run.bat comprueba el puerto de la API antes de arrancar Spring', () => {
+    // Spring tarda unos segundos en llegar a abrir el puerto, y cuando falla
+    // por "ya está ocupado" ya ha escrito cientos de líneas de arranque: el
+    // motivo queda sepultado. Mirarlo antes permite decirlo en una línea, y de
+    // paso nombrar al programa culpable, que es el dato que de verdad hace
+    // falta. Respetar un SERVER_PORT previo deja esquivar el choque sin tocar
+    // el archivo.
+    const script = fileNamed(files, 'run.bat').content;
+    expect(script).toContain('if not defined SERVER_PORT set SERVER_PORT=8080');
+    expect(script).toMatch(/netstat .*\|\s*findstr/);
+    expect(script).toContain('tasklist');
+  });
 });
 
 describe('colección Postman', () => {

@@ -1,17 +1,41 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: {{{project.artifactId}}}-db
+    # Sin container_name fijo: Compose nombra el contenedor usando el proyecto
+    # (derivado de la carpeta), p. ej. "pruebas3-db-1". Un nombre fijo con el
+    # mismo artifactId colisiona entre copias de la misma carpeta ("pruebas",
+    # "pruebas (1)", "pruebas (2)"...) porque Docker exige nombres de
+    # contenedor únicos en todo el host, no por proyecto; el síntoma es un
+    # "Conflict: the container name ... is already in use" al levantar una
+    # copia nueva, o peor, que Compose reutilice un contenedor viejo con un
+    # volumen de datos ya inicializado para otra base, lo que produce
+    # "FATAL: no existe la base de datos" aunque el healthcheck diga "healthy".
     environment:
       POSTGRES_DB: {{{project.databaseName}}}
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    # Sin puerto fijo en el host: "127.0.0.1::5432" pide al sistema operativo
+    # un puerto libre y lo publica solo en loopback. run.bat lo averigua con
+    # "docker compose port db 5432" y se lo pasa a Spring en DB_PORT.
+    #
+    # Un puerto fijo (5432, 5433...) es inseguro en Windows: si una instalación
+    # nativa de Postgres ya escucha ahí, el proxy de Docker Desktop hace el bind
+    # con SO_REUSEADDR y "gana" sin error visible —pero las conexiones entrantes
+    # las atiende el servicio nativo—. El síntoma es desconcertante: el
+    # healthcheck dice "healthy" y aun así Spring falla con "no existe la base
+    # de datos" (si acierta la contraseña del Postgres nativo) o con "la
+    # autentificación password falló" (si no la acierta). Pedir un puerto
+    # efímero elimina la carrera: el SO solo entrega puertos realmente libres.
     ports:
-      - "5432:5432"
+      - "127.0.0.1::5432"
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d {{{project.databaseName}}}"]
+      # -h fuerza a pg_isready a conectar por TCP en vez del socket Unix local.
+      # Sin -h, el healthcheck puede pasar contra la instancia temporal que
+      # Postgres usa internamente para crear la base (solo expone el socket,
+      # no TCP), reportando "healthy" antes de que la base real exista.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d {{{project.databaseName}}}"]
       interval: 5s
       timeout: 5s
       retries: 10

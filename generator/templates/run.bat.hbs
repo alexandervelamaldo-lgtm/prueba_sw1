@@ -1,9 +1,43 @@
 @echo off
-rem Script de arranque para Windows.
+rem Script de arranque para Windows: levanta la base de datos y el backend con
+rem un solo comando.
 rem
+rem setlocal acota las variables DB_* que se definen más abajo a la ejecución
+rem de este script: no quedan pegadas en la consola del usuario.
+setlocal
 rem Crea C:\Temp si no existe: el JDK 17+ necesita una carpeta de sockets Unix
 rem sin caracteres raros en la ruta. Sin esto obtienes:
 rem   java.io.IOException: Unable to establish loopback connection
 rem
 if not exist "C:\Temp" mkdir "C:\Temp"
+rem --wait no devuelve el control hasta que el healthcheck de "db" en
+rem docker-compose.yml pasa a "healthy": evita arrancar Spring contra una base
+rem de datos que todavía está inicializando.
+docker compose up -d --wait
+if errorlevel 1 exit /b 1
+{{#if (eq project.databaseTarget 'postgres')}}
+rem docker-compose.yml no fija el puerto del host (ver la nota ahí): deja que
+rem el sistema operativo asigne uno libre, así ninguna instalación nativa de
+rem Postgres puede interceptar las conexiones. El precio es que el puerto
+rem cambia cada vez que se recrea el contenedor, de modo que hay que
+rem preguntárselo a Docker en cada arranque en lugar de darlo por sabido.
+set DB_PORT=
+for /f "tokens=2 delims=:" %%p in ('docker compose port db 5432') do set DB_PORT=%%p
+rem Dos "if" de una línea en lugar de un bloque "( ... )": este archivo se
+rem escribe con saltos de línea LF y cmd.exe parsea mal los bloques multilínea
+rem cuando faltan los CR.
+if not defined DB_PORT echo [ERROR] No se pudo averiguar el puerto que Docker publico para la base de datos. Revisa "docker compose ps".
+if not defined DB_PORT exit /b 1
+rem Credenciales fijadas aquí a propósito, aunque application.yml ya traiga los
+rem mismos valores por defecto: Spring da prioridad a las variables de entorno,
+rem así que un DB_USER o DB_PASSWORD heredado del entorno de Windows —definido
+rem hace meses para otra base— se colaría y provocaría un fallo de
+rem autenticación contra este contenedor. Fijarlas aquí las deja siempre
+rem alineadas con docker-compose.yml.
+set DB_HOST=127.0.0.1
+set DB_NAME={{{project.databaseName}}}
+set DB_USER=postgres
+set DB_PASSWORD=postgres
+echo Base de datos "%DB_NAME%" en %DB_HOST%:%DB_PORT%
+{{/if}}
 mvn spring-boot:run

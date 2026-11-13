@@ -597,6 +597,21 @@ describe('generación de ficheros', () => {
     for (const file of files) {
       expect(file.content.endsWith('\n'), file.path).toBe(true);
       expect(file.content.endsWith('\n\n'), file.path).toBe(false);
+    }
+  });
+
+  it('usa saltos LF en todo menos en run.bat, que va con CRLF', () => {
+    // cmd.exe necesita el retorno de carro para terminar cada línea de un .bat:
+    // con LF a secas fusiona líneas y se traga instrucciones —un "for /f" o un
+    // "if" pueden quedar absorbidos por el "rem" anterior— sin dar ningún
+    // error. Es la única excepción a los saltos LF del resto del proyecto.
+    const script = fileNamed(files, 'run.bat');
+    const lineas = script.content.split('\n').slice(0, -1);
+    expect(lineas.length).toBeGreaterThan(0);
+    expect(lineas.every((l) => l.endsWith('\r'))).toBe(true);
+
+    for (const file of files) {
+      if (file.path === 'run.bat') continue;
       expect(file.content.includes('\r'), file.path).toBe(false);
     }
   });

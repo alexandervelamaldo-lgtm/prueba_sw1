@@ -722,9 +722,18 @@ function buildEntity(
   const className = toPascalCase(cls.name);
   const entityNames = new Set(context.entityClasses.map((c) => toPascalCase(c.name)));
 
+  // Un atributo plano con el mismo nombre que una asociación (p. ej. un
+  // atributo "cliente: String" y además una relación cuyo rol también se
+  // llama "cliente") generaría dos campos Java con idéntico nombre: uno no
+  // compilaría. La asociación gana porque lleva la clave ajena real.
+  const associationFieldNames = new Set(
+    context.associations.map((a) => a.fieldName.toLowerCase()),
+  );
+
   const fields: FieldIR[] = cls.attributes
     .filter((attr) => !entityNames.has(toPascalCase(attr.type.name)))
     .filter((attr) => !attr.isStatic)
+    .filter((attr) => !associationFieldNames.has(toCamelCase(attr.name).toLowerCase()))
     .map((attr) => buildField(attr, context.enumNames));
 
   const superclassRelation = listRelations(diagram).find(

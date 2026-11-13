@@ -657,6 +657,22 @@ function raizDe(packageName: string): string {
   return `src/main/java/${packageName.split('.').join('/')}`;
 }
 
+/**
+ * Igual que render(), pero devuelve el contenido con saltos CRLF.
+ *
+ * cmd.exe necesita el retorno de carro para dar por terminada cada línea de un
+ * .bat. Con saltos LF a secas fusiona líneas, y el fallo es silencioso y
+ * desconcertante: un "for /f" o un "if" pueden quedar absorbidos por el "rem"
+ * de la línea anterior y no ejecutarse nunca, mientras el resto del script sí
+ * corre. En run.bat eso dejaba DB_PORT sin definir —y de paso se tragaba el
+ * "if" que debía avisar de ello—, así que Spring caía al puerto por defecto y
+ * acababa hablando con otro Postgres. Las plantillas viven en el repo con LF,
+ * de modo que la conversión se hace aquí, al materializar el archivo.
+ */
+function renderBatchScript(name: string, context: unknown): string {
+  return render(name, context).replace(/\r?\n/g, '\r\n');
+}
+
 export function generateProject(ir: GenerationIR): GeneratedFile[] {
   switch (ir.project.databaseTarget) {
     case 'mongodb':
@@ -679,7 +695,7 @@ function generatePostgresProject(ir: GenerationIR): GeneratedFile[] {
   };
 
   files.push({ path: 'pom.xml', content: render('pom.xml.hbs', context) });
-  files.push({ path: 'run.bat', content: render('run.bat.hbs', context) });
+  files.push({ path: 'run.bat', content: renderBatchScript('run.bat.hbs', context) });
   files.push({ path: 'README.md', content: render('README.md.hbs', context) });
   files.push({ path: '.gitignore', content: render('gitignore.hbs', context) });
   files.push({ path: 'docker-compose.yml', content: render('docker-compose.yml.hbs', context) });
@@ -850,7 +866,7 @@ function generateMongoProject(ir: GenerationIR): GeneratedFile[] {
   const context = { project: ir.project, entities: ir.entities };
 
   files.push({ path: 'pom.xml', content: render('pom-mongo.xml.hbs', context) });
-  files.push({ path: 'run.bat', content: render('run.bat.hbs', context) });
+  files.push({ path: 'run.bat', content: renderBatchScript('run.bat.hbs', context) });
   files.push({ path: 'README.md', content: render('README.md.hbs', context) });
   files.push({ path: '.gitignore', content: render('gitignore.hbs', context) });
   files.push({
@@ -990,7 +1006,7 @@ function generateCassandraProject(ir: GenerationIR): GeneratedFile[] {
   const context = { project: ir.project, entities: ir.entities };
 
   files.push({ path: 'pom.xml', content: render('pom-cassandra.xml.hbs', context) });
-  files.push({ path: 'run.bat', content: render('run.bat.hbs', context) });
+  files.push({ path: 'run.bat', content: renderBatchScript('run.bat.hbs', context) });
   files.push({ path: 'README.md', content: render('README.md.hbs', context) });
   files.push({ path: '.gitignore', content: render('gitignore.hbs', context) });
   files.push({

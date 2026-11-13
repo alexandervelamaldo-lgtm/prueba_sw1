@@ -13,17 +13,27 @@ Arquitectura en cuatro capas: entidad, repositorio, servicio y controlador REST.
 
 ## Puesta en marcha
 
-Levantar la base de datos:
+En Windows, un solo comando levanta Postgres (en Docker) y el backend:
 
 ```bash
-docker compose up -d
+run.bat
 ```
 
-Arrancar la aplicación:
+Espera a que el contenedor de la base de datos pase a "healthy" antes de
+arrancar Spring, así que no hace falta ningún paso previo ni esperar a mano.
+
+En otros sistemas, o si prefieres controlar cada paso por separado:
 
 ```bash
-mvn spring-boot:run
+docker compose up -d --wait        # levanta la base de datos
+docker compose port db 5432        # devuelve 127.0.0.1:PUERTO
+export DB_PORT=PUERTO              # el contenedor no usa un puerto fijo
+export DB_USER=postgres DB_PASSWORD=postgres
+mvn spring-boot:run                # arranca la aplicación
 ```
+
+El paso del puerto no es opcional: el contenedor pide al sistema un puerto libre
+en vez de tomar el 5432. La sección «Variables de entorno» explica por qué.
 
 El proyecto no incluye el wrapper de Maven (`mvnw`): añadirlo requiere un binario
 que el generador no puede producir. Si lo quieres, `mvn wrapper:wrapper` lo crea.
@@ -143,11 +153,29 @@ comentada en `V3__idempotencia.sql`.
 | Variable | Valor por defecto |
 | --- | --- |
 | `DB_HOST` | `localhost` |
-| `DB_PORT` | `5432` |
+| `DB_PORT` | `5432` (lo sobreescribe `run.bat`, ver abajo) |
 | `DB_NAME` | `{{{project.databaseName}}}` |
 | `DB_USER` | `postgres` |
 | `DB_PASSWORD` | `postgres` |
 | `SERVER_PORT` | `8080` |
+
+El contenedor de Postgres **no publica un puerto fijo en el host**: pide al
+sistema operativo uno libre. Un puerto fijo es poco fiable en Windows, porque si
+una instalación nativa de Postgres ya escucha ahí, el proxy de Docker Desktop
+hace el bind sin error visible pero las conexiones las atiende el servicio
+nativo; el resultado es un contenedor "healthy" y un Spring que falla con «no
+existe la base de datos» o «la autentificación password falló» sin motivo
+aparente.
+
+`run.bat` resuelve esto preguntando el puerto en cada arranque y pasándolo en
+`DB_PORT`. También fija `DB_USER` y `DB_PASSWORD`, porque Spring da prioridad a
+las variables de entorno y una `DB_PASSWORD` heredada del entorno de Windows
+—puesta en su día para otra base— rompería la autenticación. Si arrancas a mano,
+haz lo mismo:
+
+```bash
+docker compose port db 5432   # p. ej. 127.0.0.1:49162 -> usa ese puerto en DB_PORT
+```
 
 ## Regeneración
 

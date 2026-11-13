@@ -8,6 +8,12 @@ spring:
   application:
     name: {{{project.artifactId}}}
   datasource:
+    # El 5432 de aquí es solo el valor de cortesía para un Postgres instalado
+    # en la máquina. El contenedor de docker-compose.yml NO usa un puerto fijo
+    # (ver la nota ahí): run.bat pregunta el puerto efímero que Docker publicó
+    # y lo inyecta en DB_PORT, que tiene prioridad sobre este valor. Si arrancas
+    # con "mvn spring-boot:run" a secas, exporta antes DB_PORT con la salida de
+    # "docker compose port db 5432" o acabarás hablando con otro Postgres.
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:${app.database-name}}
     username: ${DB_USER:postgres}
     password: ${DB_PASSWORD:postgres}

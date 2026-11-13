@@ -72,5 +72,22 @@ exit /b 1
 echo.
 echo [ERROR] El backend no arranco. El motivo esta en los mensajes de arriba.
 echo.
+rem La pista mas util que se puede dar sin leer el log: el volumen de Docker
+rem sobrevive a "docker compose down" y su nombre sale de la carpeta, asi que
+rem regenerar el proyecto en una carpeta con el mismo nombre reaprovecha la base
+rem de datos de la generacion anterior. Si el esquema cambio, Flyway encuentra
+rem su propio historial con otro checksum y se niega a seguir. El mensaje no
+rem menciona Docker ni el volumen por ningun lado, de modo que conviene
+rem nombrarlo aqui.
+echo Si arriba dice "Migration checksum mismatch", "Validate failed" o "no
+echo existe la base de datos", el volumen de Docker guarda la base de una
+echo generacion anterior de este mismo proyecto. Para empezar de cero:
+echo.
+echo     docker compose down -v
+echo     run.bat
+echo.
+echo Ojo: "down -v" borra los datos de esa base (el -v es justo lo que la
+echo elimina; sin el, "down" la conserva y el error se repite).
+echo.
 pause
 exit /b 1

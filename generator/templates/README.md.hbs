@@ -194,3 +194,23 @@ docker compose port db 5432   # p. ej. 127.0.0.1:49162 -> usa ese puerto en DB_P
 Este código es un punto de partida, no un artefacto de solo lectura. Si vuelves
 a generar sobre el mismo directorio, se sobrescribirá. Mueve la lógica de
 negocio propia a clases que el generador no produzca antes de regenerar.
+
+Al regenerar, **borra también la base de datos**:
+
+```bash
+docker compose down -v   # el -v elimina el volumen; sin él, los datos se conservan
+```
+
+El volumen de Docker sobrevive a un `docker compose down` normal y su nombre se
+deriva de la carpeta, así que una generación nueva en una carpeta con el mismo
+nombre reaprovecha la base de la anterior. Si el esquema cambió, Flyway
+encuentra su propio historial con un checksum distinto y se niega a arrancar:
+
+```
+Migration checksum mismatch for migration version 1
+-> Applied to database : -1980212092
+-> Resolved locally    : 1848811382
+```
+
+El mensaje no menciona Docker, pero el arreglo es ese: `docker compose down -v`
+y volver a arrancar.

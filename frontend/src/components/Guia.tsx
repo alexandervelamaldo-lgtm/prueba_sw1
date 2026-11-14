@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buscar, type Resultado } from '@app/shared';
 import { ApiError, api } from '../services/api';
 import { indiceDeLaGuia } from '../services/documentos';
-import { modelosDisponibles, preguntar } from '../services/ollama';
+import {
+  guardarUrlOllama,
+  modelosDisponibles,
+  OLLAMA_POR_DEFECTO,
+  preguntar,
+  urlOllama,
+} from '../services/ollama';
 import {
   callar,
   dictadoDisponible,
@@ -103,21 +109,31 @@ export function Guia({ onCerrar, onRecorrido }: GuiaProps): JSX.Element {
   const [modelo, setModelo] = useState<string | null>(null);
   const [escuchando, setEscuchando] = useState(false);
   const [sonando, setSonando] = useState(false);
+  // La URL de Ollama: `localhost` salvo que alguien haya guardado la de un
+  // túnel (ver `ollama.ts`). Vive en estado, y no se lee de nuevo en cada
+  // pregunta, para que cambiarla dispare la comprobación de qué modelo hay.
+  const [urlModelo, setUrlModelo] = useState(() => urlOllama());
+  const [editandoUrl, setEditandoUrl] = useState(false);
   const dictadoRef = useRef<SesionDictado | null>(null);
   const abortoRef = useRef<AbortController | null>(null);
   const entradaRef = useRef<HTMLInputElement>(null);
 
-  // Se pregunta una sola vez, al abrir, y con un tiempo de espera corto. Que no
-  // haya modelo es el caso normal, no una avería, así que esto no muestra nada
-  // rojo: solo decide qué se puede ofrecer.
+  // Se pregunta una sola vez al abrir —y otra vez si cambia la URL—, con un
+  // tiempo de espera corto. Que no haya modelo es el caso normal, no una
+  // avería, así que esto no muestra nada rojo: solo decide qué se puede ofrecer.
   useEffect(() => {
     let cancelado = false;
-    void modelosDisponibles().then((modelos) => {
+    void modelosDisponibles({ url: urlModelo }).then((modelos) => {
       if (!cancelado) setModelo(modelos[0] ?? null);
     });
-    entradaRef.current?.focus();
     return () => {
       cancelado = true;
+    };
+  }, [urlModelo]);
+
+  useEffect(() => {
+    entradaRef.current?.focus();
+    return () => {
       abortoRef.current?.abort();
       dictadoRef.current?.detener();
       // Cerrar la guía calla la lectura. Sin esto, la respuesta se sigue oyendo
@@ -192,6 +208,7 @@ export function Guia({ onCerrar, onRecorrido }: GuiaProps): JSX.Element {
         try {
           const r = await preguntar(indice, limpia, {
             modelo,
+            url: urlModelo,
             signal: aborto.signal,
             // Se pinta según llega. Un modelo de 3B en un portátil tarda varios
             // segundos en la respuesta entera, pero la primera palabra sale casi
@@ -249,7 +266,7 @@ export function Guia({ onCerrar, onRecorrido }: GuiaProps): JSX.Element {
         }));
       }
     },
-    [indice, modelo, leer, parar],
+    [indice, modelo, urlModelo, leer, parar],
   );
 
   const alternarMicrofono = useCallback((): void => {
@@ -305,8 +322,48 @@ export function Guia({ onCerrar, onRecorrido }: GuiaProps): JSX.Element {
           <p className="guia__estado">
             {modelo === null
               ? 'Buscando en el manual, aquí mismo. Sin conexión también funciona.'
-              : `Respondiendo con ${modelo}, en este equipo.`}
+              : urlModelo === OLLAMA_POR_DEFECTO
+                ? `Respondiendo con ${modelo}, en este equipo.`
+                : `Respondiendo con ${modelo}, en un equipo remoto.`}
+            {!editandoUrl && (
+              <button
+                type="button"
+                className="boton boton--enlace guia__cambiar-modelo"
+                onClick={() => setEditandoUrl(true)}
+              >
+                {urlModelo === OLLAMA_POR_DEFECTO ? 'Usar un modelo remoto' : 'Cambiar'}
+              </button>
+            )}
           </p>
+          {editandoUrl && (
+            // Para cuando el modelo no está en esta máquina sino en la de quien
+            // sí lo tiene instalado, alcanzado con un túnel (`ngrok http 11434`):
+            // la URL del túnel cambia cada vez que se reinicia, así que hay que
+            // poder pegarla aquí en vez de dejarla fija en el código.
+            <form
+              className="guia__url-modelo"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const nueva = new FormData(e.currentTarget).get('url');
+                const valor = typeof nueva === 'string' ? nueva : '';
+                guardarUrlOllama(valor);
+                setUrlModelo(urlOllama());
+                setEditandoUrl(false);
+              }}
+            >
+              <input
+                name="url"
+                defaultValue={urlModelo === OLLAMA_POR_DEFECTO ? '' : urlModelo}
+                placeholder="https://algo.ngrok-free.app"
+              />
+              <button type="submit" className="boton">
+                Guardar
+              </button>
+              <button type="button" className="boton" onClick={() => setEditandoUrl(false)}>
+                Cancelar
+              </button>
+            </form>
+          )}
           <div className="guia__cerrar">
             {onRecorrido && (
               <button type="button" className="boton guia__recorrido" onClick={onRecorrido}>

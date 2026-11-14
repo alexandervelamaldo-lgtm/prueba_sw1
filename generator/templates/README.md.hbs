@@ -60,6 +60,57 @@ El esquema lo gestiona Flyway a partir de las migraciones versionadas de
 con el esquema real. Si la validación falla al arrancar, el desajuste está
 entre la migración y las entidades, no en la configuración.
 
+### Inspeccionarla desde la consola
+
+La base vive dentro del contenedor, así que se consulta a través de él. Desde
+esta carpeta:
+
+```bat
+docker compose exec db psql -U postgres
+```
+
+Ese comando es el mismo en todos los proyectos generados: el servicio siempre
+se llama `db` y el usuario siempre es `postgres`. Fíjate en que no lleva `-d`,
+así que **no hace falta saber el nombre de la base para entrar**: se conecta a
+la base por defecto y desde dentro se pregunta el resto.
+
+```
+\l                 -- lista las bases; la de este proyecto es {{{project.databaseName}}}
+\c {{{project.databaseName}}}
+\dt                -- tablas del esquema
+\d NOMBRE_TABLA    -- columnas, claves y quién referencia a quién
+\x                 -- alterna la salida a vertical, útil con filas anchas
+\q                 -- salir
+```
+
+Las consultas normales también funcionan (`select * from ...;` con el punto y
+coma). Para una sola consulta sin abrir la sesión interactiva:
+
+```bat
+docker compose exec db psql -U postgres -d {{{project.databaseName}}} -c "select count(*) from flyway_schema_history;"
+```
+
+Si ejecutas esto desde otra carpeta, `docker compose` no encuentra el
+`docker-compose.yml` y falla. Para localizar el proyecto o atacar el
+contenedor por su nombre:
+
+```bat
+docker compose ls   :: proyectos levantados y la ruta de su docker-compose.yml
+docker ps           :: nombres de contenedor y el puerto publicado en el host
+```
+
+Todos esos nombres se derivan del de esta carpeta, así que conocido uno se
+deducen los demás:
+
+- base de datos: `{{{project.databaseName}}}`
+- contenedor: `{{{project.databaseName}}}-db-1`
+- volumen: `{{{project.databaseName}}}_db-data`
+
+También puedes conectar con un cliente gráfico (DBeaver, pgAdmin) a
+`127.0.0.1` con usuario y contraseña `postgres`, pero el puerto no es el 5432:
+lo asigna el sistema en cada arranque y lo devuelve `docker compose port db 5432`.
+La sección «Variables de entorno» explica por qué.
+
 ## Endpoints generados
 
 {{#each entities}}

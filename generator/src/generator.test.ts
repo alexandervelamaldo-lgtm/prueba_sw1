@@ -648,6 +648,22 @@ describe('generación de ficheros', () => {
     expect(script).toMatch(/netstat .*\|\s*findstr/);
     expect(script).toContain('tasklist');
   });
+
+  it('el README explica cómo abrir la base sin saber su nombre', () => {
+    // Los nombres de base, contenedor y volumen salen del nombre del proyecto,
+    // así que un comando con el nombre incrustado no se puede reutilizar ni
+    // memorizar entre proyectos. El servicio, en cambio, se llama "db" en
+    // todos, y psql sin -d entra a la base por defecto: desde ahí "\l" y "\c"
+    // encuentran la del proyecto. Es la receta que hay que documentar, porque
+    // es la única que sobrevive a cambiar de diagrama.
+    const readme = fileNamed(files, 'README.md').content;
+    expect(readme).toContain('docker compose exec db psql -U postgres\n');
+    expect(readme).toContain('\\c tienda');
+    // Fuera de la carpeta del proyecto el exec falla por no encontrar el
+    // docker-compose.yml; sin estos dos comandos no hay forma de volver a ella.
+    expect(readme).toContain('docker compose ls');
+    expect(readme).toContain('docker ps');
+  });
 });
 
 describe('colección Postman', () => {

@@ -5256,6 +5256,28 @@ select:focus {
   gap: 8px;
 }
 
+/* El enlace que abre el formulario de la URL remota. Pegado a la línea de
+   estado y no en una fila propia: es un ajuste raro, no una acción frecuente,
+   y no merece el mismo peso visual que "Cerrar" o "Ver el recorrido". */
+.guia__cambiar-modelo {
+  grid-column: 1;
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.guia__url-modelo {
+  grid-column: 1;
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.guia__url-modelo input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+
 /* La entrada de vuelta al recorrido de bienvenida. Discreta a propósito: es
    para quien lo busca, no para quien viene a preguntar algo. */
 .guia__recorrido {

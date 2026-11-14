@@ -37,6 +37,53 @@ export const OLLAMA_POR_DEFECTO = 'http://localhost:11434';
 /** El modelo pequeño que se recomienda: entra en 8 GB de RAM y habla español. */
 export const MODELO_POR_DEFECTO = 'llama3.2:3b';
 
+const CLAVE_URL = 'ollama-url:v1';
+
+/**
+ * La URL de Ollama, cuando no es la de esta máquina.
+ *
+ * El valor por defecto sirve cuando quien pregunta y quien tiene el modelo son
+ * el mismo equipo. Quien enseña la versión desplegada en AWS desde **otro**
+ * dispositivo —un móvil en la misma sala, por ejemplo— no tiene eso: el modelo
+ * sigue en el portátil de quien lo instaló, y lo único que lo alcanza es un
+ * túnel (`ngrok http 11434`) que da una URL `https://algo.ngrok-free.app`. Esa
+ * URL cambia cada vez que se reinicia el túnel, así que no puede ir escrita en
+ * el código: se guarda donde ya se guardan las demás preferencias que no son
+ * de servidor ([`useTema`](../hooks/useTema.ts)).
+ *
+ * El CORS lo sigue decidiendo `OLLAMA_ORIGINS` contra el origen de la **página**
+ * (el dominio de AWS), no contra el del túnel: ngrok solo transporta la
+ * petición, no cambia quién la hizo.
+ */
+function leerUrlGuardada(): string | null {
+  try {
+    return window.localStorage.getItem(CLAVE_URL);
+  } catch {
+    // Sin sitio o sin permiso —navegación privada de Safari, por ejemplo—: se
+    // sigue con el valor por defecto en vez de romper la guía por esto.
+    return null;
+  }
+}
+
+/** La URL que hay que usar hoy: la guardada, o `localhost` si no hay ninguna. */
+export function urlOllama(): string {
+  return leerUrlGuardada() ?? OLLAMA_POR_DEFECTO;
+}
+
+/** Guarda la URL, o la borra con `null`/vacío para volver a `localhost`. */
+export function guardarUrlOllama(url: string | null): void {
+  try {
+    const limpia = url?.trim();
+    if (!limpia) {
+      window.localStorage.removeItem(CLAVE_URL);
+    } else {
+      window.localStorage.setItem(CLAVE_URL, limpia);
+    }
+  } catch {
+    /* La URL vale para esta sesión y se pedirá otra vez en la próxima. */
+  }
+}
+
 // El prompt vive en `shared/src/guia/prompt.ts`, no aquí: lo comparte con el
 // motor del servidor, y quien pregunta no elige cuál de los dos le contesta.
 

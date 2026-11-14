@@ -152,6 +152,39 @@ rechaza. Quien quiera el camino local contra la versión desplegada tiene que
 arrancarlo con `OLLAMA_ORIGINS=https://tu-dominio.com`. Sin eso, la aplicación
 usa el servidor, que es lo que hace ya cualquier móvil.
 
+#### Enseñar el modelo local a quien no tiene el modelo local
+
+Lo anterior sirve cuando la persona que pregunta y la que tiene Ollama
+instalado son la misma: su propio navegador, apuntando a su propio
+`localhost`. Para una demostración —varios dispositivos en la misma sala,
+abriendo la URL de CloudFront, y un único portátil con el modelo descargado—
+eso no alcanza: el `localhost` de un móvil es el móvil, no el portátil.
+
+La salida no es desplegar el modelo —sigue sin caber en el presupuesto ni en
+el plan de este proyecto—, es exponer el `11434` del portátil con un túnel:
+
+```bash
+ngrok http 11434
+```
+
+Ngrok imprime una URL `https://algo.ngrok-free.app` que reenvía al puerto local
+y cambia en cada arranque del túnel. Dos cosas que no cambian respecto al
+camino de `OLLAMA_ORIGINS`:
+
+- **El CORS sigue mirando el origen de la página, no el del túnel.** Ngrok
+  solo transporta la petición; quien la hizo sigue siendo el navegador en el
+  dominio de CloudFront, así que `OLLAMA_ORIGINS` necesita ese dominio, no la
+  URL de ngrok.
+- **Sigue siendo el portátil quien tiene el modelo.** El túnel no reemplaza la
+  necesidad de tener Ollama encendido y el modelo descargado en esa máquina
+  durante toda la demostración.
+
+Como la URL cambia en cada túnel, no puede ir fija en el código: en el panel
+de la Guía (botón «Usar un modelo remoto», junto al estado de qué está
+respondiendo) se pega la URL de ngrok y queda guardada en el navegador de
+quien pregunta, no en el servidor. Volver a `localhost` es borrar lo que se
+pegó ahí.
+
 ---
 
 ## 6.4 AWS
